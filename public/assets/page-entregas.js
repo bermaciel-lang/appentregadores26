@@ -55,10 +55,17 @@
       </div>
 
       ${item.observacao ? `
-        <div class="delivery-meta">
-          <div><span class="meta-label">Observação:</span> ${api.esc(item.observacao)}</div>
-        </div>
-      ` : ''}
+  <div class="delivery-meta">
+    <details class="obs-box">
+      <summary class="obs-summary">
+        <span class="meta-label">Observação:</span>
+        <span class="obs-text">${api.esc(item.observacao)}</span>
+        <span class="obs-arrow">▼</span>
+      </summary>
+      <div class="obs-full">${api.esc(item.observacao)}</div>
+    </details>
+  </div>
+` : ''}
 
       <div class="action-grid">
         <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
