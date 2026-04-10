@@ -54,15 +54,15 @@
         <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
       </div>
 
-      ${item.observacao ? `
+      ${item.observacaoPedido ? `
   <div class="delivery-meta">
     <details class="obs-box">
       <summary class="obs-summary">
         <span class="meta-label">Observação:</span>
-        <span class="obs-text">${api.esc(item.observacao)}</span>
+        <span class="obs-text">${api.esc(item.observacaoPedido)}</span>
         <span class="obs-arrow">▼</span>
       </summary>
-      <div class="obs-full">${api.esc(item.observacao)}</div>
+      <div class="obs-full">${api.esc(item.observacaoPedido)}</div>
     </details>
   </div>
 ` : ''}
