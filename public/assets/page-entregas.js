@@ -79,18 +79,6 @@
   `;
 }
 
-      <div class="action-grid">
-        <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
-        <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
-        <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
-        <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
-        <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
-        <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
-      </div>
-    </article>
-  `;
-}
-
   function renderList() {
   refreshInfo.textContent = `Total: ${state.items.length}`;
 
