@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Painel admin</title>
+  <meta name="theme-color" content="#0b1f4d" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero hero-dark">
+      <div class="hero-inner topbar">
+        <div class="topbar-left">
+          <button type="button" class="icon-btn" id="btnVoltar" aria-label="Voltar">←</button>
+          <h1 class="topbar-title">Painel admin</h1>
+        </div>
+        <button type="button" class="icon-btn" id="btnRefresh" aria-label="Atualizar">↻</button>
+      </div>
+    </header>
+
+    <main class="content admin-grid">
+      <section class="admin-stats">
+        <article class="admin-card"><div class="stat-label">Entregadores com rota hoje</div><div class="stat-value" id="statDrivers">-</div></article>
+        <article class="admin-card"><div class="stat-label">Entregas concluídas</div><div class="stat-value" id="statDone">-</div></article>
+        <article class="admin-card"><div class="stat-label">Pendentes / em rota</div><div class="stat-value" id="statPending">-</div></article>
+      </section>
+
+      <section class="admin-card">
+        <div class="section-head">
+          <h2 class="section-title">Mapa operacional</h2>
+          <span class="small-muted" id="mapInfo">Atualizando...</span>
+        </div>
+        <div id="map"></div>
+      </section>
+
+      <section class="admin-card">
+        <div class="section-head">
+          <h2 class="section-title">Status por entregador</h2>
+          <span class="small-muted" id="lastUpdate">Atualizando...</span>
+        </div>
+        <div id="warningBox" class="warning-box hidden bottom-gap"></div>
+        <div id="progressRoot" class="driver-progress-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/assets/config.js"></script>
+  <script src="/assets/core.js"></script>
+  <script src="/assets/page-admin.js"></script>
+</body>
+</html>

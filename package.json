@@ -1,0 +1,9 @@
+{
+  "name": "app-entregas-entregadores",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "npx serve public -l 3000",
+    "start": "npx serve public -l 3000"
+  }
+}

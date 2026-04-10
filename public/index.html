@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>App de Entregas</title>
+  <meta name="theme-color" content="#0b1f4d" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-inner">
+        <div class="hero-kicker">🚚 Sistema de entregas</div>
+        <h1>Quem está entregando hoje?</h1>
+        <p class="hero-text">Tela simples, leve e feita para abrir rápido no celular.</p>
+      </div>
+    </header>
+
+    <main class="surface">
+      <section class="panel selector-panel">
+        <div id="savedDriverBox" class="info-box hidden"></div>
+        <div id="warningBox" class="warning-box hidden"></div>
+
+        <div id="loadingList" class="driver-list">
+          <div class="driver-item skeleton-card"><div class="driver-main"><div class="avatar skeleton"></div><div class="grow"><div class="skeleton skeleton-line big"></div><div class="skeleton skeleton-line small"></div></div></div></div>
+          <div class="driver-item skeleton-card"><div class="driver-main"><div class="avatar skeleton"></div><div class="grow"><div class="skeleton skeleton-line big"></div><div class="skeleton skeleton-line small"></div></div></div></div>
+          <div class="driver-item skeleton-card"><div class="driver-main"><div class="avatar skeleton"></div><div class="grow"><div class="skeleton skeleton-line big"></div><div class="skeleton skeleton-line small"></div></div></div></div>
+        </div>
+
+        <div id="driverList" class="driver-list hidden"></div>
+        <div id="errorBox" class="error-box hidden"></div>
+      </section>
+
+      <div class="footer-note">O último entregador fica salvo no aparelho para entrar mais rápido na próxima vez.</div>
+    </main>
+  </div>
+
+  <script src="/assets/config.js"></script>
+  <script src="/assets/core.js"></script>
+  <script src="/assets/page-home.js"></script>
+</body>
+</html>
