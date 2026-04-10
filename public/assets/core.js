@@ -47,17 +47,41 @@
   }
 
   function buildMapsUrl(item) {
-    const lat = item && item.lat;
-    const lng = item && item.lng;
-    const endereco = String((item && item.endereco) || '').trim();
-    if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-      return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(String(lat) + ',' + String(lng));
+  const lat = item && item.lat;
+  const lng = item && item.lng;
+  const endereco = String((item && item.endereco) || '').trim();
+
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
+    const coords = String(lat) + ',' + String(lng);
+
+    if (isAndroid) {
+      return 'google.navigation:q=' + encodeURIComponent(coords);
     }
-    if (endereco) {
-      return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(endereco);
+
+    if (isIPhone) {
+      return 'comgooglemaps://?q=' + encodeURIComponent(coords) + '&directionsmode=driving';
     }
-    return '#';
+
+    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(coords);
   }
+
+  if (endereco) {
+    if (isAndroid) {
+      return 'google.navigation:q=' + encodeURIComponent(endereco);
+    }
+
+    if (isIPhone) {
+      return 'comgooglemaps://?q=' + encodeURIComponent(endereco) + '&directionsmode=driving';
+    }
+
+    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(endereco);
+  }
+
+  return '#';
+}
 
   function buildWazeUrl(item) {
     const lat = item && item.lat;
