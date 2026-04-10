@@ -48,8 +48,7 @@
     try {
       const saved = api.getSavedDriverName();
       if (saved) {
-        savedDriverBox.classList.remove('hidden');
-        savedDriverBox.innerHTML = 'Último entregador usado: <strong>' + api.esc(saved) + '</strong>.';
+        savedDriverBox.classList.add('hidden');
       }
 
       const result = await api.carregarEntregadores();

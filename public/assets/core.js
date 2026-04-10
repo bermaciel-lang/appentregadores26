@@ -247,28 +247,34 @@
   }
 
   async function apiIniciarEntrega(row) {
-    return apiGet({ action: 'iniciarEntrega', row }, { retries: 1 });
+    return apiGet({ action: 'iniciarEntrega', row }, { retries: 0 });
   }
 
   async function apiMarcarEntregue(row, obs) {
-    return apiGet({ action: 'marcarEntregue', row, obs: obs || '' }, { retries: 1 });
+    return apiGet({ action: 'marcarEntregue', row, obs: obs || '' }, { retries: 0 });
   }
 
   async function apiMarcarNaoEntregue(row, obs) {
-    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 1 });
+    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 0 });
   }
 
   async function abrirWhatsapp(row) {
-    const res = await apiGet({ action: 'whatsapp', row }, { retries: 1 });
+    const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
     if (!res || !res.ok || !res.url) {
       throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
     }
-    window.open(res.url, '_blank');
+    window.location.assign(res.url);
     return res;
   }
 
   async function apiAtualizarLocalizacaoEntregador(entregador, lat, lng) {
     return apiGet({ action: 'atualizarLocalizacaoEntregador', entregador, lat, lng }, { retries: 0 });
+  }
+
+
+  function saveEntregasCache(entregador, items) {
+    const cacheName = 'entregas_' + String(entregador || '').toLowerCase();
+    writeCache(cacheName, Array.isArray(items) ? items : []);
   }
 
   async function carregarAdminPainel() {
@@ -318,6 +324,7 @@
     saveDriverName,
     getSavedDriverName,
     clearSavedDriverName,
+    saveEntregasCache,
     setAdminAuth,
     getAdminAuth,
     apiGet,

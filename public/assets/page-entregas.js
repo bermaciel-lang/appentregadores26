@@ -41,47 +41,21 @@
     warningBox.classList.remove('hidden');
   }
 
-  function sectionTemplate(title, count, badgeClass, items) {
-    if (!items.length) {
-      return `
-        <section class="section-card">
-          <div class="section-head">
-            <h2 class="section-title">${title}</h2>
-            <span class="badge ${badgeClass}">${count}</span>
-          </div>
-          <div class="empty-box">Nenhuma entrega nesta seção.</div>
-        </section>
-      `;
-    }
-
-    return `
-      <section class="section-card">
-        <div class="section-head">
-          <h2 class="section-title">${title}</h2>
-          <span class="badge ${badgeClass}">${count}</span>
-        </div>
-        <div class="delivery-list">
-          ${items.map(renderEntregaCard).join('')}
-        </div>
-      </section>
-    `;
-  }
-
   function renderEntregaCard(item) {
     const key = api.statusKey(item.status);
-    const cssClass = key === 'start' ? 'start' : key === 'done' ? 'done' : key === 'fail' ? 'fail' : 'pending';
+    const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
+
     return `
-      <article class="delivery-card ${cssClass}">
+      <article class="delivery-card ${key}">
         <div class="delivery-top">
           <div>
             <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
             <div class="small-muted">Pedido ${api.esc(item.pedido || '-')}</div>
           </div>
-          <span class="badge ${key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : ''}">${api.esc(api.statusLabel(item.status))}</span>
+          <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
         </div>
         <div class="delivery-meta">
           <div><span class="meta-label">Endereço:</span> ${api.esc(item.endereco || '-')}</div>
-          <div><span class="meta-label">Horário:</span> ${api.esc(item.horario || '-')}</div>
           <div><span class="meta-label">Observação:</span> ${api.esc(item.observacao || '-')}</div>
         </div>
         <div class="action-grid">
@@ -96,17 +70,17 @@
     `;
   }
 
-  function renderSections() {
-    const grupos = api.agruparEntregas(state.items);
+  function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
+    refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
 
-    refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Pendentes: ${resumo.pendentes} • Concluídas: ${resumo.concluidas}`;
-
-    sectionsRoot.innerHTML = [
-      sectionTemplate('Em rota', grupos.emRota.length, 'warn', grupos.emRota),
-      sectionTemplate('Pendentes', grupos.pendentes.length, '', grupos.pendentes),
-      sectionTemplate('Concluídas', grupos.concluidas.length, 'ok', grupos.concluidas)
-    ].join('');
+    sectionsRoot.innerHTML = `
+      <section class="section-card">
+        <div class="delivery-list">
+          ${state.items.map(renderEntregaCard).join('')}
+        </div>
+      </section>
+    `;
 
     sectionsRoot.classList.remove('hidden');
   }
@@ -118,7 +92,7 @@
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
-      renderSections();
+      renderList();
 
       if (result.stale) {
         setWarning('As entregas foram abertas pelo último cache salvo. A internet ou a API podem ter falhado agora.');
@@ -134,41 +108,89 @@
     }
   }
 
+  function updateLocalStatus(row, nextStatus, nextObs) {
+    const index = state.items.findIndex((x) => Number(x.row) === Number(row));
+    if (index < 0) return null;
+
+    const previous = Object.assign({}, state.items[index]);
+    state.items[index] = Object.assign({}, state.items[index], {
+      status: nextStatus,
+      observacao: nextObs !== undefined ? nextObs : state.items[index].observacao
+    });
+
+    api.saveEntregasCache(state.driver, state.items);
+    renderList();
+    return previous;
+  }
+
+  function restoreLocalItem(row, previous) {
+    const index = state.items.findIndex((x) => Number(x.row) === Number(row));
+    if (index < 0 || !previous) return;
+    state.items[index] = previous;
+    api.saveEntregasCache(state.driver, state.items);
+    renderList();
+  }
+
+  function openSameTab(url) {
+    if (!url || url === '#') {
+      alert('Endereço não disponível para abrir.');
+      return;
+    }
+    window.location.assign(url);
+  }
+
   async function handleAction(act, row) {
     if (state.sendingAction) return;
+
+    const item = state.items.find((x) => Number(x.row) === Number(row));
+    if (!item) return;
+
+    if (act === 'maps') {
+      openSameTab(api.buildMapsUrl(item));
+      return;
+    }
+
+    if (act === 'waze') {
+      openSameTab(api.buildWazeUrl(item));
+      return;
+    }
+
+    if (act === 'whats') {
+      try {
+        await api.abrirWhatsapp(row);
+      } catch (error) {
+        console.error(error);
+        alert('Não foi possível abrir o WhatsApp.');
+      }
+      return;
+    }
+
     state.sendingAction = true;
+    let previous = null;
 
     try {
-      const item = state.items.find((x) => Number(x.row) === Number(row));
-
       if (act === 'start') {
+        previous = updateLocalStatus(row, 'Indo para entrega');
         const res = await api.apiIniciarEntrega(row);
         if (!res || !res.ok) throw new Error('Falha ao iniciar');
-      } else if (act === 'maps') {
-        const res = await api.apiIniciarEntrega(row);
-        if (!res || !res.ok) throw new Error('Falha ao iniciar');
-        if (item) window.open(api.buildMapsUrl(item), '_blank');
-      } else if (act === 'waze') {
-        const res = await api.apiIniciarEntrega(row);
-        if (!res || !res.ok) throw new Error('Falha ao iniciar');
-        if (item) window.open(api.buildWazeUrl(item), '_blank');
       } else if (act === 'done') {
         const obs = prompt('Observação da entrega:') || '';
+        previous = updateLocalStatus(row, 'Entregue', obs);
         const res = await api.apiMarcarEntregue(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao concluir');
       } else if (act === 'fail') {
         const obs = prompt('Motivo / observação:') || '';
+        previous = updateLocalStatus(row, 'Não entregue', obs);
         const res = await api.apiMarcarNaoEntregue(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao marcar não entregue');
-      } else if (act === 'whats') {
-        await api.abrirWhatsapp(row);
-        state.sendingAction = false;
-        return;
       }
 
-      await carregarTudo(false);
+      window.setTimeout(function () {
+        carregarTudo(false);
+      }, 800);
     } catch (error) {
       console.error(error);
+      restoreLocalItem(row, previous);
       alert('Não foi possível concluir essa ação. Confira a conexão e tente de novo.');
     } finally {
       state.sendingAction = false;
