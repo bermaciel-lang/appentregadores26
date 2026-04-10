@@ -73,19 +73,18 @@
 }
 
   function renderList() {
-    const resumo = api.gerarResumoEntregas(state.items);
-    refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
+  refreshInfo.textContent = `Total: ${state.items.length}`;
 
-    sectionsRoot.innerHTML = `
-      <section class="section-card">
-        <div class="delivery-list">
-          ${state.items.map(renderEntregaCard).join('')}
-        </div>
-      </section>
-    `;
+  sectionsRoot.innerHTML = `
+    <section class="section-card">
+      <div class="delivery-list">
+        ${state.items.map(renderEntregaCard).join('')}
+      </div>
+    </section>
+  `;
 
-    sectionsRoot.classList.remove('hidden');
-  }
+  sectionsRoot.classList.remove('hidden');
+}
 
   async function carregarTudo(showSkeleton) {
     if (showSkeleton) setLoading(true);
