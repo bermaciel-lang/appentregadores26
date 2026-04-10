@@ -99,7 +99,7 @@
 
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
-      state.items = result.data || [];
+      state.items = result.items || [];
       renderList();
 
       if (result.stale) {
