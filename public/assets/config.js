@@ -1,5 +1,5 @@
 window.APP_CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbynFcLGAbsAEpvyUBzIXV7v1d72z5OSkKpegl8FjAWBJuW9qJeeAAn8WTQTAQQSiSGOLw/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbytI4amCTInP7RB0nJb0PIOHt85YK3_L_7ZTJsv4IpnCZKNvbRYAVFzd2HXGevki5ls/exec',
   API_MODE: 'jsonp',
   ADMIN_PASSWORD: '1234',
   REFRESH_INTERVAL_MS: 60000,
