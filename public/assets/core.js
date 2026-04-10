@@ -237,14 +237,38 @@
   }
 
   async function carregarEntregasPorEntregador(entregador) {
-    const cacheName = 'entregas_' + String(entregador || '').toLowerCase();
-    const result = await withCache(cacheName, async () => {
-      const res = await apiGet({ action: 'entregas', entregador });
-      if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregas');
-      return Array.isArray(res.items) ? res.items : [];
+  const cacheKey = 'entregas_' + String(entregador || '').trim().toLowerCase();
+
+  try {
+    const res = await apiGet({
+      action: 'entregas',
+      entregador
     });
-    return result;
+
+    if (!res || !res.ok) {
+      throw new Error((res && res.error) || 'Erro ao carregar entregas');
+    }
+
+    const items = Array.isArray(res.items) ? res.items : [];
+    saveEntregasCache(entregador, items);
+
+    return {
+      items,
+      stale: false
+    };
+  } catch (error) {
+    const cached = getEntregasCache(entregador);
+
+    if (cached && Array.isArray(cached.items)) {
+      return {
+        items: cached.items,
+        stale: true
+      };
+    }
+
+    throw error;
   }
+}
 
   async function apiIniciarEntrega(row) {
     return apiGet({ action: 'iniciarEntrega', row }, { retries: 0 });
