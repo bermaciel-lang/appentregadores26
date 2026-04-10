@@ -310,13 +310,31 @@
   }
 
   async function abrirWhatsapp(row) {
-    const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
-    if (!res || !res.ok || !res.url) {
-      throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
-    }
-    window.location.assign(res.url);
-    return res;
+  const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
+
+  if (!res || !res.ok || !res.url) {
+    throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
   }
+
+  let url = String(res.url || '');
+  const isAndroid = /Android/i.test(navigator.userAgent);
+
+  if (isAndroid) {
+    try {
+      const parsed = new URL(url);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      const phone = pathParts[0] || '';
+      const text = parsed.searchParams.get('text') || '';
+
+      if (phone) {
+        url = 'whatsapp://send?phone=' + encodeURIComponent(phone) + '&text=' + encodeURIComponent(text);
+      }
+    } catch (e) {}
+  }
+
+  window.location.assign(url);
+  return res;
+}
 
   async function apiAtualizarLocalizacaoEntregador(entregador, lat, lng) {
     return apiGet({ action: 'atualizarLocalizacaoEntregador', entregador, lat, lng }, { retries: 0 });
