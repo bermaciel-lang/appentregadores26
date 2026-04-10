@@ -145,15 +145,43 @@
     const item = state.items.find((x) => Number(x.row) === Number(row));
     if (!item) return;
 
-    if (act === 'maps') {
-      openSameTab(api.buildMapsUrl(item));
-      return;
+if (act === 'maps') {
+  try {
+    if (api.statusKey(item.status) !== 'start') {
+      const previous = updateLocalStatus(row, 'Indo para entrega');
+      const res = await api.apiIniciarEntrega(row);
+      if (!res || !res.ok) {
+        restoreLocalItem(row, previous);
+        throw new Error('Falha ao iniciar');
+      }
     }
 
-    if (act === 'waze') {
-      openSameTab(api.buildWazeUrl(item));
-      return;
+    openSameTab(api.buildMapsUrl(item));
+  } catch (error) {
+    console.error(error);
+    alert('Não foi possível iniciar e abrir o Maps.');
+  }
+  return;
+}
+
+if (act === 'waze') {
+  try {
+    if (api.statusKey(item.status) !== 'start') {
+      const previous = updateLocalStatus(row, 'Indo para entrega');
+      const res = await api.apiIniciarEntrega(row);
+      if (!res || !res.ok) {
+        restoreLocalItem(row, previous);
+        throw new Error('Falha ao iniciar');
+      }
     }
+
+    openSameTab(api.buildWazeUrl(item));
+  } catch (error) {
+    console.error(error);
+    alert('Não foi possível iniciar e abrir o Waze.');
+  }
+  return;
+}
 
     if (act === 'whats') {
       try {
