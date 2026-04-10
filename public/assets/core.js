@@ -84,17 +84,20 @@
 }
 
   function buildWazeUrl(item) {
-    const lat = item && item.lat;
-    const lng = item && item.lng;
-    const endereco = String((item && item.endereco) || '').trim();
-    if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-      return 'https://www.waze.com/ul?ll=' + encodeURIComponent(String(lat) + ',' + String(lng)) + '&navigate=yes';
-    }
-    if (endereco) {
-      return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
-    }
-    return '#';
+  const lat = item && item.lat;
+  const lng = item && item.lng;
+  const endereco = String((item && item.endereco) || '').trim();
+
+  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
+    return 'https://www.waze.com/ul?ll=' + encodeURIComponent(String(lat) + ',' + String(lng)) + '&navigate=yes';
   }
+
+  if (endereco) {
+    return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
+  }
+
+  return '#';
+}
 
   function saveDriverName(nome) {
     localStorage.setItem(C.STORAGE_DRIVER_KEY, String(nome || '').trim());
