@@ -42,33 +42,35 @@
   }
 
   function renderEntregaCard(item) {
-    const key = api.statusKey(item.status);
-    const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
+  const key = api.statusKey(item.status);
+  const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
 
-    return `
-      <article class="delivery-card ${key}">
-        <div class="delivery-top">
-          <div>
-            <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
-            <div class="small-muted">Pedido ${api.esc(item.pedido || '-')}</div>
-          </div>
-          <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
+  return `
+    <article class="delivery-card ${key}">
+      <div class="delivery-top">
+        <div>
+          <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
         </div>
+        <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
+      </div>
+
+      ${item.observacao ? `
         <div class="delivery-meta">
-          <div><span class="meta-label">Endereço:</span> ${api.esc(item.endereco || '-')}</div>
-          <div><span class="meta-label">Observação:</span> ${api.esc(item.observacao || '-')}</div>
+          <div><span class="meta-label">Observação:</span> ${api.esc(item.observacao)}</div>
         </div>
-        <div class="action-grid">
-          <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
-          <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
-          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
-          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
-          <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
-          <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
-        </div>
-      </article>
-    `;
-  }
+      ` : ''}
+
+      <div class="action-grid">
+        <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
+        <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
+        <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
+        <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
+        <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
+        <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
+      </div>
+    </article>
+  `;
+}
 
   function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
