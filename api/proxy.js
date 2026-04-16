@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
     const bodyStr = JSON.stringify(body);
 
-    // Passo 1: POST sem seguir redirect — pega a URL real
+    // Passo 1: POST para o Apps Script — ele processa e redireciona
     const probe = await fetch(SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -23,24 +23,17 @@ export default async function handler(req, res) {
     });
 
     const location = probe.headers.get('location');
-    console.log('Redirect location:', location);
 
     if (!location) {
       const text = await probe.text();
-      console.log('Resposta direta:', text.substring(0, 200));
       res.json(JSON.parse(text));
       return;
     }
 
-    // Passo 2: POST direto na URL real (sem redirect)
-    const final = await fetch(location, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: bodyStr
-    });
-
+    // Passo 2: GET na URL do redirect — aqui está a resposta processada
+    const final = await fetch(location, { method: 'GET' });
     const text = await final.text();
-    console.log('Resposta final:', text.substring(0, 200));
+    console.log('Resposta:', text.substring(0, 200));
 
     const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
     res.json(JSON.parse(clean));
