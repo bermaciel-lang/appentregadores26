@@ -17,51 +17,24 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
-    const bodyStr = JSON.stringify(body);
 
-    // Passo 1: capturar o redirect do Apps Script
-    const probe = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: bodyStr,
-      redirect: 'manual'
-    });
+    // Monta URL com todos os parâmetros (o servidor não tem limite de URL como o browser)
+    const params = new URLSearchParams();
+    Object.entries(body).forEach(([k, v]) => params.set(k, String(v)));
+    const url = SCRIPT_URL + '?' + params.toString();
 
-    const redirectUrl = probe.headers.get('location');
-    const status1 = probe.status;
-
-    let text = '';
-
-    if (redirectUrl) {
-      // Passo 2: POST direto na URL real
-      const response = await fetch(redirectUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: bodyStr
-      });
-      text = await response.text();
-    } else {
-      text = await probe.text();
-    }
-
-    // Log de diagnóstico — retorna junto com a resposta para você ver
-    const debug = {
-      bodyKeys: Object.keys(body),
-      bodyLength: bodyStr.length,
-      fotoBase64Length: body.fotoBase64 ? body.fotoBase64.length : 0,
-      probeStatus: status1,
-      redirectUrl: redirectUrl || 'nenhum',
-      appScriptResponse: text.substring(0, 200)
-    };
-
-    console.log('DEBUG PROXY:', JSON.stringify(debug));
+    const response = await fetch(url, { redirect: 'follow' });
+    const text = await response.text();
 
     res.setHeader('Content-Type', 'application/json');
+
+    // Remove callback JSONP se vier
+    const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
+
     try {
-      const parsed = JSON.parse(text);
-      res.json({ ...parsed, _debug: debug });
-    } catch(e) {
-      res.json({ ok: false, error: 'Resposta inválida do servidor', _debug: debug });
+      res.json(JSON.parse(clean));
+    } catch (e) {
+      res.json({ ok: false, error: 'Resposta inválida do servidor', raw: text.substring(0, 200) });
     }
 
   } catch (err) {
