@@ -55,20 +55,22 @@ export default async function handler(req, res) {
 
   const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbytI4amCTInP7RB0nJb0PIOHt85YK3_L_7ZTJsv4IpnCZKNvbRYAVFzd2HXGevki5ls/exec';
 
-  try {
-console.log('SERVICE_ACCOUNT existe?', !!process.env.GOOGLE_SERVICE_ACCOUNT);
-
+try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
 
-    // Faz o upload da foto direto no Drive (se tiver foto)
     let fotoUrl = '';
     if (body.fotoBase64) {
-      const agora = new Date().toISOString().replace(/[:.]/g, '-');
-      const nome = agora + '_' + (body.entregador || 'entregador').replace(/\s+/g, '_') + '_' + (body.action || 'foto') + '.jpg';
-      fotoUrl = await uploadToDrive(body.fotoBase64, body.fotoMimeType || 'image/jpeg', nome);
+      console.log('Tentando upload no Drive...');
+      try {
+        const agora = new Date().toISOString().replace(/[:.]/g, '-');
+        const nome = agora + '_' + (body.entregador || 'entregador').replace(/\s+/g, '_') + '_' + (body.action || 'foto') + '.jpg';
+        fotoUrl = await uploadToDrive(body.fotoBase64, body.fotoMimeType || 'image/jpeg', nome);
+        console.log('Upload OK, url:', fotoUrl);
+      } catch (driveErr) {
+        console.error('Erro no Drive:', driveErr.message);
+      }
     }
 
-    // Manda para o Apps Script sem a foto (já foi salva), só com a URL
     const params = new URLSearchParams();
     params.set('action', body.action || '');
     params.set('entregador', body.entregador || '');
@@ -76,15 +78,17 @@ console.log('SERVICE_ACCOUNT existe?', !!process.env.GOOGLE_SERVICE_ACCOUNT);
     if (body.kmFinal) params.set('kmFinal', body.kmFinal);
     if (fotoUrl) params.set('fotoUrl', fotoUrl);
 
+    console.log('Chamando Apps Script...');
     const url = SCRIPT_URL + '?' + params.toString();
     const response = await fetch(url, { redirect: 'follow' });
     const text = await response.text();
+    console.log('Apps Script respondeu:', text.substring(0, 100));
 
     const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
     res.json(JSON.parse(clean));
 
   } catch (err) {
-    console.error('Erro:', err.message);
+    console.error('Erro geral:', err.message);
     res.status(500).json({ ok: false, error: err.message || 'Erro no proxy' });
   }
 }
