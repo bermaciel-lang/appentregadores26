@@ -47,30 +47,57 @@
   }
 
   function buildMapsUrl(item) {
-    const lat = item && item.lat;
-    const lng = item && item.lng;
-    const endereco = String((item && item.endereco) || '').trim();
-    if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-      return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(String(lat) + ',' + String(lng));
+  const lat = item && item.lat;
+  const lng = item && item.lng;
+  const endereco = String((item && item.endereco) || '').trim();
+
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
+    const coords = String(lat) + ',' + String(lng);
+
+    if (isAndroid) {
+      return 'google.navigation:q=' + encodeURIComponent(coords);
     }
-    if (endereco) {
-      return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(endereco);
+
+    if (isIPhone) {
+      return 'comgooglemaps://?q=' + encodeURIComponent(coords) + '&directionsmode=driving';
     }
-    return '#';
+
+    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(coords);
   }
 
-  function buildWazeUrl(item) {
-    const lat = item && item.lat;
-    const lng = item && item.lng;
-    const endereco = String((item && item.endereco) || '').trim();
-    if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-      return 'https://www.waze.com/ul?ll=' + encodeURIComponent(String(lat) + ',' + String(lng)) + '&navigate=yes';
+  if (endereco) {
+    if (isAndroid) {
+      return 'google.navigation:q=' + encodeURIComponent(endereco);
     }
-    if (endereco) {
-      return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
+
+    if (isIPhone) {
+      return 'comgooglemaps://?q=' + encodeURIComponent(endereco) + '&directionsmode=driving';
     }
-    return '#';
+
+    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(endereco);
   }
+
+  return '#';
+}
+
+  function buildWazeUrl(item) {
+  const lat = item && item.lat;
+  const lng = item && item.lng;
+  const endereco = String((item && item.endereco) || '').trim();
+
+  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
+    return 'https://www.waze.com/ul?ll=' + encodeURIComponent(String(lat) + ',' + String(lng)) + '&navigate=yes';
+  }
+
+  if (endereco) {
+    return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
+  }
+
+  return '#';
+}
 
   function saveDriverName(nome) {
     localStorage.setItem(C.STORAGE_DRIVER_KEY, String(nome || '').trim());
@@ -237,14 +264,38 @@
   }
 
   async function carregarEntregasPorEntregador(entregador) {
-    const cacheName = 'entregas_' + String(entregador || '').toLowerCase();
-    const result = await withCache(cacheName, async () => {
-      const res = await apiGet({ action: 'entregas', entregador });
-      if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregas');
-      return Array.isArray(res.items) ? res.items : [];
+  const cacheKey = 'entregas_' + String(entregador || '').trim().toLowerCase();
+
+  try {
+    const res = await apiGet({
+      action: 'entregas',
+      entregador
     });
-    return result;
+
+    if (!res || !res.ok) {
+      throw new Error((res && res.error) || 'Erro ao carregar entregas');
+    }
+
+    const items = Array.isArray(res.items) ? res.items : [];
+    saveEntregasCache(entregador, items);
+
+    return {
+      items,
+      stale: false
+    };
+  } catch (error) {
+    const cached = getEntregasCache(entregador);
+
+    if (cached && Array.isArray(cached.items)) {
+      return {
+        items: cached.items,
+        stale: true
+      };
+    }
+
+    throw error;
   }
+}
 
   async function apiIniciarEntrega(row) {
     return apiGet({ action: 'iniciarEntrega', row }, { retries: 0 });
@@ -259,13 +310,31 @@
   }
 
   async function abrirWhatsapp(row) {
-    const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
-    if (!res || !res.ok || !res.url) {
-      throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
-    }
-    window.location.assign(res.url);
-    return res;
+  const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
+
+  if (!res || !res.ok || !res.url) {
+    throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
   }
+
+  let url = String(res.url || '');
+  const isAndroid = /Android/i.test(navigator.userAgent);
+
+  if (isAndroid) {
+    try {
+      const parsed = new URL(url);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      const phone = pathParts[0] || '';
+      const text = parsed.searchParams.get('text') || '';
+
+      if (phone) {
+        url = 'whatsapp://send?phone=' + encodeURIComponent(phone) + '&text=' + encodeURIComponent(text);
+      }
+    } catch (e) {}
+  }
+
+  window.location.assign(url);
+  return res;
+}
 
   async function apiAtualizarLocalizacaoEntregador(entregador, lat, lng) {
     return apiGet({ action: 'atualizarLocalizacaoEntregador', entregador, lat, lng }, { retries: 0 });

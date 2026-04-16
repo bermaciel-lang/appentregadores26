@@ -1,16 +1,18 @@
 (function () {
   const api = window.AppEntrega;
+  const savedDriver = api.getSavedDriverName();
+
   const state = {
-  driver: api.getSavedDriverName(),
-  refreshTimer: null,
-  gpsWatchId: null,
-  lastGpsSend: 0,
-  items: [],
-  sendingAction: false,
-  sendingRouteAction: false,
-  rotaIniciada: sessionStorage.getItem('rota_iniciada_' + api.getSavedDriverName()) === '1',
-  rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + api.getSavedDriverName()) === '1'
-};
+    driver: savedDriver,
+    refreshTimer: null,
+    gpsWatchId: null,
+    lastGpsSend: 0,
+    items: [],
+    sendingAction: false,
+    sendingRouteAction: false,
+    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
+    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
+  };
 
   const driverTitle = document.getElementById('driverTitle');
   const driverNameText = document.getElementById('driverNameText');
@@ -44,151 +46,151 @@
     warningBox.classList.remove('hidden');
   }
 
-function compressImageToBase64(file, maxWidth, quality) {
-  return new Promise((resolve, reject) => {
-    if (!file) {
-      reject(new Error('Arquivo não informado'));
-      return;
-    }
-
-    const reader = new FileReader();
-
-    reader.onload = function (ev) {
-      const img = new Image();
-
-      img.onload = function () {
-        const scale = Math.min(1, (maxWidth || 640) / img.width);
-        const width = Math.max(1, Math.round(img.width * scale));
-        const height = Math.max(1, Math.round(img.height * scale));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-
-        const mimeType = 'image/jpeg';
-        const dataUrl = canvas.toDataURL(mimeType, quality || 0.3);
-        const base64 = (dataUrl.split(',')[1] || '').trim();
-
-        resolve({ base64, mimeType });
-      };
-
-      img.onerror = function () {
-        reject(new Error('Não foi possível carregar a imagem'));
-      };
-
-      img.src = ev.target.result;
-    };
-
-    reader.onerror = function () {
-      reject(new Error('Não foi possível ler o arquivo'));
-    };
-
-    reader.readAsDataURL(file);
-  });
-}
-
-function pedirKm(mensagem) {
-  const raw = prompt(mensagem);
-
-  if (raw === null) return null;
-
-  const value = String(raw).trim().replace(',', '.');
-
-  if (!value) {
-    alert('A quilometragem é obrigatória.');
-    return undefined;
-  }
-
-  const num = Number(value);
-
-  if (!Number.isFinite(num) || num < 0) {
-    alert('Quilometragem inválida.');
-    return undefined;
-  }
-
-  return value;
-}
-
-function pedirFotoObrigatoria() {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.capture = 'environment';
-
-    input.addEventListener('change', async function () {
-      const file = input.files && input.files[0];
-
+  function compressImageToBase64(file, maxWidth, quality) {
+    return new Promise((resolve, reject) => {
       if (!file) {
-        resolve(null);
+        reject(new Error('Arquivo não informado'));
         return;
       }
 
-      try {
-        const result = await compressImageToBase64(file, 640, 0.3);
-        resolve(result);
-      } catch (error) {
-        console.error(error);
-        alert('Não foi possível preparar a foto.');
-        resolve(null);
-      }
+      const reader = new FileReader();
+
+      reader.onload = function (ev) {
+        const img = new Image();
+
+        img.onload = function () {
+          const scale = Math.min(1, (maxWidth || 640) / img.width);
+          const width = Math.max(1, Math.round(img.width * scale));
+          const height = Math.max(1, Math.round(img.height * scale));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const mimeType = 'image/jpeg';
+          const dataUrl = canvas.toDataURL(mimeType, quality || 0.3);
+          const base64 = (dataUrl.split(',')[1] || '').trim();
+
+          resolve({ base64, mimeType });
+        };
+
+        img.onerror = function () {
+          reject(new Error('Não foi possível carregar a imagem'));
+        };
+
+        img.src = ev.target.result;
+      };
+
+      reader.onerror = function () {
+        reject(new Error('Não foi possível ler o arquivo'));
+      };
+
+      reader.readAsDataURL(file);
     });
-
-    input.click();
-  });
-}
-
-function renderEntregaCard(item) {
-  const key = api.statusKey(item.status);
-  const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
-  const obsPedido = String(item.observacaoPedido || '').trim();
-
-  let obsHtml = '';
-
-  if (obsPedido) {
-    if (obsPedido.length > 120) {
-      obsHtml = `
-        <div class="delivery-meta">
-          <details>
-            <summary><span class="meta-label">Observação</span></summary>
-            <div class="top-gap">${api.esc(obsPedido)}</div>
-          </details>
-        </div>
-      `;
-    } else {
-      obsHtml = `
-        <div class="delivery-meta">
-          <div><span class="meta-label">Observação:</span> ${api.esc(obsPedido)}</div>
-        </div>
-      `;
-    }
   }
 
-  return `
-    <article class="delivery-card ${key}">
-      <div class="delivery-top">
-        <div>
-          <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
+  function pedirKm(mensagem) {
+    const raw = prompt(mensagem);
+
+    if (raw === null) return null;
+
+    const value = String(raw).trim().replace(',', '.');
+
+    if (!value) {
+      alert('A quilometragem é obrigatória.');
+      return undefined;
+    }
+
+    const num = Number(value);
+
+    if (!Number.isFinite(num) || num < 0) {
+      alert('Quilometragem inválida.');
+      return undefined;
+    }
+
+    return value;
+  }
+
+  function pedirFotoObrigatoria() {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.capture = 'environment';
+
+      input.addEventListener('change', async function () {
+        const file = input.files && input.files[0];
+
+        if (!file) {
+          resolve(null);
+          return;
+        }
+
+        try {
+          const result = await compressImageToBase64(file, 640, 0.3);
+          resolve(result);
+        } catch (error) {
+          console.error(error);
+          alert('Não foi possível preparar a foto.');
+          resolve(null);
+        }
+      });
+
+      input.click();
+    });
+  }
+
+  function renderEntregaCard(item) {
+    const key = api.statusKey(item.status);
+    const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
+    const obsPedido = String(item.observacaoPedido || '').trim();
+
+    let obsHtml = '';
+
+    if (obsPedido) {
+      if (obsPedido.length > 120) {
+        obsHtml = `
+          <div class="delivery-meta">
+            <details>
+              <summary><span class="meta-label">Observação</span></summary>
+              <div class="top-gap">${api.esc(obsPedido)}</div>
+            </details>
+          </div>
+        `;
+      } else {
+        obsHtml = `
+          <div class="delivery-meta">
+            <div><span class="meta-label">Observação:</span> ${api.esc(obsPedido)}</div>
+          </div>
+        `;
+      }
+    }
+
+    return `
+      <article class="delivery-card ${key}">
+        <div class="delivery-top">
+          <div>
+            <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
+          </div>
+          <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
         </div>
-        <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
-      </div>
 
-      ${obsHtml}
+        ${obsHtml}
 
-      <div class="action-grid">
-        <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
-        <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
-        <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
-        <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
-        <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
-        <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
-      </div>
-    </article>
-  `;
-}
+        <div class="action-grid">
+          <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
+          <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
+          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
+          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
+          <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
+          <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
+        </div>
+      </article>
+    `;
+  }
 
   function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
@@ -259,85 +261,86 @@ function renderEntregaCard(item) {
     window.location.assign(url);
   }
 
-async function handleIniciarRota() {
-  if (state.sendingRouteAction) return;
-  if (state.rotaIniciada) {
-    alert('A rota já foi iniciada.');
-    return;
-  }
-
-  const km = pedirKm('Digite a quilometragem inicial do carro:');
-  if (km === null || km === undefined) return;
-
-  const foto = await pedirFotoObrigatoria();
-  if (!foto) {
-    alert('A foto é obrigatória para iniciar as entregas.');
-    return;
-  }
-
-  state.sendingRouteAction = true;
-
-  try {
-    const res = await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
-
-    if (!res || !res.ok) {
-      throw new Error((res && res.error) || 'Falha ao iniciar rota');
+  async function handleIniciarRota() {
+    if (state.sendingRouteAction) return;
+    if (state.rotaIniciada) {
+      alert('A rota já foi iniciada.');
+      return;
     }
 
-    state.rotaIniciada = true;
-state.rotaFinalizada = false;
-sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-sessionStorage.removeItem('rota_finalizada_' + state.driver);
+    const km = pedirKm('Digite a quilometragem inicial do carro:');
+    if (km === null || km === undefined) return;
 
-    await carregarTudo(false);
-    alert('Rota iniciada com sucesso.');
-  } catch (error) {
-    console.error(error);
-    alert('Não foi possível iniciar a rota.');
-  } finally {
-    state.sendingRouteAction = false;
-  }
-}
-
-async function handleFinalizarRota() {
-  if (state.sendingRouteAction) return;
-
-if (!state.rotaIniciada) {
-  alert('Clique primeiro em "Iniciar entregas".');
-  return;
-}
-
-  const km = pedirKm('Digite a quilometragem final do carro:');
-  if (km === null || km === undefined) return;
-
-  const foto = await pedirFotoObrigatoria();
-  if (!foto) {
-    alert('A foto é obrigatória para finalizar a rota.');
-    return;
-  }
-
-  state.sendingRouteAction = true;
-
-  try {
-    const res = await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType);
-
-    if (!res || !res.ok) {
-      throw new Error((res && res.error) || 'Falha ao finalizar rota');
+    const foto = await pedirFotoObrigatoria();
+    if (!foto) {
+      alert('A foto é obrigatória para iniciar as entregas.');
+      return;
     }
 
-    state.rotaFinalizada = true;
-state.rotaIniciada = false;
-sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-sessionStorage.removeItem('rota_iniciada_' + state.driver);
-await carregarTudo(false);
-    alert('Rota finalizada com sucesso.');
-  } catch (error) {
-    console.error(error);
-    alert('Não foi possível finalizar a rota.');
-  } finally {
-    state.sendingRouteAction = false;
+    state.sendingRouteAction = true;
+
+    try {
+      const res = await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+
+      if (!res || !res.ok) {
+        throw new Error((res && res.error) || 'Falha ao iniciar rota');
+      }
+
+      state.rotaIniciada = true;
+      state.rotaFinalizada = false;
+      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      sessionStorage.removeItem('rota_finalizada_' + state.driver);
+
+      await carregarTudo(false);
+      alert('Rota iniciada com sucesso.');
+    } catch (error) {
+      console.error(error);
+      alert('Não foi possível iniciar a rota.');
+    } finally {
+      state.sendingRouteAction = false;
+    }
   }
-}
+
+  async function handleFinalizarRota() {
+    if (state.sendingRouteAction) return;
+
+    if (!state.rotaIniciada) {
+      alert('Clique primeiro em "Iniciar entregas".');
+      return;
+    }
+
+    const km = pedirKm('Digite a quilometragem final do carro:');
+    if (km === null || km === undefined) return;
+
+    const foto = await pedirFotoObrigatoria();
+    if (!foto) {
+      alert('A foto é obrigatória para finalizar a rota.');
+      return;
+    }
+
+    state.sendingRouteAction = true;
+
+    try {
+      const res = await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType);
+
+      if (!res || !res.ok) {
+        throw new Error((res && res.error) || 'Falha ao finalizar rota');
+      }
+
+      state.rotaFinalizada = true;
+      state.rotaIniciada = false;
+      sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
+      sessionStorage.removeItem('rota_iniciada_' + state.driver);
+
+      await carregarTudo(false);
+      alert('Rota finalizada com sucesso.');
+    } catch (error) {
+      console.error(error);
+      alert('Não foi possível finalizar a rota.');
+    } finally {
+      state.sendingRouteAction = false;
+    }
+  }
 
   async function handleAction(act, row) {
     if (state.sendingAction) return;
@@ -345,36 +348,48 @@ await carregarTudo(false);
     const item = state.items.find((x) => Number(x.row) === Number(row));
     if (!item) return;
 
-if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
-  alert('Clique primeiro em "Iniciar entregas".');
-  return;
-}
+    if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
+      alert('Clique primeiro em "Iniciar entregas".');
+      return;
+    }
 
     if (act === 'maps') {
-  try {
-    const previous = updateLocalStatus(row, 'Indo para entrega');
-    const res = await api.apiIniciarEntrega(row);
-    if (!res || !res.ok) throw new Error('Falha ao iniciar');
-    openSameTab(api.buildMapsUrl(item));
-  } catch (error) {
-    console.error(error);
-    alert('Não foi possível iniciar a entrega.');
-  }
-  return;
-}
+      try {
+        if (api.statusKey(item.status) !== 'start') {
+          const previous = updateLocalStatus(row, 'Indo para entrega');
+          const res = await api.apiIniciarEntrega(row);
+          if (!res || !res.ok) {
+            restoreLocalItem(row, previous);
+            throw new Error('Falha ao iniciar');
+          }
+        }
 
-if (act === 'waze') {
-  try {
-    const previous = updateLocalStatus(row, 'Indo para entrega');
-    const res = await api.apiIniciarEntrega(row);
-    if (!res || !res.ok) throw new Error('Falha ao iniciar');
-    openSameTab(api.buildWazeUrl(item));
-  } catch (error) {
-    console.error(error);
-    alert('Não foi possível iniciar a entrega.');
-  }
-  return;
-}
+        openSameTab(api.buildMapsUrl(item));
+      } catch (error) {
+        console.error(error);
+        alert('Não foi possível iniciar e abrir o Maps.');
+      }
+      return;
+    }
+
+    if (act === 'waze') {
+      try {
+        if (api.statusKey(item.status) !== 'start') {
+          const previous = updateLocalStatus(row, 'Indo para entrega');
+          const res = await api.apiIniciarEntrega(row);
+          if (!res || !res.ok) {
+            restoreLocalItem(row, previous);
+            throw new Error('Falha ao iniciar');
+          }
+        }
+
+        openSameTab(api.buildWazeUrl(item));
+      } catch (error) {
+        console.error(error);
+        alert('Não foi possível iniciar e abrir o Waze.');
+      }
+      return;
+    }
 
     if (act === 'whats') {
       try {
@@ -478,19 +493,19 @@ if (act === 'waze') {
   });
 
   document.getElementById('btnTrocar').addEventListener('click', function () {
-  sessionStorage.removeItem('rota_iniciada_' + state.driver);
-  sessionStorage.removeItem('rota_finalizada_' + state.driver);
-  api.clearSavedDriverName();
-  window.location.href = '/';
-});
+    sessionStorage.removeItem('rota_iniciada_' + state.driver);
+    sessionStorage.removeItem('rota_finalizada_' + state.driver);
+    api.clearSavedDriverName();
+    window.location.href = '/';
+  });
 
-document.getElementById('btnIniciarRota').addEventListener('click', function () {
-  handleIniciarRota();
-});
+  document.getElementById('btnIniciarRota').addEventListener('click', function () {
+    handleIniciarRota();
+  });
 
-document.getElementById('btnFinalizarRota').addEventListener('click', function () {
-  handleFinalizarRota();
-});
+  document.getElementById('btnFinalizarRota').addEventListener('click', function () {
+    handleFinalizarRota();
+  });
 
   document.getElementById('btnRefresh').addEventListener('click', function () {
     carregarTudo(false);
