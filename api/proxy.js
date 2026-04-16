@@ -17,24 +17,35 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
+    const bodyStr = JSON.stringify(body);
 
-    // Monta URL com todos os parâmetros (o servidor não tem limite de URL como o browser)
-    const params = new URLSearchParams();
-    Object.entries(body).forEach(([k, v]) => params.set(k, String(v)));
-    const url = SCRIPT_URL + '?' + params.toString();
+    // Passo 1: POST para o Apps Script — ele processa e redireciona
+    const probe = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: bodyStr,
+      redirect: 'manual'
+    });
 
-    const response = await fetch(url, { redirect: 'follow' });
+    const redirectUrl = probe.headers.get('location');
+
+    if (!redirectUrl) {
+      // Sem redirect — resposta direta
+      const text = await probe.text();
+      res.setHeader('Content-Type', 'application/json');
+      res.send(text);
+      return;
+    }
+
+    // Passo 2: GET na URL do redirect — aqui está a resposta processada
+    const response = await fetch(redirectUrl, { method: 'GET' });
     const text = await response.text();
 
     res.setHeader('Content-Type', 'application/json');
-
-    // Remove callback JSONP se vier
-    const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
-
     try {
-      res.json(JSON.parse(clean));
+      res.json(JSON.parse(text));
     } catch (e) {
-      res.json({ ok: false, error: 'Resposta inválida do servidor', raw: text.substring(0, 200) });
+      res.json({ ok: false, error: 'Resposta inválida', raw: text.substring(0, 300) });
     }
 
   } catch (err) {
