@@ -223,7 +223,7 @@ async function postJson(body) {
     const res = await fetch(C.API_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'text/plain;charset=utf-8',
         'Accept': 'application/json'
       },
       body: JSON.stringify(body || {}),
@@ -286,8 +286,8 @@ async function postJson(body) {
     return result;
   }
 
-  async function carregarEntregasPorEntregador(entregador) {
-  const cacheKey = 'entregas_' + String(entregador || '').trim().toLowerCase();
+async function carregarEntregasPorEntregador(entregador) {
+  const cacheName = 'entregas_' + String(entregador || '').trim().toLowerCase();
 
   try {
     const res = await apiGet({
@@ -303,17 +303,20 @@ async function postJson(body) {
     saveEntregasCache(entregador, items);
 
     return {
-      items,
+      data: items,
       stale: false
     };
   } catch (error) {
-    const cached = getEntregasCache(entregador);
+    const cached = getFreshCache(cacheName) || readCache(cacheName);
 
-    if (cached && Array.isArray(cached.items)) {
-      return {
-        items: cached.items,
-        stale: true
-      };
+    if (cached) {
+      const value = cached.value !== undefined ? cached.value : cached;
+      if (Array.isArray(value)) {
+        return {
+          data: value,
+          stale: true
+        };
+      }
     }
 
     throw error;
