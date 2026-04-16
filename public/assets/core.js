@@ -220,29 +220,20 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    // O Apps Script redireciona o endereço e o browser perde os dados no caminho.
-    // Por isso, primeiro descobrimos o endereço real com um GET, depois fazemos o POST direto nele.
+    // Descobre a URL real do Apps Script antes de postar (o Google redireciona e perde os dados)
     let targetUrl = C.API_URL;
-
     try {
       const probe = await fetch(C.API_URL, {
         method: 'GET',
         redirect: 'follow',
         cache: 'no-store'
       });
-      if (probe.url && probe.url !== C.API_URL) {
-        targetUrl = probe.url;
-      }
-    } catch (e) {
-      // se a sondagem falhar, continua com a URL original
-    }
+      if (probe.url && probe.url !== C.API_URL) targetUrl = probe.url;
+    } catch (e) { /* continua com URL original */ }
 
     const res = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-        'Accept': 'application/json'
-      },
+      headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Accept': 'application/json' },
       body: JSON.stringify(body || {}),
       signal: controller.signal,
       cache: 'no-store'
@@ -384,23 +375,29 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  return postJson({
-    action: 'iniciarRota',
-    entregador,
-    kmInicial,
-    fotoBase64,
-    fotoMimeType
-  });
+  // Tenta com foto via POST
+  try {
+    const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
+    if (res && res.ok) return res;
+  } catch (e) { /* POST falhou */ }
+
+  // Plano B: salva pelo menos KM e hora via GET (sem foto)
+  const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial }, { retries: 1 });
+  if (res && res.ok) return res;
+  throw new Error((res && res.error) || 'Falha ao iniciar rota');
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  return postJson({
-    action: 'finalizarRota',
-    entregador,
-    kmFinal,
-    fotoBase64,
-    fotoMimeType
-  });
+  // Tenta com foto via POST
+  try {
+    const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
+    if (res && res.ok) return res;
+  } catch (e) { /* POST falhou */ }
+
+  // Plano B: salva pelo menos KM e hora via GET (sem foto)
+  const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal }, { retries: 1 });
+  if (res && res.ok) return res;
+  throw new Error((res && res.error) || 'Falha ao finalizar rota');
 }
 
 
