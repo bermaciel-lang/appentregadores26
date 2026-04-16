@@ -222,7 +222,10 @@ function renderList() {
       state.items = result.data || [];
       renderList();
 
-      if (result.stale) {
+      if (result.rotaIniciada && !state.rotaIniciada) {
+        state.rotaIniciada = true;
+        sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      }
         setWarning('As entregas foram abertas pelo último cache salvo. A internet ou a API podem ter falhado agora.');
       } else {
         setWarning('');

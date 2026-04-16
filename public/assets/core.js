@@ -306,7 +306,8 @@ async function carregarEntregasPorEntregador(entregador) {
 
     return {
       data: items,
-      stale: false
+      stale: false,
+      rotaIniciada: res.rotaIniciada || false
     };
   } catch (error) {
     const cached = getFreshCache(cacheName) || readCache(cacheName);
