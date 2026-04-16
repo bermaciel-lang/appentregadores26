@@ -130,7 +130,7 @@
         }
 
         try {
-          const result = await compressImageToBase64(file, 640, 0.3);
+          const result = await compressImageToBase64(file, 400, 0.15);
           resolve(result);
         } catch (error) {
           console.error(error);
