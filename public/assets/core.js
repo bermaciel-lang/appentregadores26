@@ -271,6 +271,26 @@
     return apiGet({ action: 'atualizarLocalizacaoEntregador', entregador, lat, lng }, { retries: 0 });
   }
 
+async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+  return apiGet({
+    action: 'iniciarRota',
+    entregador,
+    kmInicial,
+    fotoBase64,
+    fotoMimeType
+  }, { retries: 0 });
+}
+
+async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+  return apiGet({
+    action: 'finalizarRota',
+    entregador,
+    kmFinal,
+    fotoBase64,
+    fotoMimeType
+  }, { retries: 0 });
+}
+
 
   function saveEntregasCache(entregador, items) {
     const cacheName = 'entregas_' + String(entregador || '').toLowerCase();
@@ -337,6 +357,9 @@
     apiAtualizarLocalizacaoEntregador,
     carregarAdminPainel,
     agruparEntregas,
+    apiIniciarRota,
+    apiFinalizarRota,
     gerarResumoEntregas
+
   };
 })();
