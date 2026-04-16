@@ -10,10 +10,12 @@ export const config = {
 };
 
 function getDriveClient() {
+  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+  
   const auth = new google.auth.JWT(
-    process.env.GOOGLE_CLIENT_EMAIL,
+    credentials.client_email,
     null,
-    process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    credentials.private_key,
     ['https://www.googleapis.com/auth/drive.file']
   );
   return google.drive({ version: 'v3', auth });
@@ -26,7 +28,7 @@ async function uploadToDrive(base64, mimeType, fileName) {
   const res = await drive.files.create({
     requestBody: {
       name: fileName,
-      parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
+      parents: ['1MXtWemkBf_g03nx8HeZHt1FamRfq9Xda'],
     },
     media: {
       mimeType: mimeType || 'image/jpeg',
