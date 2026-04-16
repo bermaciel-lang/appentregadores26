@@ -291,6 +291,8 @@ async function carregarTudo(showSkeleton) {
     }
 
     state.sendingRouteAction = true;
+document.getElementById('loadingRota').classList.remove('hidden');
+    document.getElementById('btnIniciarRota').disabled = true;
 
     try {
       const res = await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
@@ -316,6 +318,8 @@ async function carregarTudo(showSkeleton) {
       await carregarTudo(false);
       alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
     } finally {
+document.getElementById('loadingRota').classList.add('hidden');
+    document.getElementById('btnIniciarRota').disabled = false;
       state.sendingRouteAction = false;
     }
   }
