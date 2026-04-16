@@ -232,7 +232,9 @@ async function postJson(body) {
     });
 
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    return await res.json();
+    const json = await res.json();
+    console.log('RESPOSTA PROXY:', JSON.stringify(json));
+    return json;
   } finally {
     clearTimeout(timer);
   }
