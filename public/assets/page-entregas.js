@@ -10,7 +10,7 @@
     items: [],
     sendingAction: false,
     sendingRouteAction: false,
-    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
+    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1' || localStorage.getItem('rota_iniciada_' + savedDriver) === '1',
     rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
   };
 
@@ -213,19 +213,23 @@ function renderList() {
     sectionsRoot.classList.remove('hidden');
   }
 
-  async function carregarTudo(showSkeleton) {
+async function carregarTudo(showSkeleton) {
     if (showSkeleton) setLoading(true);
     errorBox.classList.add('hidden');
 
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
-      renderList();
 
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+        localStorage.setItem('rota_iniciada_' + state.driver, '1');
       }
+
+      renderList();
+
+      if (result.stale) {
         setWarning('As entregas foram abertas pelo último cache salvo. A internet ou a API podem ter falhado agora.');
       } else {
         setWarning('');
@@ -346,6 +350,7 @@ function renderList() {
       state.rotaIniciada = false;
       sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
       sessionStorage.removeItem('rota_iniciada_' + state.driver);
+localStorage.removeItem('rota_iniciada_' + state.driver);
 
       await carregarTudo(false);
       alert('Rota finalizada com sucesso.');
