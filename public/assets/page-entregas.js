@@ -10,7 +10,7 @@
     items: [],
     sendingAction: false,
     sendingRouteAction: false,
-    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1' || localStorage.getItem('rota_iniciada_' + savedDriver) === '1',
+    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
     rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
   };
 
@@ -220,11 +220,17 @@ async function carregarTudo(showSkeleton) {
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
-
+const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
+      const assinaturaSalva = sessionStorage.getItem('rota_assinatura_' + state.driver);
+      if (state.rotaIniciada && assinaturaSalva && assinaturaAtual !== assinaturaSalva) {
+        state.rotaIniciada = false;
+        sessionStorage.removeItem('rota_iniciada_' + state.driver);
+        sessionStorage.removeItem('rota_assinatura_' + state.driver);
+        sessionStorage.removeItem('rota_assinatura_' + state.driver);
+      }
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-        localStorage.setItem('rota_iniciada_' + state.driver, '1');
       }
 
       renderList();
@@ -304,7 +310,10 @@ document.getElementById('loadingRota').classList.remove('hidden');
       state.rotaIniciada = true;
       state.rotaFinalizada = false;
       sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      const assinaturaRotaCatch = state.items.map(x => x.row).sort().join(',');
+      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaCatch);
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
+
 
       await carregarTudo(false);
       alert('Rota iniciada com sucesso.');
@@ -314,6 +323,8 @@ document.getElementById('loadingRota').classList.remove('hidden');
       state.rotaIniciada = true;
       state.rotaFinalizada = false;
       sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+const assinaturaRotaErr = state.items.map(x => x.row).sort().join(',');
+      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaErr);
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
       await carregarTudo(false);
       alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
@@ -354,8 +365,7 @@ document.getElementById('loadingRota').classList.add('hidden');
       state.rotaIniciada = false;
       sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
       sessionStorage.removeItem('rota_iniciada_' + state.driver);
-localStorage.removeItem('rota_iniciada_' + state.driver);
-
+      sessionStorage.removeItem('rota_assinatura_' + state.driver);
       await carregarTudo(false);
       alert('Rota finalizada com sucesso.');
     } catch (error) {
