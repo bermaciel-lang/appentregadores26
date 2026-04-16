@@ -220,20 +220,12 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    // Descobre a URL real do Apps Script antes de postar (o Google redireciona e perde os dados)
-    let targetUrl = C.API_URL;
-    try {
-      const probe = await fetch(C.API_URL, {
-        method: 'GET',
-        redirect: 'follow',
-        cache: 'no-store'
-      });
-      if (probe.url && probe.url !== C.API_URL) targetUrl = probe.url;
-    } catch (e) { /* continua com URL original */ }
-
-    const res = await fetch(targetUrl, {
+    const res = await fetch('/api/proxy', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Accept': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify(body || {}),
       signal: controller.signal,
       cache: 'no-store'
