@@ -1,6 +1,3 @@
-import { Readable } from 'node:stream';
-import { google } from 'googleapis';
-
 export const config = {
   api: {
     bodyParser: {
@@ -8,42 +5,6 @@ export const config = {
     },
   },
 };
-
-function getDriveClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.file']
-  });
-
-  return google.drive({ version: 'v3', auth });
-}
-
-async function uploadToDrive(base64, mimeType, fileName) {
-  const buffer = Buffer.from(base64, 'base64');
-  const drive = getDriveClient();
-
-  const res = await drive.files.create({
-    requestBody: {
-      name: fileName,
-      parents: ['1MXtWemkBf_g03nx8HeZHt1FamRfq9Xda'],
-    },
-    media: {
-      mimeType: mimeType || 'image/jpeg',
-      body: Readable.from(buffer),
-    },
-    fields: 'id,webViewLink',
-  });
-
-  // Torna o arquivo público para poder salvar o link na planilha
-  await drive.permissions.create({
-    fileId: res.data.id,
-    requestBody: { role: 'reader', type: 'anyone' },
-  });
-
-  return res.data.webViewLink;
-}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,40 +15,26 @@ export default async function handler(req, res) {
 
   const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbytI4amCTInP7RB0nJb0PIOHt85YK3_L_7ZTJsv4IpnCZKNvbRYAVFzd2HXGevki5ls/exec';
 
-try {
+  try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
-
-    let fotoUrl = '';
-    if (body.fotoBase64) {
-      console.log('Tentando upload no Drive...');
-      try {
-        const agora = new Date().toISOString().replace(/[:.]/g, '-');
-        const nome = agora + '_' + (body.entregador || 'entregador').replace(/\s+/g, '_') + '_' + (body.action || 'foto') + '.jpg';
-        fotoUrl = await uploadToDrive(body.fotoBase64, body.fotoMimeType || 'image/jpeg', nome);
-        console.log('Upload OK, url:', fotoUrl);
-      } catch (driveErr) {
-        console.error('Erro no Drive:', driveErr.message);
-      }
-    }
 
     const params = new URLSearchParams();
     params.set('action', body.action || '');
     params.set('entregador', body.entregador || '');
     if (body.kmInicial) params.set('kmInicial', body.kmInicial);
     if (body.kmFinal) params.set('kmFinal', body.kmFinal);
-    if (fotoUrl) params.set('fotoUrl', fotoUrl);
+    if (body.fotoBase64) params.set('fotoBase64', body.fotoBase64);
+    if (body.fotoMimeType) params.set('fotoMimeType', body.fotoMimeType);
 
-    console.log('Chamando Apps Script...');
     const url = SCRIPT_URL + '?' + params.toString();
     const response = await fetch(url, { redirect: 'follow' });
     const text = await response.text();
-    console.log('Apps Script respondeu:', text.substring(0, 100));
 
     const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
     res.json(JSON.parse(clean));
 
   } catch (err) {
-    console.error('Erro geral:', err.message);
+    console.error('Erro:', err.message);
     res.status(500).json({ ok: false, error: err.message || 'Erro no proxy' });
   }
 }
