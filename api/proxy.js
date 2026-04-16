@@ -1,3 +1,6 @@
+import { Readable } from 'node:stream';
+import { google } from 'googleapis';
+
 export const config = {
   api: {
     bodyParser: {
@@ -5,6 +8,41 @@ export const config = {
     },
   },
 };
+
+function getDriveClient() {
+  const auth = new google.auth.JWT(
+    process.env.GOOGLE_CLIENT_EMAIL,
+    null,
+    process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    ['https://www.googleapis.com/auth/drive.file']
+  );
+  return google.drive({ version: 'v3', auth });
+}
+
+async function uploadToDrive(base64, mimeType, fileName) {
+  const buffer = Buffer.from(base64, 'base64');
+  const drive = getDriveClient();
+
+  const res = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
+    },
+    media: {
+      mimeType: mimeType || 'image/jpeg',
+      body: Readable.from(buffer),
+    },
+    fields: 'id,webViewLink',
+  });
+
+  // Torna o arquivo público para poder salvar o link na planilha
+  await drive.permissions.create({
+    fileId: res.data.id,
+    requestBody: { role: 'reader', type: 'anyone' },
+  });
+
+  return res.data.webViewLink;
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,38 +55,32 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
-    const bodyStr = JSON.stringify(body);
 
-    // Passo 1: POST para o Apps Script — ele processa e redireciona
-    const probe = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: bodyStr,
-      redirect: 'manual'
-    });
-
-    const redirectUrl = probe.headers.get('location');
-
-    if (!redirectUrl) {
-      // Sem redirect — resposta direta
-      const text = await probe.text();
-      res.setHeader('Content-Type', 'application/json');
-      res.send(text);
-      return;
+    // Faz o upload da foto direto no Drive (se tiver foto)
+    let fotoUrl = '';
+    if (body.fotoBase64) {
+      const agora = new Date().toISOString().replace(/[:.]/g, '-');
+      const nome = agora + '_' + (body.entregador || 'entregador').replace(/\s+/g, '_') + '_' + (body.action || 'foto') + '.jpg';
+      fotoUrl = await uploadToDrive(body.fotoBase64, body.fotoMimeType || 'image/jpeg', nome);
     }
 
-    // Passo 2: GET na URL do redirect — aqui está a resposta processada
-    const response = await fetch(redirectUrl, { method: 'GET' });
+    // Manda para o Apps Script sem a foto (já foi salva), só com a URL
+    const params = new URLSearchParams();
+    params.set('action', body.action || '');
+    params.set('entregador', body.entregador || '');
+    if (body.kmInicial) params.set('kmInicial', body.kmInicial);
+    if (body.kmFinal) params.set('kmFinal', body.kmFinal);
+    if (fotoUrl) params.set('fotoUrl', fotoUrl);
+
+    const url = SCRIPT_URL + '?' + params.toString();
+    const response = await fetch(url, { redirect: 'follow' });
     const text = await response.text();
 
-    res.setHeader('Content-Type', 'application/json');
-    try {
-      res.json(JSON.parse(text));
-    } catch (e) {
-      res.json({ ok: false, error: 'Resposta inválida', raw: text.substring(0, 300) });
-    }
+    const clean = text.replace(/^[a-zA-Z0-9_]+\(/, '').replace(/\)$/, '').trim();
+    res.json(JSON.parse(clean));
 
   } catch (err) {
+    console.error('Erro:', err.message);
     res.status(500).json({ ok: false, error: err.message || 'Erro no proxy' });
   }
 }
