@@ -215,6 +215,29 @@
     }
   }
 
+async function postJson(body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(C.API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(body || {}),
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
   async function apiGet(params, options) {
     const opt = options || {};
     const url = buildApiUrl(params);
@@ -341,23 +364,23 @@
   }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  return apiGet({
+  return postJson({
     action: 'iniciarRota',
     entregador,
     kmInicial,
     fotoBase64,
     fotoMimeType
-  }, { retries: 0 });
+  });
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  return apiGet({
+  return postJson({
     action: 'finalizarRota',
     entregador,
     kmFinal,
     fotoBase64,
     fotoMimeType
-  }, { retries: 0 });
+  });
 }
 
 
