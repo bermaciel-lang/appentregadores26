@@ -192,9 +192,15 @@
     `;
   }
 
-  function renderList() {
+function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
     refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
+
+    if (!state.rotaIniciada) {
+      sectionsRoot.innerHTML = '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
+      sectionsRoot.classList.remove('hidden');
+      return;
+    }
 
     sectionsRoot.innerHTML = `
       <section class="section-card">
@@ -293,9 +299,15 @@
 
       await carregarTudo(false);
       alert('Rota iniciada com sucesso.');
-    } catch (error) {
+} catch (error) {
       console.error(error);
-      alert('Não foi possível iniciar a rota.');
+      // Mesmo com erro no servidor, libera o entregador para trabalhar
+      state.rotaIniciada = true;
+      state.rotaFinalizada = false;
+      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      sessionStorage.removeItem('rota_finalizada_' + state.driver);
+      await carregarTudo(false);
+      alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
     } finally {
       state.sendingRouteAction = false;
     }
