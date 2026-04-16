@@ -220,7 +220,24 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    const res = await fetch(C.API_URL, {
+    // O Apps Script redireciona o endereço e o browser perde os dados no caminho.
+    // Por isso, primeiro descobrimos o endereço real com um GET, depois fazemos o POST direto nele.
+    let targetUrl = C.API_URL;
+
+    try {
+      const probe = await fetch(C.API_URL, {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store'
+      });
+      if (probe.url && probe.url !== C.API_URL) {
+        targetUrl = probe.url;
+      }
+    } catch (e) {
+      // se a sondagem falhar, continua com a URL original
+    }
+
+    const res = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain;charset=utf-8',
