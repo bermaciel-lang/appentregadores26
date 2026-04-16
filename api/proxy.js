@@ -56,6 +56,8 @@ export default async function handler(req, res) {
   const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbytI4amCTInP7RB0nJb0PIOHt85YK3_L_7ZTJsv4IpnCZKNvbRYAVFzd2HXGevki5ls/exec';
 
   try {
+console.log('SERVICE_ACCOUNT existe?', !!process.env.GOOGLE_SERVICE_ACCOUNT);
+
     const body = typeof req.body === 'object' ? req.body : JSON.parse(String(req.body || '{}'));
 
     // Faz o upload da foto direto no Drive (se tiver foto)
