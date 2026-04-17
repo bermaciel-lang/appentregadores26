@@ -46,58 +46,22 @@
     return st || 'Pendente';
   }
 
-  function buildMapsUrl(item) {
-  const lat = item && item.lat;
-  const lng = item && item.lng;
-  const endereco = String((item && item.endereco) || '').trim();
-
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-    const coords = String(lat) + ',' + String(lng);
-
-    if (isAndroid) {
-      return 'google.navigation:q=' + encodeURIComponent(coords);
-    }
-
-    if (isIPhone) {
-      return 'comgooglemaps://?q=' + encodeURIComponent(coords) + '&directionsmode=driving';
-    }
-
-    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(coords);
-  }
-
-  if (endereco) {
-    if (isAndroid) {
-      return 'google.navigation:q=' + encodeURIComponent(endereco);
-    }
-
-    if (isIPhone) {
-      return 'comgooglemaps://?q=' + encodeURIComponent(endereco) + '&directionsmode=driving';
-    }
-
+  
+function buildMapsUrl(item) {
+    const endereco = String((item && item.endereco) || '').trim();
+    if (!endereco) return '#';
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isAndroid) return 'google.navigation:q=' + encodeURIComponent(endereco);
+    if (isIPhone) return 'comgooglemaps://?q=' + encodeURIComponent(endereco) + '&directionsmode=driving';
     return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(endereco);
   }
 
-  return '#';
-}
-
   function buildWazeUrl(item) {
-  const lat = item && item.lat;
-  const lng = item && item.lng;
-  const endereco = String((item && item.endereco) || '').trim();
-
-  if (lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '') {
-    return 'https://www.waze.com/ul?ll=' + encodeURIComponent(String(lat) + ',' + String(lng)) + '&navigate=yes';
-  }
-
-  if (endereco) {
+    const endereco = String((item && item.endereco) || '').trim();
+    if (!endereco) return '#';
     return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
   }
-
-  return '#';
-}
 
   function saveDriverName(nome) {
     localStorage.setItem(C.STORAGE_DRIVER_KEY, String(nome || '').trim());
