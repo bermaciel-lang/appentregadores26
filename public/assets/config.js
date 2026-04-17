@@ -9,5 +9,5 @@ window.APP_CONFIG = {
   CACHE_TTL_MS: 300000,
   STORAGE_DRIVER_KEY: 'app_entregas_driver_name',
   STORAGE_ADMIN_AUTH_KEY: 'app_entregas_admin_auth',
-  STORAGE_CACHE_PREFIX: 'app_entregas_cache_v2_'
+  STORAGE_CACHE_PREFIX: 'app_entregas_cache_v3_'
 };
