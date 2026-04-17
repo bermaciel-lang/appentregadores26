@@ -196,9 +196,7 @@ async function postJson(body) {
     });
 
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const json = await res.json();
-    console.log('RESPOSTA PROXY:', JSON.stringify(json));
-    return json;
+    return await res.json();
   } finally {
     clearTimeout(timer);
   }
@@ -329,10 +327,6 @@ async function carregarEntregasPorEntregador(entregador) {
   return res;
 }
 
-  async function apiAtualizarLocalizacaoEntregador(entregador, lat, lng) {
-    return apiGet({ action: 'atualizarLocalizacaoEntregador', entregador, lat, lng }, { retries: 0 });
-  }
-
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   // Tenta com foto via POST
   try {
@@ -422,7 +416,6 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     apiMarcarEntregue,
     apiMarcarNaoEntregue,
     abrirWhatsapp,
-    apiAtualizarLocalizacaoEntregador,
     carregarAdminPainel,
     agruparEntregas,
     apiIniciarRota,

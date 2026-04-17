@@ -5,8 +5,6 @@
   const state = {
     driver: savedDriver,
     refreshTimer: null,
-    gpsWatchId: null,
-    lastGpsSend: 0,
     items: [],
     sendingAction: false,
     sendingRouteAction: false,
@@ -16,7 +14,6 @@
 
   const driverTitle = document.getElementById('driverTitle');
   const driverNameText = document.getElementById('driverNameText');
-  const gpsBadge = document.getElementById('gpsBadge');
   const loadingSections = document.getElementById('loadingSections');
   const sectionsRoot = document.getElementById('sectionsRoot');
   const errorBox = document.getElementById('errorBox');
@@ -120,23 +117,46 @@
       input.type = 'file';
       input.accept = 'image/*';
       input.capture = 'environment';
+      input.style.position = 'fixed';
+      input.style.top = '-9999px';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+
+      let resolved = false;
 
       input.addEventListener('change', async function () {
+        if (resolved) return;
         const file = input.files && input.files[0];
+        if (input.parentNode) document.body.removeChild(input);
 
         if (!file) {
+          resolved = true;
           resolve(null);
           return;
         }
 
         try {
           const result = await compressImageToBase64(file, 200, 0.1);
+          resolved = true;
           resolve(result);
         } catch (error) {
           console.error(error);
           alert('Não foi possível preparar a foto.');
+          resolved = true;
           resolve(null);
         }
+      });
+
+      // Fallback: se o usuário fechar a câmera sem escolher foto
+      window.addEventListener('focus', function onFocus() {
+        window.removeEventListener('focus', onFocus);
+        setTimeout(function () {
+          if (!resolved) {
+            resolved = true;
+            if (input.parentNode) document.body.removeChild(input);
+            resolve(null);
+          }
+        }, 500);
       });
 
       input.click();
@@ -192,7 +212,7 @@
     `;
   }
 
-function renderList() {
+  function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
     refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
 
@@ -213,21 +233,22 @@ function renderList() {
     sectionsRoot.classList.remove('hidden');
   }
 
-async function carregarTudo(showSkeleton) {
+  async function carregarTudo(showSkeleton) {
     if (showSkeleton) setLoading(true);
     errorBox.classList.add('hidden');
 
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
-const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
+
+      const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
       const assinaturaSalva = sessionStorage.getItem('rota_assinatura_' + state.driver);
       if (state.rotaIniciada && assinaturaSalva && assinaturaAtual !== assinaturaSalva) {
         state.rotaIniciada = false;
         sessionStorage.removeItem('rota_iniciada_' + state.driver);
         sessionStorage.removeItem('rota_assinatura_' + state.driver);
-        sessionStorage.removeItem('rota_assinatura_' + state.driver);
       }
+
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
@@ -297,7 +318,7 @@ const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
     }
 
     state.sendingRouteAction = true;
-document.getElementById('loadingRota').classList.remove('hidden');
+    document.getElementById('loadingRota').classList.remove('hidden');
     document.getElementById('btnIniciarRota').disabled = true;
 
     try {
@@ -310,27 +331,25 @@ document.getElementById('loadingRota').classList.remove('hidden');
       state.rotaIniciada = true;
       state.rotaFinalizada = false;
       sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      const assinaturaRotaCatch = state.items.map(x => x.row).sort().join(',');
-      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaCatch);
+      const assinaturaRota = state.items.map(x => x.row).sort().join(',');
+      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRota);
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
-
 
       await carregarTudo(false);
       alert('Rota iniciada com sucesso.');
-} catch (error) {
+    } catch (error) {
       console.error(error);
-      // Mesmo com erro no servidor, libera o entregador para trabalhar
       state.rotaIniciada = true;
       state.rotaFinalizada = false;
       sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-const assinaturaRotaErr = state.items.map(x => x.row).sort().join(',');
+      const assinaturaRotaErr = state.items.map(x => x.row).sort().join(',');
       sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaErr);
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
       await carregarTudo(false);
       alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
     } finally {
-document.getElementById('loadingRota').classList.add('hidden');
-    document.getElementById('btnIniciarRota').disabled = false;
+      document.getElementById('loadingRota').classList.add('hidden');
+      document.getElementById('btnIniciarRota').disabled = false;
       state.sendingRouteAction = false;
     }
   }
@@ -397,7 +416,6 @@ document.getElementById('loadingRota').classList.add('hidden');
             throw new Error('Falha ao iniciar');
           }
         }
-
         openSameTab(api.buildMapsUrl(item));
       } catch (error) {
         console.error(error);
@@ -416,7 +434,6 @@ document.getElementById('loadingRota').classList.add('hidden');
             throw new Error('Falha ao iniciar');
           }
         }
-
         openSameTab(api.buildWazeUrl(item));
       } catch (error) {
         console.error(error);
@@ -481,47 +498,6 @@ document.getElementById('loadingRota').classList.add('hidden');
     state.refreshTimer = null;
   }
 
-  function setGpsBadge(text, variant) {
-    gpsBadge.textContent = text;
-    gpsBadge.className = 'badge ' + (variant || '');
-  }
-
-  function startGPS() {
-    if (!navigator.geolocation || !state.driver) {
-      setGpsBadge('GPS não disponível', 'fail');
-      return;
-    }
-
-    stopGPS();
-    setGpsBadge('GPS ativo', 'ok');
-
-    state.gpsWatchId = navigator.geolocation.watchPosition(async function (pos) {
-      const now = Date.now();
-      if (document.visibilityState !== 'visible') return;
-      if ((now - state.lastGpsSend) < window.APP_CONFIG.GPS_THROTTLE_MS) return;
-
-      state.lastGpsSend = now;
-      try {
-        await api.apiAtualizarLocalizacaoEntregador(state.driver, pos.coords.latitude, pos.coords.longitude);
-        setGpsBadge('GPS atualizado ' + api.formatTime(new Date()), 'ok');
-      } catch (error) {
-        console.error(error);
-        setGpsBadge('GPS com erro', 'warn');
-      }
-    }, function () {
-      setGpsBadge('Permita o GPS', 'warn');
-    }, {
-      enableHighAccuracy: true,
-      maximumAge: 30000,
-      timeout: 10000
-    });
-  }
-
-  function stopGPS() {
-    if (state.gpsWatchId !== null) navigator.geolocation.clearWatch(state.gpsWatchId);
-    state.gpsWatchId = null;
-  }
-
   document.getElementById('btnVoltar').addEventListener('click', function () {
     window.location.href = '/';
   });
@@ -529,6 +505,7 @@ document.getElementById('loadingRota').classList.add('hidden');
   document.getElementById('btnTrocar').addEventListener('click', function () {
     sessionStorage.removeItem('rota_iniciada_' + state.driver);
     sessionStorage.removeItem('rota_finalizada_' + state.driver);
+    sessionStorage.removeItem('rota_assinatura_' + state.driver);
     api.clearSavedDriverName();
     window.location.href = '/';
   });
@@ -554,15 +531,11 @@ document.getElementById('loadingRota').classList.add('hidden');
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') {
       carregarTudo(false);
-      startGPS();
-    } else {
-      stopGPS();
     }
   });
 
   window.addEventListener('beforeunload', function () {
     stopAutoRefresh();
-    stopGPS();
   });
 
   (function init() {
@@ -571,6 +544,5 @@ document.getElementById('loadingRota').classList.add('hidden');
     driverNameText.textContent = state.driver;
     carregarTudo(true);
     startAutoRefresh();
-    startGPS();
   })();
 })();
