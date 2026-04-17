@@ -136,7 +136,7 @@
         }
 
         try {
-          const result = await compressImageToBase64(file, 200, 0.1);
+          const result = await compressImageToBase64(file, 800, 0.5);
           resolved = true;
           resolve(result);
         } catch (error) {
@@ -313,7 +313,7 @@
 
     const foto = await pedirFotoObrigatoria();
     if (!foto) {
-      alert('A foto é obrigatória para iniciar as entregas.');
+      alert('A foto é obrigatória para iniciar as entregas.\n\nSe a câmera não abriu, verifique se o site tem permissão de câmera nas configurações do Chrome.');
       return;
     }
 
@@ -367,7 +367,7 @@
 
     const foto = await pedirFotoObrigatoria();
     if (!foto) {
-      alert('A foto é obrigatória para finalizar a rota.');
+      alert('A foto é obrigatória para finalizar a rota.\n\nSe a câmera não abriu, verifique se o site tem permissão de câmera nas configurações do Chrome.');
       return;
     }
 
