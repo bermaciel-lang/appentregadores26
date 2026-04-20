@@ -312,17 +312,14 @@
     if (km === null || km === undefined) return;
 
     const foto = await pedirFotoObrigatoria();
-    if (!foto) {
-      alert('A foto é obrigatória para iniciar as entregas.\n\nSe a câmera não abriu, verifique se o site tem permissão de câmera nas configurações do Chrome.');
-      return;
-    }
+
 
     state.sendingRouteAction = true;
     document.getElementById('loadingRota').classList.remove('hidden');
     document.getElementById('btnIniciarRota').disabled = true;
 
     try {
-      const res = await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+      const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
 
       if (!res || !res.ok) {
         throw new Error((res && res.error) || 'Falha ao iniciar rota');
@@ -366,15 +363,11 @@
     if (km === null || km === undefined) return;
 
     const foto = await pedirFotoObrigatoria();
-    if (!foto) {
-      alert('A foto é obrigatória para finalizar a rota.\n\nSe a câmera não abriu, verifique se o site tem permissão de câmera nas configurações do Chrome.');
-      return;
-    }
 
     state.sendingRouteAction = true;
 
     try {
-      const res = await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType);
+      const res = await api.apiFinalizarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
 
       if (!res || !res.ok) {
         throw new Error((res && res.error) || 'Falha ao finalizar rota');
