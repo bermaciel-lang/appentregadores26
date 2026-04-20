@@ -147,17 +147,20 @@
         }
       });
 
-      // Fallback: se o usuário fechar a câmera sem escolher foto
-      window.addEventListener('focus', function onFocus() {
-        window.removeEventListener('focus', onFocus);
-        setTimeout(function () {
-          if (!resolved) {
-            resolved = true;
-            if (input.parentNode) document.body.removeChild(input);
-            resolve(null);
-          }
-        }, 500);
-      });
+// Fallback: se o usuário fechar a câmera sem escolher foto (apenas não-iOS)
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (!isIOS) {
+        window.addEventListener('focus', function onFocus() {
+          window.removeEventListener('focus', onFocus);
+          setTimeout(function () {
+            if (!resolved) {
+              resolved = true;
+              if (input.parentNode) document.body.removeChild(input);
+              resolve(null);
+            }
+          }, 500);
+        });
+      }
 
       input.click();
     });
