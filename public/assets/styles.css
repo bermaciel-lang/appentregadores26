@@ -576,3 +576,18 @@ button, select, input, textarea {
     min-height: 280px;
   }
 }
+
+.action-grid-small {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.action-grid-small .action-btn {
+  font-size: 11px;
+  min-height: 44px;
+  padding: 8px 4px;
+}
+
+.btn-cancelado { background: #d1d5db; color: #374151; }

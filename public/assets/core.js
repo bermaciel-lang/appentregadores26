@@ -300,6 +300,10 @@ async function carregarEntregasPorEntregador(entregador) {
     return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 0 });
   }
 
+async function apiMarcarCancelado(row, obs) {
+    return apiGet({ action: 'marcarCancelado', row, obs: obs || '' }, { retries: 0 });
+  }
+
   async function abrirWhatsapp(row) {
   const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
 
@@ -420,6 +424,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     agruparEntregas,
     apiIniciarRota,
     apiFinalizarRota,
+    apiMarcarCancelado,
     gerarResumoEntregas
 
   };
