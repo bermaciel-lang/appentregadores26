@@ -464,13 +464,17 @@
         previous = updateLocalStatus(row, 'Entregue', obs);
         const res = await api.apiMarcarEntregue(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao concluir');
-      } else if (act === 'fail') {
+} else if (act === 'fail') {
         const obs = prompt('Motivo / observação:') || '';
         previous = updateLocalStatus(row, 'Não entregue', obs);
         const res = await api.apiMarcarNaoEntregue(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao marcar não entregue');
+      } else if (act === 'cancelado') {
+        const obs = prompt('Motivo do cancelamento:') || '';
+        previous = updateLocalStatus(row, 'Cancelado', obs);
+        const res = await api.apiMarcarCancelado(row, obs);
+        if (!res || !res.ok) throw new Error('Falha ao marcar cancelado');
       }
-} else if (act === 'cancelado') {
         const obs = prompt('Motivo do cancelamento:') || '';
         previous = updateLocalStatus(row, 'Cancelado', obs);
         const res = await api.apiMarcarCancelado(row, obs);
