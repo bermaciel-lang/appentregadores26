@@ -485,7 +485,7 @@ async function handleFinalizarRota() {
         previous = updateLocalStatus(row, 'Entregue', obs);
         const res = await api.apiMarcarEntregue(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao concluir');
-} else if (act === 'fail') {
+      } else if (act === 'fail') {
         const obs = prompt('Motivo / observação:') || '';
         previous = updateLocalStatus(row, 'Não entregue', obs);
         const res = await api.apiMarcarNaoEntregue(row, obs);
