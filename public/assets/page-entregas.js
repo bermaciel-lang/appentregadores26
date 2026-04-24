@@ -89,27 +89,29 @@
     });
   }
 
-  function pedirKm(mensagem) {
-    const raw = prompt(mensagem);
+function pedirKm(mensagem) {
+  const raw = prompt(mensagem);
 
-    if (raw === null) return null;
+  if (raw === null) return null;
 
-    const value = String(raw).trim().replace(',', '.');
+  let value = String(raw).trim();
 
-    if (!value) {
-      alert('A quilometragem é obrigatória.');
-      return undefined;
-    }
-
-    const num = Number(value);
-
-    if (!Number.isFinite(num) || num < 0) {
-      alert('Quilometragem inválida.');
-      return undefined;
-    }
-
-    return value;
+  if (!value) {
+    alert('A quilometragem é obrigatória.');
+    return undefined;
   }
+
+  // troca ponto por vírgula
+  value = value.replace('.', ',');
+
+  // aceita apenas números inteiros ou decimais com vírgula
+  if (!/^\d+(,\d+)?$/.test(value)) {
+    alert('Digite somente números. Use vírgula para decimal. Exemplo: 12345 ou 12345,6');
+    return undefined;
+  }
+
+  return value;
+}
 
   function pedirFotoObrigatoria() {
     return new Promise((resolve) => {
@@ -321,8 +323,12 @@
 
 
     state.sendingRouteAction = true;
-    document.getElementById('loadingRota').classList.remove('hidden');
-    document.getElementById('btnIniciarRota').disabled = true;
+const loadingRota = document.getElementById('loadingRota');
+const btnIniciarRota = document.getElementById('btnIniciarRota');
+
+loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+loadingRota.classList.remove('hidden');
+btnIniciarRota.disabled = true;
 
     try {
       const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
@@ -351,48 +357,63 @@
       await carregarTudo(false);
       alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
     } finally {
-      document.getElementById('loadingRota').classList.add('hidden');
-      document.getElementById('btnIniciarRota').disabled = false;
+loadingRota.classList.add('hidden');
+btnIniciarRota.disabled = false;
       state.sendingRouteAction = false;
     }
   }
 
-  async function handleFinalizarRota() {
-    if (state.sendingRouteAction) return;
+async function handleFinalizarRota() {
+  if (state.sendingRouteAction) return;
 
-    if (!state.rotaIniciada) {
-      alert('Clique primeiro em "Iniciar entregas".');
-      return;
-    }
-
-    const km = pedirKm('Digite a quilometragem final do carro:');
-    if (km === null || km === undefined) return;
-
-    const foto = await pedirFotoObrigatoria();
-
-    state.sendingRouteAction = true;
-
-    try {
-      const res = await api.apiFinalizarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
-
-      if (!res || !res.ok) {
-        throw new Error((res && res.error) || 'Falha ao finalizar rota');
-      }
-
-      state.rotaFinalizada = true;
-      state.rotaIniciada = false;
-      sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-      sessionStorage.removeItem('rota_iniciada_' + state.driver);
-      sessionStorage.removeItem('rota_assinatura_' + state.driver);
-      await carregarTudo(false);
-      alert('Rota finalizada com sucesso.');
-    } catch (error) {
-      console.error(error);
-      alert('Não foi possível finalizar a rota.');
-    } finally {
-      state.sendingRouteAction = false;
-    }
+  if (!state.rotaIniciada) {
+    alert('Clique primeiro em "Iniciar entregas".');
+    return;
   }
+
+  const km = pedirKm('Digite a quilometragem final do carro:');
+  if (km === null || km === undefined) return;
+
+  const foto = await pedirFotoObrigatoria();
+
+  state.sendingRouteAction = true;
+
+  const loadingRota = document.getElementById('loadingRota');
+  const btnFinalizarRota = document.getElementById('btnFinalizarRota');
+
+  loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+  loadingRota.classList.remove('hidden');
+  btnFinalizarRota.disabled = true;
+
+  try {
+    const res = await api.apiFinalizarRota(
+      state.driver,
+      km,
+      foto ? foto.base64 : '',
+      foto ? foto.mimeType : 'image/jpeg'
+    );
+
+    if (!res || !res.ok) {
+      throw new Error((res && res.error) || 'Falha ao finalizar rota');
+    }
+
+    state.rotaFinalizada = true;
+    state.rotaIniciada = false;
+    sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
+    sessionStorage.removeItem('rota_iniciada_' + state.driver);
+    sessionStorage.removeItem('rota_assinatura_' + state.driver);
+
+    await carregarTudo(false);
+    alert('Rota finalizada com sucesso.');
+  } catch (error) {
+    console.error(error);
+    alert('Não foi possível finalizar a rota.');
+  } finally {
+    loadingRota.classList.add('hidden');
+    btnFinalizarRota.disabled = false;
+    state.sendingRouteAction = false;
+  }
+}
 
   async function handleAction(act, row) {
     if (state.sendingAction) return;
