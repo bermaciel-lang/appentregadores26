@@ -475,11 +475,6 @@
         const res = await api.apiMarcarCancelado(row, obs);
         if (!res || !res.ok) throw new Error('Falha ao marcar cancelado');
       }
-        const obs = prompt('Motivo do cancelamento:') || '';
-        previous = updateLocalStatus(row, 'Cancelado', obs);
-        const res = await api.apiMarcarCancelado(row, obs);
-        if (!res || !res.ok) throw new Error('Falha ao marcar cancelado');
-      }
 
       window.setTimeout(function () {
         carregarTudo(false);
