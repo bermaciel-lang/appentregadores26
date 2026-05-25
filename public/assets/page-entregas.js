@@ -211,7 +211,7 @@ function pedirKm(mensagem) {
           <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
         </div>
         <div class="action-grid action-grid-small">
-          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Não entregue</button>
+          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Cliente não recebeu</button>
           <button type="button" class="action-btn btn-cancelado" data-act="cancelado" data-row="${item.row}">✖ Cancelado</button>
           <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
           <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
