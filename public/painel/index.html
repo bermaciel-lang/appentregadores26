@@ -284,7 +284,7 @@ th.sortable.sorted .sort-arrow{color:var(--ink)}
 <div class="page" id="tab-km">
   <div class="card">
     <div class="card-head">
-      <div class="card-title">🏆 Mais KM suspeitas no período <span style="font-weight:400;color:var(--ink2);font-size:11px;margin-left:6px">(excesso > 20% do previsto)</span></div>
+      <div class="card-title">🏆 Mais KM suspeitas no período <span style="font-weight:400;color:var(--ink2);font-size:11px;margin-left:6px">(entregador colocou > 20% acima do calculado)</span></div>
     </div>
     <div id="rankingKm"></div>
   </div>
@@ -334,21 +334,33 @@ function isExcluido(ent) {
 }
 
 // ============================================================
-// ENRIQUECIMENTO DE KM (referência, diferença, % excesso, anomalia)
-// refKm = MAX(K, L) da planilha; diffKm = coluna O (com fallback)
-// Critério de anomalia: diffKm positivo E excesso > 20% sobre refKm
+// ENRIQUECIMENTO DE KM — compara N (km entregador) contra K ou L
+// Escolhe como referência o MAIS PRÓXIMO de N entre K e L
+// (assim, se K ou L estiver muito errado, pega o "menos errado" e não pune o entregador).
+// Critério de anomalia: N > referência * 1,20 (excesso > 20% sobre o calculado).
+// Ignora coluna O (fórmula sofisticada) e coluna P (kmConsiderado já cappado).
 // ============================================================
 const ANOMALIA_PCT = 20; // limiar de excesso para marcar como "KM suspeita"
 
 function enrichKm(d) {
-  const refKm = Math.max(d.kmCalc || 0, d.kmSimp || 0);
-  const diff = d.diferencaKm != null ? d.diferencaKm : ((d.kmConsiderado || 0) - (d.kmCalc || 0));
+  const k = d.kmCalc || 0;
+  const l = d.kmSimp || 0;
+  const n = d.kmEntregador || 0;
+
+  // Escolhe referência: o mais próximo de N entre K e L (tratando K=0 ou L=0)
+  let refKm = 0;
+  if (k > 0 && l > 0)      refKm = Math.abs(k - n) < Math.abs(l - n) ? k : l;
+  else if (k > 0)          refKm = k;
+  else if (l > 0)          refKm = l;
+
+  const diff = n - refKm; // positivo = entregador rodou mais que o calculado
   const excessoPct = (refKm > 0 && diff > 0) ? (diff / refKm * 100) : 0;
+
   return {
     refKm,
     diffKm: diff,
     excessoPct,
-    kmAnomalia: !d.isLalamove && refKm > 0 && diff > 0 && excessoPct > ANOMALIA_PCT,
+    kmAnomalia: !d.isLalamove && refKm > 0 && n > 0 && excessoPct > ANOMALIA_PCT,
   };
 }
 
