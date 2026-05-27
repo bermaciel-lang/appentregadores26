@@ -3,1051 +3,850 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Painel Operacional</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<title>Painel Operacional · Orgânico do Chico</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-:root {
-  --bg: #0a0f1e;
-  --surface: #111827;
-  --surface2: #1a2235;
-  --border: rgba(255,255,255,0.06);
-  --primary: #3d6dff;
-  --primary-soft: rgba(61,109,255,0.15);
-  --green: #10d97a;
-  --green-soft: rgba(16,217,122,0.12);
-  --orange: #ff9f43;
-  --orange-soft: rgba(255,159,67,0.12);
-  --red: #ff4d6d;
-  --red-soft: rgba(255,77,109,0.12);
-  --yellow: #ffd166;
-  --yellow-soft: rgba(255,209,102,0.12);
-  --text: #e8eaf2;
-  --muted: #6b7280;
-  --font: 'Space Grotesk', sans-serif;
-  --mono: 'JetBrains Mono', monospace;
+/* ====== TOKENS ====== */
+:root{
+  --bg:#f7f5f0;
+  --ink:#1a1814;
+  --ink2:#5c5650;
+  --line:#e2dfd8;
+  --white:#ffffff;
+  --red:#c0392b;
+  --red-bg:#fdf0ef;
+  --orange:#d35400;
+  --orange-bg:#fef5ed;
+  --green:#1a7a4a;
+  --green-bg:#edf7f1;
+  --blue:#1a4fba;
+  --blue-bg:#eef3fc;
+  --yellow:#a67c00;
+  --yellow-bg:#fdf8e8;
+  --font:'Syne',sans-serif;
+  --mono:'DM Mono',monospace;
+  --r:12px;
+  --r-sm:8px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;-webkit-font-smoothing:antialiased}
-#root{min-height:100vh}
+html,body{background:var(--bg);color:var(--ink);font-family:var(--font);min-height:100vh;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font-family:var(--font);cursor:pointer}
 
-/* scrollbar */
-::-webkit-scrollbar{width:4px;height:4px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
-
-/* LAYOUT */
+/* ====== LAYOUT ====== */
 .shell{display:flex;flex-direction:column;min-height:100vh}
-.header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
-.logo{display:flex;align-items:center;gap:10px}
-.logo-dot{width:8px;height:8px;background:var(--primary);border-radius:50%;box-shadow:0 0 8px var(--primary);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.logo-text{font-size:16px;font-weight:700;letter-spacing:-.02em}
-.logo-sub{font-size:11px;color:var(--muted);font-weight:400;font-family:var(--mono)}
-.header-right{display:flex;align-items:center;gap:8px}
-.refresh-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font);display:flex;align-items:center;gap:6px;transition:.2s}
-.refresh-btn:hover{border-color:var(--primary);color:var(--primary)}
-.last-update{font-size:11px;color:var(--muted);font-family:var(--mono)}
 
-/* TABS */
-.tabs{display:flex;gap:2px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none}
-.tabs::-webkit-scrollbar{display:none}
-.tab{padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:.2s;color:var(--muted);border:1px solid transparent}
-.tab:hover{color:var(--text);background:var(--surface2)}
-.tab.active{color:var(--primary);background:var(--primary-soft);border-color:rgba(61,109,255,0.25)}
-.tab-icon{margin-right:6px}
+/* ====== HEADER ====== */
+.header{background:var(--ink);color:#fff;padding:0 20px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.header-left{display:flex;align-items:center;gap:12px}
+.brand{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.brand span{color:#a8e6c4;font-weight:400}
+.status-dot{width:7px;height:7px;border-radius:50%;background:#2ecc71;box-shadow:0 0 6px #2ecc71;animation:blink 2s ease infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.header-right{display:flex;align-items:center;gap:10px}
+.update-time{font-size:11px;color:rgba(255,255,255,.4);font-family:var(--mono)}
+.btn-refresh{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.7);padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;transition:.2s;display:flex;align-items:center;gap:6px}
+.btn-refresh:hover{background:rgba(255,255,255,.14);color:#fff}
+.btn-refresh.spin .icon{animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.icon{display:inline-block}
 
-/* CONTENT */
-.content{flex:1;padding:20px;max-width:1200px;margin:0 auto;width:100%}
+/* ====== TABS ====== */
+.tabs-bar{background:var(--white);border-bottom:1px solid var(--line);padding:0 20px;display:flex;gap:0;overflow-x:auto;scrollbar-width:none}
+.tabs-bar::-webkit-scrollbar{display:none}
+.tab-btn{padding:14px 18px;font-size:13px;font-weight:600;color:var(--ink2);border:0;background:0;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s;cursor:pointer}
+.tab-btn:hover{color:var(--ink)}
+.tab-btn.active{color:var(--ink);border-bottom-color:var(--ink)}
 
-/* ALERT BANNER */
-.alert-banner{background:linear-gradient(135deg,rgba(255,77,109,0.1),rgba(255,159,67,0.05));border:1px solid rgba(255,77,109,0.2);border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;animation:fadeIn .4s ease}
-@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
-.alert-dot{width:8px;height:8px;background:var(--red);border-radius:50%;flex-shrink:0;box-shadow:0 0 8px var(--red)}
-.alert-text{font-size:13px;line-height:1.5;flex:1}
-.alert-count{font-weight:700;color:var(--red)}
+/* ====== CONTENT ====== */
+.page{display:none;padding:20px;max-width:960px;margin:0 auto;width:100%;animation:fadeUp .3s ease}
+.page.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 
-/* GRID */
-.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
-.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
-.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:20px}
-@media(max-width:900px){.grid-4{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:600px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr}}
+/* ====== ALERTS ====== */
+.alert-box{border-radius:var(--r);padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start}
+.alert-box.red{background:var(--red-bg);border:1px solid rgba(192,57,43,.2)}
+.alert-box.orange{background:var(--orange-bg);border:1px solid rgba(211,84,0,.2)}
+.alert-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.alert-box.red .alert-dot{background:var(--red)}
+.alert-box.orange .alert-dot{background:var(--orange)}
+.alert-text{font-size:13px;line-height:1.55;color:var(--ink)}
+.alert-text strong{font-weight:700}
 
-/* STAT CARD */
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;transition:.2s;cursor:default;position:relative;overflow:hidden}
-.stat-card::before{content:'';position:absolute;top:0;right:0;width:60px;height:60px;border-radius:0 14px 0 60px;opacity:.08;transition:.2s}
-.stat-card.red::before{background:var(--red)}
-.stat-card.orange::before{background:var(--orange)}
-.stat-card.green::before{background:var(--green)}
-.stat-card.blue::before{background:var(--primary)}
-.stat-card.yellow::before{background:var(--yellow)}
-.stat-card:hover{border-color:var(--border);transform:translateY(-1px)}
-.stat-icon{font-size:20px;margin-bottom:10px}
-.stat-value{font-size:32px;font-weight:700;font-family:var(--mono);letter-spacing:-.03em;margin-bottom:4px}
-.stat-card.red .stat-value{color:var(--red)}
-.stat-card.orange .stat-value{color:var(--orange)}
-.stat-card.green .stat-value{color:var(--green)}
-.stat-card.blue .stat-value{color:var(--primary)}
-.stat-card.yellow .stat-value{color:var(--yellow)}
-.stat-label{font-size:12px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.05em}
-.stat-sub{font-size:11px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+/* ====== GRID ====== */
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:720px){.g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr 1fr}.g2{grid-template-columns:1fr}}
+@media(max-width:400px){.g4,.g3{grid-template-columns:1fr}}
 
-/* CARD */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px}
-.card-title{font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px;letter-spacing:-.01em}
-.card-title-icon{font-size:16px}
-.card-sub{font-size:11px;color:var(--muted);margin-left:auto;font-family:var(--mono)}
+/* ====== KPI CARD ====== */
+.kpi{background:var(--white);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;position:relative;overflow:hidden}
+.kpi-accent{position:absolute;top:0;left:0;right:0;height:3px}
+.kpi.red .kpi-accent{background:var(--red)}
+.kpi.orange .kpi-accent{background:var(--orange)}
+.kpi.green .kpi-accent{background:var(--green)}
+.kpi.blue .kpi-accent{background:var(--blue)}
+.kpi.yellow .kpi-accent{background:#d4aa00}
+.kpi-icon{font-size:18px;margin-bottom:8px}
+.kpi-val{font-size:28px;font-weight:800;line-height:1;letter-spacing:-.03em;margin-bottom:4px;font-family:var(--mono)}
+.kpi.red .kpi-val{color:var(--red)}
+.kpi.orange .kpi-val{color:var(--orange)}
+.kpi.green .kpi-val{color:var(--green)}
+.kpi.blue .kpi-val{color:var(--blue)}
+.kpi.yellow .kpi-val{color:var(--yellow)}
+.kpi-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink2)}
+.kpi-sub{font-size:10px;color:var(--ink2);margin-top:5px;font-family:var(--mono)}
+.kpi-trend{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;font-family:var(--mono);margin-top:4px;padding:2px 6px;border-radius:4px}
+.kpi-trend.bad{background:var(--red-bg);color:var(--red)}
+.kpi-trend.good{background:var(--green-bg);color:var(--green)}
+.kpi-trend.neutral{background:var(--line);color:var(--ink2)}
 
-/* TABLE */
-.table-wrap{overflow-x:auto;margin:0 -4px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:10px 12px;color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);white-space:nowrap}
-td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;white-space:nowrap}
+/* ====== CARD ====== */
+.card{background:var(--white);border:1px solid var(--line);border-radius:var(--r);padding:20px;margin-bottom:16px}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px}
+.card-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:7px}
+.card-badge{font-size:10px;font-family:var(--mono);background:var(--bg);border:1px solid var(--line);padding:3px 8px;border-radius:20px;color:var(--ink2)}
+.chart-wrap{position:relative;height:220px}
+.chart-wrap.tall{height:280px}
+
+/* ====== TABLE ====== */
+.tbl-wrap{overflow-x:auto;margin:0 -4px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;padding:9px 10px;color:var(--ink2);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px 10px;border-bottom:1px solid rgba(0,0,0,.04);vertical-align:middle;white-space:nowrap}
 tr:last-child td{border-bottom:0}
-tr:hover td{background:rgba(255,255,255,.02)}
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;font-family:var(--mono)}
-.badge.red{background:var(--red-soft);color:var(--red)}
-.badge.orange{background:var(--orange-soft);color:var(--orange)}
-.badge.green{background:var(--green-soft);color:var(--green)}
-.badge.blue{background:var(--primary-soft);color:var(--primary)}
-.badge.gray{background:rgba(107,114,128,.15);color:var(--muted)}
-.icon-check{color:var(--green)}
-.icon-x{color:var(--red)}
-.icon-warn{color:var(--orange)}
+tr:hover td{background:var(--bg)}
 
-/* CHART WRAPPER */
-.chart-wrap{height:240px;margin-top:8px}
-.chart-wrap.tall{height:300px}
+/* ====== BADGES ====== */
+.badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:20px;font-size:10.5px;font-weight:700;font-family:var(--mono)}
+.badge.red{background:var(--red-bg);color:var(--red)}
+.badge.orange{background:var(--orange-bg);color:var(--orange)}
+.badge.green{background:var(--green-bg);color:var(--green)}
+.badge.blue{background:var(--blue-bg);color:var(--blue)}
+.badge.gray{background:var(--line);color:var(--ink2)}
+.badge.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.ok-icon{color:var(--green);font-weight:900}
+.fail-icon{color:var(--red);font-weight:900}
+.warn-icon{color:var(--orange)}
 
-/* EMPTY */
-.empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+/* ====== RANKING ====== */
+.rank-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.rank-row:last-child{border-bottom:0}
+.rank-num{width:24px;height:24px;border-radius:6px;background:var(--bg);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:var(--mono);flex-shrink:0}
+.rank-name{flex:1;font-size:13px;font-weight:600}
+.rank-bar-bg{flex:1;height:5px;background:var(--line);border-radius:3px;min-width:50px}
+.rank-bar-fill{height:5px;border-radius:3px;background:var(--orange);transition:width .7s ease}
+.rank-val{font-family:var(--mono);font-size:12px;font-weight:600;min-width:40px;text-align:right}
+
+/* ====== LOADING ====== */
+.loading-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;gap:12px;color:var(--ink2)}
+.loading-spinner{width:28px;height:28px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:spin .7s linear infinite}
+.empty-state{text-align:center;padding:40px;color:var(--ink2);font-size:13px}
 .empty-icon{font-size:32px;margin-bottom:8px}
 
-/* RANKING */
-.ranking-item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
-.ranking-item:last-child{border-bottom:0}
-.rank-pos{width:26px;height:26px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:var(--mono);flex-shrink:0}
-.rank-pos.top1{background:rgba(255,215,0,.15);color:#ffd700}
-.rank-pos.top2{background:rgba(192,192,192,.15);color:#c0c0c0}
-.rank-pos.top3{background:rgba(205,127,50,.15);color:#cd7f32}
-.rank-name{flex:1;font-size:13px;font-weight:500}
-.rank-val{font-family:var(--mono);font-size:13px;font-weight:600}
-.rank-bar-wrap{flex:1;height:4px;background:var(--surface2);border-radius:2px;margin:0 12px;min-width:60px}
-.rank-bar{height:4px;border-radius:2px;transition:width .6s ease}
+/* ====== SECTION LABEL ====== */
+.section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink2);margin-bottom:10px}
 
-/* AI BUTTON */
-.ai-fab{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,var(--primary),#6b4fff);color:white;border:0;border-radius:50px;padding:14px 22px;font-size:14px;font-weight:600;font-family:var(--font);cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(61,109,255,.4);transition:.2s;z-index:200}
-.ai-fab:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(61,109,255,.5)}
+/* ====== PROGRESS ====== */
+.prog-bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:4px}
+.prog-fill{height:100%;border-radius:3px;transition:width .6s ease}
 
-/* AI MODAL */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
-.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:600px;max-height:80vh;display:flex;flex-direction:column;animation:slideUp .3s ease}
-@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-.modal-header{padding:20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.modal-title{font-size:16px;font-weight:600}
-.modal-close{background:var(--surface2);border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
-.modal-body{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
-.ai-msg{padding:14px;border-radius:10px;font-size:13px;line-height:1.6}
-.ai-msg.user{background:var(--primary-soft);border:1px solid rgba(61,109,255,.2);margin-left:20px}
-.ai-msg.assistant{background:var(--surface2);border:1px solid var(--border);margin-right:20px}
-.ai-msg.loading{color:var(--muted);font-style:italic}
-.modal-input{padding:16px;border-top:1px solid var(--border);display:flex;gap:8px}
-.modal-input input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:13px;font-family:var(--font);outline:none}
-.modal-input input:focus{border-color:var(--primary)}
-.modal-input button{background:var(--primary);color:white;border:0;padding:10px 18px;border-radius:10px;font-size:13px;font-family:var(--font);font-weight:600;cursor:pointer;transition:.2s}
-.modal-input button:hover{opacity:.9}
-.modal-input button:disabled{opacity:.5;cursor:default}
-
-/* SECTION TITLE */
-.section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;padding-left:2px}
-
-/* TREND ARROW */
-.trend{font-size:11px;font-family:var(--mono);font-weight:600}
-.trend.up{color:var(--red)}
-.trend.down{color:var(--green)}
-.trend.neutral{color:var(--muted)}
-
-/* PROGRESS BAR */
-.progress{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:8px}
-.progress-fill{height:100%;border-radius:3px;transition:width .8s ease}
-
-/* WEEK LABEL */
-.week-chip{display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:10px;font-family:var(--mono);color:var(--muted);margin-right:4px}
-
-/* TOOLTIP CUSTOM */
-.custom-tooltip{background:var(--surface2)!important;border:1px solid var(--border)!important;border-radius:10px!important;padding:10px 14px!important;font-family:var(--font)!important;font-size:12px!important}
-
-/* LALAMOVE */
-.lalamove-badge{background:rgba(255,159,67,.15);color:var(--orange);border:1px solid rgba(255,159,67,.25);padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+/* ====== DEMO BANNER ====== */
+.demo-bar{background:var(--yellow-bg);border-bottom:1px solid rgba(164,124,0,.2);padding:8px 20px;font-size:11px;color:var(--yellow);font-weight:600;text-align:center;font-family:var(--mono)}
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div class="shell" id="app">
+<div class="demo-bar" id="demoBanner">⚠ MODO DEMO — dados simulados. Para ativar dados reais, siga as instruções no README.</div>
+<header class="header">
+  <div class="header-left">
+    <div class="status-dot" id="statusDot"></div>
+    <div class="brand">Orgânico <span>/ Operacional</span></div>
+  </div>
+  <div class="header-right">
+    <div class="update-time" id="updateTime">--:--</div>
+    <button class="btn-refresh" id="btnRefresh" onclick="loadData()">
+      <span class="icon" id="refreshIcon">↻</span> Atualizar
+    </button>
+  </div>
+</header>
+
+<div class="tabs-bar">
+  <button class="tab-btn active" onclick="showTab('hoje',this)">📋 Hoje</button>
+  <button class="tab-btn" onclick="showTab('tendencias',this)">📈 Tendências</button>
+  <button class="tab-btn" onclick="showTab('entregadores',this)">👥 Entregadores</button>
+  <button class="tab-btn" onclick="showTab('km',this)">🛣️ KM</button>
+  <button class="tab-btn" onclick="showTab('lalamove',this)">🚐 Lalamove</button>
+</div>
+
+<!-- ======== TAB HOJE ======== -->
+<div class="page active" id="tab-hoje">
+  <div id="alertsHoje"></div>
+  <div class="g4" id="kpisHoje"></div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">👥 Status entregadores hoje</div>
+      <div class="card-badge" id="badgeHoje">—</div>
+    </div>
+    <div class="tbl-wrap">
+      <table id="tblHoje">
+        <thead><tr>
+          <th>Entregador</th><th>Turno</th><th>Qtde</th>
+          <th>Início</th><th>Fim</th>
+          <th>📸 Início</th><th>📸 Fim</th>
+          <th>KM</th><th>Status</th>
+        </tr></thead>
+        <tbody id="tbodyHoje"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ======== TAB TENDÊNCIAS ======== -->
+<div class="page" id="tab-tendencias">
+  <div class="g3" id="kpisTend"></div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">⏰ Hora de término — por semana</div>
+      <div class="card-badge">Manhã vs Tarde</div>
+    </div>
+    <div class="chart-wrap"><canvas id="chartFim"></canvas></div>
+  </div>
+  <div class="g2">
+    <div class="card" style="margin-bottom:0">
+      <div class="card-head"><div class="card-title">💰 Custo por pedido</div></div>
+      <div class="chart-wrap"><canvas id="chartCusto"></canvas></div>
+    </div>
+    <div class="card" style="margin-bottom:0">
+      <div class="card-head"><div class="card-title">📸 % com foto</div></div>
+      <div class="chart-wrap"><canvas id="chartFoto"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======== TAB ENTREGADORES ======== -->
+<div class="page" id="tab-entregadores">
+  <div style="display:flex;gap:8px;margin-bottom:16px" id="turnoFilter">
+    <button onclick="setTurno('TODOS',this)" class="tab-btn active" style="padding:7px 14px;border-radius:7px;border:1px solid var(--line);background:var(--ink);color:#fff;font-size:12px">TODOS</button>
+    <button onclick="setTurno('MANHÃ',this)" class="tab-btn" style="padding:7px 14px;border-radius:7px;border:1px solid var(--line);background:var(--white);font-size:12px">MANHÃ</button>
+    <button onclick="setTurno('TARDE',this)" class="tab-btn" style="padding:7px 14px;border-radius:7px;border:1px solid var(--line);background:var(--white);font-size:12px">TARDE</button>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">⏰ Início e fim médios (2 semanas)</div>
+    </div>
+    <div class="chart-wrap tall"><canvas id="chartEntHorario"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><div class="card-title">📊 Comparativo por entregador</div></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Entregador</th><th>Início médio</th><th>Fim médio</th>
+          <th>% Foto</th><th>Custo/pedido</th><th>KM suspeitas</th><th>Situação</th>
+        </tr></thead>
+        <tbody id="tbodyEnt"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ======== TAB KM ======== -->
+<div class="page" id="tab-km">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">🏆 Mais KM suspeitas (60 dias)</div>
+    </div>
+    <div id="rankingKm"></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">🔍 Ocorrências recentes</div>
+      <div class="card-badge" id="badgeKm">—</div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Data</th><th>Entregador</th><th>Turno</th>
+          <th>KM sistema</th><th>KM entregador</th><th>Diferença</th><th>Excesso</th>
+        </tr></thead>
+        <tbody id="tbodyKm"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ======== TAB LALAMOVE ======== -->
+<div class="page" id="tab-lalamove">
+  <div class="g3" id="kpisLala"></div>
+  <div class="card">
+    <div class="card-head"><div class="card-title">🚐 Usos por semana</div></div>
+    <div class="chart-wrap"><canvas id="chartLala"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">📋 Histórico de usos (60 dias)</div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Data</th><th>Turno</th><th>Entregador</th><th>Qtde</th><th>Custo</th>
+        </tr></thead>
+        <tbody id="tbodyLala"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</div><!-- /shell -->
+
 <script>
-const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, RadialBarChart, RadialBar, Cell } = Recharts;
+// ============================================================
+// CONFIG — troque a URL pelo seu Apps Script quando ativar dados reais
+// ============================================================
+const API_URL = '/api/dashboard'; // Vercel proxy
+const USE_DEMO = true; // mude para false quando tiver o Apps Script configurado
 
-// ===================== MOCK DATA =====================
-const ENTREGADORES = ["Ana Carolina","Camila","Cristina","Daniel","Edilene","José","Karina","Leia","Tamara","Cristiano"];
-const TURNOS = ["MANHÃ","TARDE"];
+// ============================================================
+// ESTADO GLOBAL
+// ============================================================
+let DATA = [];
+let TURNO_FILTRO = 'TODOS';
+let charts = {};
 
-function horaParaMinutos(h) {
-  if (!h) return null;
-  const [hh,mm] = h.split(':').map(Number);
-  return hh * 60 + mm;
-}
-
-function minutosParaHora(m) {
-  if (m == null) return null;
-  const h = Math.floor(m / 60);
-  const min = Math.round(m % 60);
+// ============================================================
+// HELPERS
+// ============================================================
+function minToHora(m) {
+  if (m == null || isNaN(m)) return '--';
+  const h = Math.floor(Math.abs(m) / 60);
+  const min = Math.round(Math.abs(m) % 60);
   return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
 }
+function horaToMin(h) {
+  if (!h || typeof h !== 'string') return null;
+  const m = h.match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return parseInt(m[1]) * 60 + parseInt(m[2]);
+}
+function avg(arr) {
+  const valid = arr.filter(x => x != null && !isNaN(x));
+  if (!valid.length) return null;
+  return valid.reduce((a,b) => a+b, 0) / valid.length;
+}
+function fmt(n, dec=1) {
+  if (n == null || isNaN(n)) return '—';
+  return n.toFixed(dec).replace('.', ',');
+}
+function fmtR(n) {
+  if (n == null || isNaN(n)) return '—';
+  return 'R$ ' + n.toFixed(2).replace('.', ',');
+}
+function today() {
+  return new Date().toLocaleDateString('pt-BR');
+}
+function diasAtras(dataStr) {
+  if (!dataStr) return 999;
+  const parts = dataStr.split('/');
+  if (parts.length < 3) return 999;
+  const d = new Date(+parts[2], +parts[1]-1, +parts[0]);
+  const now = new Date(); now.setHours(0,0,0,0);
+  return Math.round((now - d) / 86400000);
+}
+function groupBy(arr, key) {
+  return arr.reduce((acc, item) => {
+    const k = typeof key === 'function' ? key(item) : item[key];
+    (acc[k] = acc[k] || []).push(item);
+    return acc;
+  }, {});
+}
+function semanaLabel(diasAtras) {
+  const s = Math.floor(diasAtras / 7);
+  if (s === 0) return 'Esta semana';
+  if (s === 1) return 'Sem. -1';
+  return `Sem. -${s}`;
+}
 
-function gerarDadosMock() {
-  const dados = [];
-  const hoje = new Date();
-
-  for (let diasAtras = 59; diasAtras >= 0; diasAtras--) {
-    const d = new Date(hoje);
-    d.setDate(d.getDate() - diasAtras);
-    if (d.getDay() === 0) continue; // skip sunday
-
+// ============================================================
+// DEMO DATA GENERATOR
+// ============================================================
+function gerarDemo() {
+  const entregadores = ['Ana Carolina','Camila','Cristina','Daniel','Edilene','José','Karina','Leia','Tamara','Cristiano'];
+  const rows = [];
+  for (let dias = 59; dias >= 0; dias--) {
+    const d = new Date(); d.setDate(d.getDate() - dias);
+    if (d.getDay() === 0) continue;
     const dataStr = d.toLocaleDateString('pt-BR');
-    const semana = `S${Math.floor(diasAtras / 7) + 1}`;
+    const semana = Math.floor(dias / 7);
 
-    TURNOS.forEach(turno => {
-      const entsHoje = [...ENTREGADORES];
-      // Às vezes Lalamove aparece
-      if (Math.random() < 0.35) entsHoje.push('Lalamove 1');
-      if (Math.random() < 0.15) entsHoje.push('Lalamove 2');
+    ['MANHÃ','TARDE'].forEach(turno => {
+      const ents = [...entregadores];
+      if (Math.random() < 0.3) ents.push('Lalamove 1');
+      if (Math.random() < 0.12) ents.push('Lalamove 2');
 
-      entsHoje.forEach(ent => {
+      ents.forEach(ent => {
         const isLala = ent.includes('Lalamove');
-        const qtde = isLala ? 1 : (8 + Math.floor(Math.random() * 8));
-        const kmRef = isLala ? 0 : (25 + Math.random() * 45);
-        const kmAnomalia = !isLala && Math.random() < 0.08;
-        const kmEnt = isLala ? 0 : Math.max(0, kmRef * (kmAnomalia ? 1.3 + Math.random() * 0.4 : (0.75 + Math.random() * 0.5)));
+        const qtde = isLala ? 1 : 8 + Math.floor(Math.random()*8);
+        const kmRef = isLala ? 0 : 25 + Math.random()*40;
+        const kmAnom = !isLala && Math.random() < 0.07;
+        const kmEnt = isLala ? 0 : kmRef * (kmAnom ? 1.3+Math.random()*.3 : .8+Math.random()*.4);
+        const latency = ['Cristiano','Daniel'].includes(ent) ? 25 : ['Ana Carolina','Karina'].includes(ent) ? -10 : 0;
+        const baseIni = turno==='MANHÃ' ? 495+latency : 840+latency;
+        const baseFim = turno==='MANHÃ' ? 665+latency : 1025+latency;
+        const iniMin = baseIni + (Math.random()-.5)*25;
+        const fimMin = baseFim + (Math.random()-.5)*30;
+        const temFotoIni = isLala || Math.random()>.1;
+        const temFotoFim = isLala || Math.random()>.1;
+        const custo = isLala ? 8.5 : 7.2 + Math.random()*2.5;
 
-        const baseInicio = turno === 'MANHÃ' ? 490 + Math.floor(Math.random() * 40) : 840 + Math.floor(Math.random() * 40);
-        const baseFim = turno === 'MANHÃ' ? 660 + Math.floor(Math.random() * 60) : 1020 + Math.floor(Math.random() * 60);
+        // simulate gradual cost improvement over time
+        const custAdj = custo - (dias / 60) * 0.8;
 
-        // Some deliverers tend to be late
-        const lateTendency = ['Cristiano','Daniel'].includes(ent) ? 30 : 0;
-        const earlyTendency = ['Ana Carolina','Karina'].includes(ent) ? -15 : 0;
-
-        const inicioMin = baseInicio + lateTendency + earlyTendency + (Math.random() - 0.5) * 20;
-        const fimMin = baseFim + lateTendency + earlyTendency + (Math.random() - 0.5) * 30;
-
-        const temFotoInicio = isLala || Math.random() > 0.12;
-        const temFotoFim = isLala || Math.random() > 0.12;
-        const temHorario = isLala || Math.random() > 0.04;
-
-        const custoPedido = isLala
-          ? (qtde === 1 ? 7.5 : 8.5)
-          : (7 + Math.random() * 3);
-
-        dados.push({
+        rows.push({
           data: dataStr,
-          dataObj: new Date(d),
+          diasAtras: dias,
           semana,
-          diasAtras,
           entregador: ent,
           turno,
           qtde,
           kmCalc: isLala ? 0 : kmRef,
-          kmSimp: isLala ? 0 : kmRef * (0.9 + Math.random() * 0.2),
           kmEntregador: kmEnt,
-          kmConsiderado: isLala ? 0 : (kmAnomalia ? kmRef * 1.5 : kmRef),
-          kmAnomalia: kmAnomalia && !isLala,
-          valorTotal: qtde * custoPedido,
-          custoPedido,
-          inicioRota: temHorario && !isLala ? minutosParaHora(inicioMin) : null,
-          fimRota: temHorario && !isLala ? minutosParaHora(fimMin) : null,
-          inicioMin: temHorario && !isLala ? inicioMin : null,
-          fimMin: temHorario && !isLala ? fimMin : null,
-          fotoInicio: temFotoInicio ? 'Foto início' : null,
-          fotoFim: temFotoFim ? 'Foto fim' : null,
+          kmConsiderado: isLala ? 0 : (kmAnom ? kmRef*1.45 : kmRef*.95),
+          kmAnomalia: kmAnom,
+          custoPedido: custAdj,
+          inicioRota: !isLala && horaToMin(minToHora(iniMin)) ? minToHora(iniMin) : null,
+          fimRota: !isLala && horaToMin(minToHora(fimMin)) ? minToHora(fimMin) : null,
+          inicioMin: isLala ? null : iniMin,
+          fimMin: isLala ? null : fimMin,
+          fotoInicio: temFotoIni ? 'ok' : null,
+          fotoFim: temFotoFim ? 'ok' : null,
           isLalamove: isLala,
         });
       });
     });
   }
-  return dados;
+  return rows;
 }
 
-const MOCK_DATA = gerarDadosMock();
+// ============================================================
+// LOAD DATA
+// ============================================================
+async function loadData() {
+  const btn = document.getElementById('btnRefresh');
+  const icon = document.getElementById('refreshIcon');
+  btn.classList.add('spin');
+  icon.style.animation = 'spin .6s linear infinite';
 
-// ===================== UTILS =====================
-function hoje() {
-  return new Date().toLocaleDateString('pt-BR');
+  try {
+    if (USE_DEMO) {
+      DATA = gerarDemo();
+      document.getElementById('demoBanner').style.display = 'block';
+    } else {
+      const res = await fetch(API_URL);
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error);
+      DATA = json.data.map(d => ({
+        ...d,
+        diasAtras: diasAtras(d.data),
+        semana: Math.floor(diasAtras(d.data) / 7),
+        inicioMin: horaToMin(d.inicioRota),
+        fimMin: horaToMin(d.fimRota),
+        kmAnomalia: !d.isLalamove && d.kmCalc > 0 && d.kmConsiderado > d.kmCalc * 1.2,
+      }));
+      document.getElementById('demoBanner').style.display = 'none';
+    }
+    document.getElementById('updateTime').textContent = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    renderAll();
+  } catch(e) {
+    console.error(e);
+  } finally {
+    btn.classList.remove('spin');
+    icon.style.animation = '';
+  }
 }
 
-function semanaAtual(d) {
-  const diff = Math.floor((new Date() - d) / (1000 * 60 * 60 * 24 * 7));
-  if (diff === 0) return 'Esta semana';
-  if (diff === 1) return 'Semana passada';
-  return `${diff} semanas atrás`;
+// ============================================================
+// RENDER ALL
+// ============================================================
+function renderAll() {
+  renderHoje();
+  renderTendencias();
+  renderEntregadores();
+  renderKM();
+  renderLalamove();
 }
 
-function groupBy(arr, key) {
-  return arr.reduce((acc, item) => {
-    const k = typeof key === 'function' ? key(item) : item[key];
-    if (!acc[k]) acc[k] = [];
-    acc[k].push(item);
-    return acc;
-  }, {});
+// ============================================================
+// TAB HOJE
+// ============================================================
+function renderHoje() {
+  const todayStr = today();
+  const d = DATA.filter(r => r.data === todayStr);
+  const proprios = d.filter(r => !r.isLalamove);
+
+  const semFotoIni = proprios.filter(r => !r.fotoInicio);
+  const semFotoFim = proprios.filter(r => !r.fotoFim);
+  const semHorario = proprios.filter(r => !r.inicioRota);
+  const kmSusp = proprios.filter(r => r.kmAnomalia);
+  const total = semFotoIni.length + semFotoFim.length + semHorario.length + kmSusp.length;
+
+  // Alerts
+  let alertHtml = '';
+  if (semFotoIni.length > 0)
+    alertHtml += `<div class="alert-box red"><div class="alert-dot"></div><div class="alert-text"><strong>${semFotoIni.length} sem foto de início:</strong> ${semFotoIni.map(x=>x.entregador).join(', ')}</div></div>`;
+  if (semFotoFim.length > 0)
+    alertHtml += `<div class="alert-box red"><div class="alert-dot"></div><div class="alert-text"><strong>${semFotoFim.length} sem foto de fim:</strong> ${semFotoFim.map(x=>x.entregador).join(', ')}</div></div>`;
+  if (kmSusp.length > 0)
+    alertHtml += `<div class="alert-box orange"><div class="alert-dot"></div><div class="alert-text"><strong>${kmSusp.length} KM suspeita${kmSusp.length>1?'s':''}:</strong> ${kmSusp.map(x=>x.entregador).join(', ')}</div></div>`;
+  document.getElementById('alertsHoje').innerHTML = alertHtml;
+
+  // KPIs
+  const colorFoto = semFotoIni.length > 0 ? 'red' : 'green';
+  const colorKm = kmSusp.length > 0 ? 'orange' : 'green';
+  document.getElementById('kpisHoje').innerHTML = `
+    <div class="kpi ${colorFoto}"><div class="kpi-accent"></div><div class="kpi-icon">📸</div><div class="kpi-val">${semFotoIni.length}</div><div class="kpi-label">Sem foto início</div><div class="kpi-sub">${semFotoIni.length===0?'todos ok':semFotoIni.map(x=>x.entregador.split(' ')[0]).join(', ')}</div></div>
+    <div class="kpi ${semFotoFim.length>0?'red':'green'}"><div class="kpi-accent"></div><div class="kpi-icon">🏁</div><div class="kpi-val">${semFotoFim.length}</div><div class="kpi-label">Sem foto fim</div><div class="kpi-sub">${semFotoFim.length===0?'todos ok':semFotoFim.map(x=>x.entregador.split(' ')[0]).join(', ')}</div></div>
+    <div class="kpi ${semHorario.length>0?'orange':'green'}"><div class="kpi-accent"></div><div class="kpi-icon">⏱️</div><div class="kpi-val">${semHorario.length}</div><div class="kpi-label">Sem horário</div><div class="kpi-sub">${semHorario.length===0?'todos ok':semHorario.map(x=>x.entregador.split(' ')[0]).join(', ')}</div></div>
+    <div class="kpi ${colorKm}"><div class="kpi-accent"></div><div class="kpi-icon">🛣️</div><div class="kpi-val">${kmSusp.length}</div><div class="kpi-label">KM suspeita</div><div class="kpi-sub">${kmSusp.length===0?'todos ok':kmSusp.map(x=>x.entregador.split(' ')[0]).join(', ')}</div></div>
+  `;
+
+  // Table
+  document.getElementById('badgeHoje').textContent = `${d.length} rotas · ${todayStr}`;
+  const tbody = document.getElementById('tbodyHoje');
+  if (!d.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--ink2)">Sem dados para hoje ainda</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.sort((a,b) => a.entregador.localeCompare(b.entregador)).map(r => {
+    const issues = [];
+    if (!r.isLalamove && !r.fotoInicio) issues.push('foto início');
+    if (!r.isLalamove && !r.fotoFim) issues.push('foto fim');
+    if (!r.isLalamove && !r.inicioRota) issues.push('horário');
+    if (r.kmAnomalia) issues.push('KM');
+    const statusHtml = r.isLalamove
+      ? `<span class="badge yellow">🚐 Lala</span>`
+      : issues.length === 0
+        ? `<span class="badge green">✓ OK</span>`
+        : `<span class="badge red">⚠ ${issues.join(', ')}</span>`;
+    return `<tr>
+      <td style="font-weight:600">${r.entregador}</td>
+      <td><span class="badge gray">${r.turno}</span></td>
+      <td style="font-family:var(--mono)">${r.qtde}</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${r.inicioRota||'<span class="warn-icon">—</span>'}</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${r.fimRota||'<span class="warn-icon">—</span>'}</td>
+      <td>${r.isLalamove?'—':r.fotoInicio?'<span class="ok-icon">✓</span>':'<span class="fail-icon">✗</span>'}</td>
+      <td>${r.isLalamove?'—':r.fotoFim?'<span class="ok-icon">✓</span>':'<span class="fail-icon">✗</span>'}</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${r.kmAnomalia?`<span class="badge orange">${fmt(r.kmConsiderado)} ⚠</span>`:fmt(r.kmConsiderado)}</td>
+      <td>${statusHtml}</td>
+    </tr>`;
+  }).join('');
 }
 
-function avg(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
+// ============================================================
+// TAB TENDÊNCIAS
+// ============================================================
+function renderTendencias() {
+  // Build weekly buckets
+  const byWeek = {};
+  DATA.filter(r => !r.isLalamove).forEach(r => {
+    const s = r.semana;
+    if (!byWeek[s]) byWeek[s] = [];
+    byWeek[s].push(r);
+  });
+
+  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,8).reverse();
+  const wLabels = weeks.map(s => s===0?'Esta sem':`S-${s}`);
+
+  const fimManha = weeks.map(s => {
+    const rows = byWeek[s].filter(r => r.turno==='MANHÃ' && r.fimMin!=null);
+    return rows.length ? avg(rows.map(r=>r.fimMin)) : null;
+  });
+  const fimTarde = weeks.map(s => {
+    const rows = byWeek[s].filter(r => r.turno==='TARDE' && r.fimMin!=null);
+    return rows.length ? avg(rows.map(r=>r.fimMin)) : null;
+  });
+  const custoSem = weeks.map(s => {
+    const rows = byWeek[s].filter(r => r.custoPedido > 0);
+    return rows.length ? avg(rows.map(r=>r.custoPedido)) : null;
+  });
+  const fotoSem = weeks.map(s => {
+    const rows = byWeek[s];
+    const comFoto = rows.filter(r => r.fotoInicio && r.fotoFim);
+    return rows.length ? (comFoto.length / rows.length * 100) : null;
+  });
+
+  // KPIs tendências
+  const lastW = weeks[weeks.length-1];
+  const prevW = weeks[weeks.length-2];
+  const lRows = byWeek[lastW] || [];
+  const pRows = byWeek[prevW] || [];
+  const lCusto = avg(lRows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido));
+  const pCusto = avg(pRows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido));
+  const deltaCusto = lCusto != null && pCusto != null ? lCusto - pCusto : null;
+  const lFimM = avg(lRows.filter(r=>r.turno==='MANHÃ'&&r.fimMin!=null).map(r=>r.fimMin));
+  const pFimM = avg(pRows.filter(r=>r.turno==='MANHÃ'&&r.fimMin!=null).map(r=>r.fimMin));
+  const deltaFim = lFimM != null && pFimM != null ? Math.round(lFimM - pFimM) : null;
+
+  const trendHtml = (delta, unitFn, invertido=false) => {
+    if (delta == null) return '';
+    const good = invertido ? delta > 0 : delta < 0;
+    const cls = Math.abs(delta)<0.3&&!invertido ? 'neutral' : good ? 'good' : 'bad';
+    const sign = delta > 0 ? '+' : '';
+    return `<div class="kpi-trend ${cls}">${sign}${unitFn(delta)}</div>`;
+  };
+
+  document.getElementById('kpisTend').innerHTML = `
+    <div class="kpi ${lFimM && lFimM > 730 ? 'red' : 'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">🌅</div><div class="kpi-val">${lFimM?minToHora(lFimM):'—'}</div><div class="kpi-label">Fim médio manhã</div>${trendHtml(deltaFim,v=>`${Math.abs(v)} min`)}<div class="kpi-sub">vs semana anterior</div></div>
+    <div class="kpi blue"><div class="kpi-accent"></div><div class="kpi-icon">🌆</div><div class="kpi-val">${avg(lRows.filter(r=>r.turno==='TARDE'&&r.fimMin!=null).map(r=>r.fimMin)) ? minToHora(avg(lRows.filter(r=>r.turno==='TARDE'&&r.fimMin!=null).map(r=>r.fimMin))) : '—'}</div><div class="kpi-label">Fim médio tarde</div><div class="kpi-sub">esta semana</div></div>
+    <div class="kpi ${deltaCusto>0.3?'red':deltaCusto<-0.3?'green':'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">💰</div><div class="kpi-val">${lCusto?fmtR(lCusto):'—'}</div><div class="kpi-label">Custo por pedido</div>${trendHtml(deltaCusto,v=>`R$ ${Math.abs(v).toFixed(2)}`)}<div class="kpi-sub">vs semana anterior</div></div>
+  `;
+
+  // Charts
+  const tickFimFn = (val) => minToHora(val);
+  makeLineChart('chartFim', wLabels, [
+    { label: 'Manhã', data: fimManha, color: '#1a4fba' },
+    { label: 'Tarde', data: fimTarde, color: '#d35400' },
+  ], tickFimFn);
+
+  makeLineChart('chartCusto', wLabels, [
+    { label: 'R$/pedido', data: custoSem, color: '#1a7a4a' },
+  ]);
+
+  makeLineChart('chartFoto', wLabels, [
+    { label: '% com foto', data: fotoSem, color: '#1a4fba' },
+  ], v => `${Math.round(v)}%`);
 }
 
-function fmt(n, dec=1) {
-  if (n == null || isNaN(n)) return '-';
-  return n.toFixed(dec).replace('.', ',');
+// ============================================================
+// TAB ENTREGADORES
+// ============================================================
+function setTurno(t, el) {
+  TURNO_FILTRO = t;
+  document.querySelectorAll('#turnoFilter button').forEach(b => {
+    b.style.background = 'var(--white)'; b.style.color = 'var(--ink)';
+  });
+  el.style.background = 'var(--ink)'; el.style.color = '#fff';
+  renderEntregadores();
 }
 
-function fmtR$(n) {
-  if (n == null || isNaN(n)) return '-';
-  return 'R$ ' + n.toFixed(2).replace('.', ',');
-}
+function renderEntregadores() {
+  const base = DATA.filter(r => !r.isLalamove && r.diasAtras <= 13);
+  const filtered = TURNO_FILTRO === 'TODOS' ? base : base.filter(r => r.turno === TURNO_FILTRO);
+  const byEnt = groupBy(filtered, 'entregador');
 
-// ===================== CUSTOM TOOLTIP =====================
-const CustomTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return React.createElement('div', { className: 'custom-tooltip' },
-    React.createElement('div', { style: { marginBottom: 6, fontWeight: 600, color: '#e8eaf2' } }, label),
-    payload.map((p, i) =>
-      React.createElement('div', { key: i, style: { color: p.color, fontSize: 12 } },
-        `${p.name}: ${typeof p.value === 'number' ? fmt(p.value) : p.value}`
-      )
-    )
+  const stats = Object.entries(byEnt).map(([ent, rows]) => {
+    const comIni = rows.filter(r=>r.inicioMin!=null);
+    const comFim = rows.filter(r=>r.fimMin!=null);
+    const comFoto = rows.filter(r=>r.fotoInicio&&r.fotoFim);
+    return {
+      ent,
+      avgIni: comIni.length ? avg(comIni.map(r=>r.inicioMin)) : null,
+      avgFim: comFim.length ? avg(comFim.map(r=>r.fimMin)) : null,
+      pctFoto: rows.length ? comFoto.length/rows.length*100 : 0,
+      kmAnom: rows.filter(r=>r.kmAnomalia).length,
+      avgCusto: avg(rows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido)),
+    };
+  }).sort((a,b) => (a.avgFim||0)-(b.avgFim||0));
+
+  // Chart horário
+  makeBarChart('chartEntHorario',
+    stats.map(s=>s.ent.split(' ')[0]),
+    [
+      { label: 'Início', data: stats.map(s=>s.avgIni), color: 'rgba(26,79,186,0.7)' },
+      { label: 'Fim', data: stats.map(s=>s.avgFim), color: 'rgba(211,84,0,0.7)' },
+    ],
+    v => minToHora(v)
   );
-};
 
-// ===================== COMPONENTS =====================
-function StatCard({ icon, value, label, sub, color, trend, trendDir }) {
-  return React.createElement('div', { className: `stat-card ${color}` },
-    React.createElement('div', { className: 'stat-icon' }, icon),
-    React.createElement('div', { className: 'stat-value' },
-      value,
-      trend && React.createElement('span', { className: `trend ${trendDir}`, style: { fontSize: 14, marginLeft: 8 } }, trend)
-    ),
-    React.createElement('div', { className: 'stat-label' }, label),
-    sub && React.createElement('div', { className: 'stat-sub' }, sub)
-  );
+  // Table
+  document.getElementById('tbodyEnt').innerHTML = stats.map(s => {
+    const issues = [];
+    if (s.pctFoto < 80) issues.push('fotos');
+    if (s.kmAnom > 2) issues.push('KM');
+    const sit = issues.length === 0
+      ? `<span class="badge green">✓ OK</span>`
+      : `<span class="badge orange">⚠ ${issues.join(', ')}</span>`;
+    const fimColor = s.avgFim > (TURNO_FILTRO==='TARDE'?1080:720) ? 'color:var(--red)' : 'color:var(--orange)';
+    const fotoPct = Math.round(s.pctFoto);
+    const fotoColor = fotoPct>=90?'var(--green)':fotoPct>=70?'var(--orange)':'var(--red)';
+    return `<tr>
+      <td style="font-weight:600">${s.ent}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:var(--blue)">${s.avgIni!=null?minToHora(s.avgIni):'—'}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;${fimColor}">${s.avgFim!=null?minToHora(s.avgFim):'—'}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div class="prog-bar" style="width:55px"><div class="prog-fill" style="width:${fotoPct}%;background:${fotoColor}"></div></div>
+          <span style="font-family:var(--mono);font-size:11px;color:${fotoColor}">${fotoPct}%</span>
+        </div>
+      </td>
+      <td style="font-family:var(--mono);font-size:11.5px">${s.avgCusto!=null?fmtR(s.avgCusto):'—'}</td>
+      <td>${s.kmAnom>0?`<span class="badge yellow">${s.kmAnom}x</span>`:`<span class="badge green">0</span>`}</td>
+      <td>${sit}</td>
+    </tr>`;
+  }).join('');
 }
 
-// ===================== TAB: HOJE =====================
-function TabHoje({ data }) {
-  const todayStr = hoje();
-  const todayData = data.filter(d => d.data === todayStr);
+// ============================================================
+// TAB KM
+// ============================================================
+function renderKM() {
+  const anomalias = DATA.filter(r => r.kmAnomalia).sort((a,b)=>a.diasAtras-b.diasAtras).slice(0, 50);
+  document.getElementById('badgeKm').textContent = `${anomalias.length} ocorrências (60 dias)`;
 
-  const semFotoInicio = todayData.filter(d => !d.isLalamove && !d.fotoInicio);
-  const semFotoFim = todayData.filter(d => !d.isLalamove && !d.fotoFim);
-  const semHorario = todayData.filter(d => !d.isLalamove && !d.inicioRota);
-  const kmSuspeita = todayData.filter(d => d.kmAnomalia);
-
-  const totalAlerts = semFotoInicio.length + semFotoFim.length + semHorario.length + kmSuspeita.length;
-
-  const allEntregadores = [...new Set(todayData.filter(d => !d.isLalamove).map(d => d.entregador))].sort();
-  const lalamoveHoje = todayData.filter(d => d.isLalamove);
-
-  return React.createElement('div', null,
-    totalAlerts > 0 && React.createElement('div', { className: 'alert-banner' },
-      React.createElement('div', { className: 'alert-dot' }),
-      React.createElement('div', { className: 'alert-text' },
-        React.createElement('span', { className: 'alert-count' }, `${totalAlerts} inconsistências `),
-        'detectadas hoje. Verifique os entregadores abaixo.'
-      )
-    ),
-
-    React.createElement('div', { className: 'grid-4' },
-      React.createElement(StatCard, { icon: '📸', value: semFotoInicio.length, label: 'Sem foto início', color: semFotoInicio.length > 0 ? 'red' : 'green', sub: semFotoInicio.length > 0 ? semFotoInicio.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
-      React.createElement(StatCard, { icon: '🏁', value: semFotoFim.length, label: 'Sem foto fim', color: semFotoFim.length > 0 ? 'red' : 'green', sub: semFotoFim.length > 0 ? semFotoFim.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
-      React.createElement(StatCard, { icon: '⏱️', value: semHorario.length, label: 'Sem horário', color: semHorario.length > 0 ? 'orange' : 'green', sub: semHorario.length > 0 ? semHorario.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
-      React.createElement(StatCard, { icon: '🛣️', value: kmSuspeita.length, label: 'KM suspeita', color: kmSuspeita.length > 0 ? 'yellow' : 'green', sub: kmSuspeita.length > 0 ? kmSuspeita.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' })
-    ),
-
-    lalamoveHoje.length > 0 && React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '🚐'),
-        'Lalamove hoje',
-        React.createElement('span', { className: 'lalamove-badge', style: { marginLeft: 'auto' } }, `${lalamoveHoje.length} uso${lalamoveHoje.length > 1 ? 's' : ''}`)
-      ),
-      React.createElement('table', null,
-        React.createElement('thead', null,
-          React.createElement('tr', null,
-            React.createElement('th', null, 'Nome'),
-            React.createElement('th', null, 'Turno'),
-            React.createElement('th', null, 'Qtde'),
-            React.createElement('th', null, 'Valor')
-          )
-        ),
-        React.createElement('tbody', null,
-          lalamoveHoje.map((d, i) =>
-            React.createElement('tr', { key: i },
-              React.createElement('td', null, d.entregador),
-              React.createElement('td', null, d.turno),
-              React.createElement('td', null, d.qtde),
-              React.createElement('td', null, fmtR$(d.valorTotal))
-            )
-          )
-        )
-      )
-    ),
-
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '👥'),
-        'Status entregadores hoje',
-        React.createElement('span', { className: 'card-sub' }, todayStr)
-      ),
-      todayData.length === 0
-        ? React.createElement('div', { className: 'empty' },
-            React.createElement('div', { className: 'empty-icon' }, '📋'),
-            'Sem dados para hoje ainda'
-          )
-        : React.createElement('div', { className: 'table-wrap' },
-          React.createElement('table', null,
-            React.createElement('thead', null,
-              React.createElement('tr', null,
-                React.createElement('th', null, 'Entregador'),
-                React.createElement('th', null, 'Turno'),
-                React.createElement('th', null, 'Qtde'),
-                React.createElement('th', null, 'Início'),
-                React.createElement('th', null, 'Fim'),
-                React.createElement('th', null, 'Foto ↑'),
-                React.createElement('th', null, 'Foto ↓'),
-                React.createElement('th', null, 'KM'),
-                React.createElement('th', null, 'Status')
-              )
-            ),
-            React.createElement('tbody', null,
-              allEntregadores.flatMap(ent => {
-                return todayData.filter(d => d.entregador === ent).map((d, i) => {
-                  const issues = [];
-                  if (!d.fotoInicio) issues.push('foto início');
-                  if (!d.fotoFim) issues.push('foto fim');
-                  if (!d.inicioRota) issues.push('horário');
-                  if (d.kmAnomalia) issues.push('KM alta');
-
-                  const status = issues.length === 0
-                    ? React.createElement('span', { className: 'badge green' }, '✓ OK')
-                    : React.createElement('span', { className: 'badge red' }, `⚠ ${issues.length} problema${issues.length > 1 ? 's' : ''}`);
-
-                  return React.createElement('tr', { key: `${ent}-${i}` },
-                    React.createElement('td', { style: { fontWeight: 500 } }, d.entregador),
-                    React.createElement('td', null, React.createElement('span', { className: 'badge gray' }, d.turno)),
-                    React.createElement('td', null, d.qtde),
-                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.inicioRota || React.createElement('span', { className: 'icon-warn' }, '—')),
-                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.fimRota || React.createElement('span', { className: 'icon-warn' }, '—')),
-                    React.createElement('td', null, d.fotoInicio ? React.createElement('span', { className: 'icon-check' }, '✓') : React.createElement('span', { className: 'icon-x' }, '✗')),
-                    React.createElement('td', null, d.fotoFim ? React.createElement('span', { className: 'icon-check' }, '✓') : React.createElement('span', { className: 'icon-x' }, '✗')),
-                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
-                      d.kmAnomalia
-                        ? React.createElement('span', { className: 'badge yellow' }, `${fmt(d.kmEntregador)} ⚠`)
-                        : fmt(d.kmEntregador)
-                    ),
-                    React.createElement('td', null, status)
-                  );
-                });
-              })
-            )
-          )
-        )
-    )
-  );
-}
-
-// ===================== TAB: KM =====================
-function TabKM({ data }) {
-  const anomalias = data
-    .filter(d => d.kmAnomalia)
-    .sort((a, b) => b.dataObj - a.dataObj)
-    .slice(0, 40);
-
-  const porEntregador = groupBy(anomalias, 'entregador');
-  const ranking = Object.entries(porEntregador)
-    .map(([ent, rows]) => ({
-      entregador: ent,
-      count: rows.length,
-      maxDiff: Math.max(...rows.map(r => r.kmEntregador - r.kmCalc)),
-    }))
-    .sort((a, b) => b.count - a.count);
-
+  // Ranking
+  const byEnt = groupBy(anomalias, 'entregador');
+  const ranking = Object.entries(byEnt)
+    .map(([ent, rows]) => ({ ent, count: rows.length }))
+    .sort((a,b) => b.count-a.count);
   const maxCount = ranking[0]?.count || 1;
 
-  return React.createElement('div', null,
-    React.createElement('div', { className: 'section-title' }, 'Ranking de KM suspeitas (últimos 60 dias)'),
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '🏆'),
-        'Entregadores com mais KM suspeitas'
-      ),
-      ranking.length === 0
-        ? React.createElement('div', { className: 'empty' }, React.createElement('div', { className: 'empty-icon' }, '✅'), 'Nenhuma anomalia detectada')
-        : ranking.map((r, i) =>
-            React.createElement('div', { className: 'ranking-item', key: r.entregador },
-              React.createElement('div', { className: `rank-pos ${i === 0 ? 'top1' : i === 1 ? 'top2' : i === 2 ? 'top3' : ''}` }, i + 1),
-              React.createElement('div', { className: 'rank-name' }, r.entregador),
-              React.createElement('div', { className: 'rank-bar-wrap' },
-                React.createElement('div', { className: 'rank-bar', style: { width: `${(r.count / maxCount) * 100}%`, background: 'var(--yellow)' } })
-              ),
-              React.createElement('div', { className: 'rank-val', style: { color: 'var(--yellow)' } }, `${r.count}x`),
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--mono)', marginLeft: 8, minWidth: 60 } }, `+${fmt(r.maxDiff)} km max`)
-            )
-          )
-    ),
+  document.getElementById('rankingKm').innerHTML = ranking.length === 0
+    ? '<div class="empty-state"><div class="empty-icon">✅</div>Nenhuma anomalia detectada</div>'
+    : ranking.map((r,i) => `
+      <div class="rank-row">
+        <div class="rank-num">${i+1}</div>
+        <div class="rank-name">${r.ent}</div>
+        <div class="rank-bar-bg"><div class="rank-bar-fill" style="width:${(r.count/maxCount*100).toFixed(0)}%"></div></div>
+        <div class="rank-val" style="color:var(--orange)">${r.count}x</div>
+      </div>`).join('');
 
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '🔍'),
-        'Ocorrências recentes',
-        React.createElement('span', { className: 'card-sub' }, `${anomalias.length} total`)
-      ),
-      React.createElement('div', { className: 'table-wrap' },
-        React.createElement('table', null,
-          React.createElement('thead', null,
-            React.createElement('tr', null,
-              React.createElement('th', null, 'Data'),
-              React.createElement('th', null, 'Entregador'),
-              React.createElement('th', null, 'Turno'),
-              React.createElement('th', null, 'KM Sistema'),
-              React.createElement('th', null, 'KM Entregador'),
-              React.createElement('th', null, 'Diferença'),
-              React.createElement('th', null, 'Excesso')
-            )
-          ),
-          React.createElement('tbody', null,
-            anomalias.map((d, i) => {
-              const diff = d.kmEntregador - d.kmCalc;
-              const pct = (d.kmEntregador / d.kmCalc - 1) * 100;
-              return React.createElement('tr', { key: i },
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.data),
-                React.createElement('td', { style: { fontWeight: 500 } }, d.entregador),
-                React.createElement('td', null, React.createElement('span', { className: 'badge gray' }, d.turno)),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, `${fmt(d.kmCalc)} km`),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, `${fmt(d.kmEntregador)} km`),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--yellow)' } }, `+${fmt(diff)} km`),
-                React.createElement('td', null, React.createElement('span', { className: 'badge yellow' }, `+${fmt(pct, 0)}%`))
-              );
-            })
-          )
-        )
-      )
-    )
-  );
+  // Table
+  document.getElementById('tbodyKm').innerHTML = anomalias.map(r => {
+    const diff = (r.kmConsiderado||0) - (r.kmCalc||0);
+    const pct = r.kmCalc > 0 ? ((r.kmConsiderado/r.kmCalc-1)*100) : 0;
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${r.data}</td>
+      <td style="font-weight:600">${r.entregador}</td>
+      <td><span class="badge gray">${r.turno}</span></td>
+      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.kmCalc)} km</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.kmConsiderado)} km</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:var(--orange)">+${fmt(diff)} km</td>
+      <td><span class="badge yellow">+${fmt(pct,0)}%</span></td>
+    </tr>`;
+  }).join('');
 }
 
-// ===================== TAB: TENDÊNCIAS =====================
-function TabTendencias({ data }) {
-  // Group by week for trends
-  const byWeek = useMemo(() => {
-    const weeks = {};
-    data.filter(d => !d.isLalamove).forEach(d => {
-      const weekNum = Math.floor(d.diasAtras / 7);
-      const weekLabel = `S${weekNum + 1}`;
-      if (!weeks[weekNum]) weeks[weekNum] = { label: weekLabel, weekNum, rows: [] };
-      weeks[weekNum].rows.push(d);
-    });
+// ============================================================
+// TAB LALAMOVE
+// ============================================================
+function renderLalamove() {
+  const all = DATA.filter(r => r.isLalamove);
+  const last30 = all.filter(r => r.diasAtras <= 29);
+  const prev30 = all.filter(r => r.diasAtras > 29 && r.diasAtras <= 59);
+  const delta = last30.length - prev30.length;
 
-    return Object.values(weeks)
-      .sort((a, b) => b.weekNum - a.weekNum)
-      .slice(0, 8)
-      .reverse()
-      .map(w => {
-        const manha = w.rows.filter(r => r.turno === 'MANHÃ' && r.fimMin != null);
-        const tarde = w.rows.filter(r => r.turno === 'TARDE' && r.fimMin != null);
-        const custos = w.rows.filter(r => r.custoPedido > 0).map(r => r.custoPedido);
-        const manhaInicio = w.rows.filter(r => r.turno === 'MANHÃ' && r.inicioMin != null);
-        const tardeInicio = w.rows.filter(r => r.turno === 'TARDE' && r.inicioMin != null);
+  const custoTotal30 = last30.reduce((a,r) => a + (r.custoPedido * r.qtde || 0), 0);
+  const byWeek = groupBy(all.filter(r=>r.diasAtras<=55), r => r.semana);
+  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,8).reverse();
 
-        return {
-          label: w.label,
-          fimManha: manha.length ? minutosParaHora(avg(manha.map(r => r.fimMin))) : null,
-          fimManhaMin: manha.length ? avg(manha.map(r => r.fimMin)) : null,
-          fimTarde: tarde.length ? minutosParaHora(avg(tarde.map(r => r.fimMin))) : null,
-          fimTardeMin: tarde.length ? avg(tarde.map(r => r.fimMin)) : null,
-          inicioManha: manhaInicio.length ? minutosParaHora(avg(manhaInicio.map(r => r.inicioMin))) : null,
-          inicioManhaMin: manhaInicio.length ? avg(manhaInicio.map(r => r.inicioMin)) : null,
-          inicioTarde: tardeInicio.length ? minutosParaHora(avg(tardeInicio.map(r => r.inicioMin))) : null,
-          inicioTardeMin: tardeInicio.length ? avg(tardeInicio.map(r => r.inicioMin)) : null,
-          custoPedido: custos.length ? avg(custos) : null,
-          anomalias: w.rows.filter(r => r.kmAnomalia).length,
-        };
-      });
-  }, [data]);
+  document.getElementById('kpisLala').innerHTML = `
+    <div class="kpi ${last30.length>10?'red':'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">🚐</div><div class="kpi-val">${last30.length}</div><div class="kpi-label">Usos (30 dias)</div><div class="kpi-trend ${delta>0?'bad':'good'}">${delta>0?'+':''}${delta} vs anterior</div></div>
+    <div class="kpi yellow"><div class="kpi-accent"></div><div class="kpi-icon">💰</div><div class="kpi-val">${fmtR(custoTotal30)}</div><div class="kpi-label">Custo 30 dias</div><div class="kpi-sub">${last30.length} usos</div></div>
+    <div class="kpi blue"><div class="kpi-accent"></div><div class="kpi-icon">📋</div><div class="kpi-val">${all.filter(r=>r.diasAtras<=6).length}</div><div class="kpi-label">Esta semana</div><div class="kpi-sub">usos lalamove</div></div>
+  `;
 
-  // Lalamove by week
-  const lalamoveByWeek = useMemo(() => {
-    const weeks = {};
-    data.forEach(d => {
-      const weekNum = Math.floor(d.diasAtras / 7);
-      const weekLabel = `S${weekNum + 1}`;
-      if (!weeks[weekNum]) weeks[weekNum] = { label: weekLabel, weekNum, total: 0, lalamove: 0, custo: 0 };
-      weeks[weekNum].total++;
-      if (d.isLalamove) { weeks[weekNum].lalamove++; weeks[weekNum].custo += d.valorTotal; }
-    });
-    return Object.values(weeks)
-      .sort((a, b) => b.weekNum - a.weekNum)
-      .slice(0, 8)
-      .reverse()
-      .map(w => ({ ...w, pct: w.total > 0 ? (w.lalamove / w.total * 100) : 0 }));
-  }, [data]);
+  const lalaData = weeks.map(s => ({ sem: s===0?'Esta sem':`S-${s}`, count: (byWeek[s]||[]).length }));
+  makeBarChart('chartLala', lalaData.map(x=>x.sem), [{ label: 'Usos', data: lalaData.map(x=>x.count), color: '#d35400' }]);
 
-  // Last two weeks comparison for trends
-  const ultimaSemana = byWeek[byWeek.length - 1];
-  const semanaAnterior = byWeek[byWeek.length - 2];
-
-  const deltaFimManha = ultimaSemana && semanaAnterior
-    ? (ultimaSemana.fimManhaMin || 0) - (semanaAnterior.fimManhaMin || 0)
-    : 0;
-  const deltaCusto = ultimaSemana && semanaAnterior
-    ? (ultimaSemana.custoPedido || 0) - (semanaAnterior.custoPedido || 0)
-    : 0;
-
-  return React.createElement('div', null,
-    React.createElement('div', { className: 'grid-3' },
-      React.createElement(StatCard, {
-        icon: '🌅',
-        value: ultimaSemana?.fimManha || '--',
-        label: 'Fim médio manhã',
-        color: deltaFimManha > 15 ? 'red' : deltaFimManha < -15 ? 'green' : 'blue',
-        trend: deltaFimManha !== 0 ? `${deltaFimManha > 0 ? '+' : ''}${Math.round(deltaFimManha)} min` : null,
-        trendDir: deltaFimManha > 15 ? 'up' : deltaFimManha < -15 ? 'down' : 'neutral',
-        sub: 'vs semana anterior'
-      }),
-      React.createElement(StatCard, {
-        icon: '🌆',
-        value: ultimaSemana?.fimTarde || '--',
-        label: 'Fim médio tarde',
-        color: 'blue',
-        sub: ultimaSemana?.label
-      }),
-      React.createElement(StatCard, {
-        icon: '💰',
-        value: ultimaSemana?.custoPedido != null ? fmtR$(ultimaSemana.custoPedido) : '--',
-        label: 'Custo por pedido',
-        color: deltaCusto > 0.5 ? 'red' : deltaCusto < -0.5 ? 'green' : 'blue',
-        trend: deltaCusto !== 0 ? `${deltaCusto > 0 ? '+' : ''}R$ ${Math.abs(deltaCusto).toFixed(2)}` : null,
-        trendDir: deltaCusto > 0.5 ? 'up' : deltaCusto < -0.5 ? 'down' : 'neutral',
-        sub: 'vs semana anterior'
-      })
-    ),
-
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '⏰'),
-        'Hora de término por semana'
-      ),
-      React.createElement('div', { className: 'chart-wrap' },
-        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-          React.createElement(LineChart, { data: byWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
-            React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
-            React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
-            React.createElement(YAxis, {
-              tickFormatter: v => minutosParaHora(v),
-              tick: { fill: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono' },
-              axisLine: false, tickLine: false,
-              domain: ['auto', 'auto']
-            }),
-            React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
-            React.createElement(Legend, { wrapperStyle: { fontSize: 12, color: '#6b7280' } }),
-            React.createElement(Line, { type: 'monotone', dataKey: 'fimManhaMin', name: 'Manhã', stroke: '#3d6dff', strokeWidth: 2.5, dot: { r: 4, fill: '#3d6dff' }, connectNulls: true }),
-            React.createElement(Line, { type: 'monotone', dataKey: 'fimTardeMin', name: 'Tarde', stroke: '#ff9f43', strokeWidth: 2.5, dot: { r: 4, fill: '#ff9f43' }, connectNulls: true })
-          )
-        )
-      )
-    ),
-
-    React.createElement('div', { className: 'grid-2' },
-      React.createElement('div', { className: 'card', style: { marginBottom: 0 } },
-        React.createElement('div', { className: 'card-title' },
-          React.createElement('span', { className: 'card-title-icon' }, '💰'),
-          'Custo por pedido (semana)'
-        ),
-        React.createElement('div', { className: 'chart-wrap' },
-          React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-            React.createElement(AreaChart, { data: byWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
-              React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
-              React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
-              React.createElement(YAxis, { tickFormatter: v => `R$ ${v.toFixed(1)}`, tick: { fill: '#6b7280', fontSize: 10 }, axisLine: false, tickLine: false }),
-              React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
-              React.createElement(Area, { type: 'monotone', dataKey: 'custoPedido', name: 'Custo/pedido', stroke: '#10d97a', fill: 'rgba(16,217,122,0.1)', strokeWidth: 2.5 })
-            )
-          )
-        )
-      ),
-
-      React.createElement('div', { className: 'card', style: { marginBottom: 0 } },
-        React.createElement('div', { className: 'card-title' },
-          React.createElement('span', { className: 'card-title-icon' }, '🚐'),
-          'Uso Lalamove por semana'
-        ),
-        React.createElement('div', { className: 'chart-wrap' },
-          React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-            React.createElement(BarChart, { data: lalamoveByWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
-              React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
-              React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
-              React.createElement(YAxis, { tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
-              React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
-              React.createElement(Bar, { dataKey: 'lalamove', name: 'Uso Lalamove', fill: '#ff9f43', radius: [4, 4, 0, 0] })
-            )
-          )
-        )
-      )
-    )
-  );
+  document.getElementById('tbodyLala').innerHTML = all.slice(0,50).map(r => `<tr>
+    <td style="font-family:var(--mono);font-size:11px">${r.data}</td>
+    <td><span class="badge gray">${r.turno}</span></td>
+    <td style="font-weight:600">${r.entregador}</td>
+    <td style="font-family:var(--mono)">${r.qtde}</td>
+    <td style="font-family:var(--mono)">${fmtR(r.custoPedido * r.qtde)}</td>
+  </tr>`).join('');
 }
 
-// ===================== TAB: ENTREGADORES =====================
-function TabEntregadores({ data }) {
-  const [selectedTurno, setSelectedTurno] = useState('TODOS');
-
-  const filtered = useMemo(() =>
-    data.filter(d => !d.isLalamove && (selectedTurno === 'TODOS' || d.turno === selectedTurno) && d.diasAtras <= 13),
-    [data, selectedTurno]
-  );
-
-  const byEnt = useMemo(() => {
-    const groups = groupBy(filtered, 'entregador');
-    return Object.entries(groups).map(([ent, rows]) => {
-      const comInicio = rows.filter(r => r.inicioMin != null);
-      const comFim = rows.filter(r => r.fimMin != null);
-      const comFoto = rows.filter(r => r.fotoInicio && r.fotoFim);
-      const kmAnomalias = rows.filter(r => r.kmAnomalia);
-      const custos = rows.filter(r => r.custoPedido > 0);
-
-      return {
-        entregador: ent,
-        avgInicio: comInicio.length ? avg(comInicio.map(r => r.inicioMin)) : null,
-        avgFim: comFim.length ? avg(comFim.map(r => r.fimMin)) : null,
-        pctFoto: rows.length ? (comFoto.length / rows.length * 100) : 0,
-        kmAnomalias: kmAnomalias.length,
-        avgCusto: custos.length ? avg(custos.map(r => r.custoPedido)) : null,
-        total: rows.length,
-      };
-    }).sort((a, b) => (a.avgFim || 0) - (b.avgFim || 0));
-  }, [filtered]);
-
-  // For charts
-  const chartData = byEnt.map(e => ({
-    name: e.entregador.split(' ')[0],
-    'Início (min)': e.avgInicio ? Math.round(e.avgInicio) : null,
-    'Fim (min)': e.avgFim ? Math.round(e.avgFim) : null,
-    inicioHora: e.avgInicio ? minutosParaHora(e.avgInicio) : '--',
-    fimHora: e.avgFim ? minutosParaHora(e.avgFim) : '--',
-  }));
-
-  return React.createElement('div', null,
-    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
-      ['TODOS','MANHÃ','TARDE'].map(t =>
-        React.createElement('button', {
-          key: t,
-          onClick: () => setSelectedTurno(t),
-          style: {
-            padding: '7px 16px',
-            borderRadius: 8,
-            border: '1px solid',
-            borderColor: selectedTurno === t ? 'rgba(61,109,255,0.4)' : 'var(--border)',
-            background: selectedTurno === t ? 'var(--primary-soft)' : 'var(--surface)',
-            color: selectedTurno === t ? 'var(--primary)' : 'var(--muted)',
-            fontFamily: 'var(--font)',
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: 'pointer',
-            transition: '.2s'
+// ============================================================
+// CHART HELPERS
+// ============================================================
+function makeLineChart(id, labels, datasets, tickFn) {
+  if (charts[id]) { charts[id].destroy(); }
+  const ctx = document.getElementById(id)?.getContext('2d');
+  if (!ctx) return;
+  charts[id] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: datasets.map(ds => ({
+        label: ds.label,
+        data: ds.data,
+        borderColor: ds.color,
+        backgroundColor: ds.color + '18',
+        borderWidth: 2.5,
+        pointRadius: 4,
+        pointBackgroundColor: ds.color,
+        fill: true,
+        tension: 0.35,
+        spanGaps: true,
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { family: 'Syne', size: 11 }, color: '#5c5650', boxWidth: 12 } } },
+      scales: {
+        x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#5c5650' } },
+        y: {
+          grid: { color: 'rgba(0,0,0,0.04)' },
+          ticks: {
+            font: { family: 'DM Mono', size: 10 }, color: '#5c5650',
+            callback: tickFn || undefined
           }
-        }, t)
-      )
-    ),
-
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '🌅'),
-        'Horário médio de início e fim (2 semanas)',
-        React.createElement('span', { className: 'card-sub' }, selectedTurno)
-      ),
-      React.createElement('div', { className: 'chart-wrap tall' },
-        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-          React.createElement(BarChart, { data: chartData, margin: { top: 5, right: 20, left: 0, bottom: 20 } },
-            React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
-            React.createElement(XAxis, { dataKey: 'name', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
-            React.createElement(YAxis, {
-              tickFormatter: v => minutosParaHora(v),
-              tick: { fill: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono' },
-              axisLine: false, tickLine: false,
-              domain: ['auto', 'auto']
-            }),
-            React.createElement(Tooltip, {
-              formatter: (value, name) => [minutosParaHora(value), name],
-              contentStyle: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }
-            }),
-            React.createElement(Legend, { wrapperStyle: { fontSize: 12, color: '#6b7280' } }),
-            React.createElement(Bar, { dataKey: 'Início (min)', fill: '#3d6dff', radius: [4, 4, 0, 0] }),
-            React.createElement(Bar, { dataKey: 'Fim (min)', fill: '#ff9f43', radius: [4, 4, 0, 0] })
-          )
-        )
-      )
-    ),
-
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'card-title' },
-        React.createElement('span', { className: 'card-title-icon' }, '📊'),
-        'Comparativo por entregador'
-      ),
-      React.createElement('div', { className: 'table-wrap' },
-        React.createElement('table', null,
-          React.createElement('thead', null,
-            React.createElement('tr', null,
-              React.createElement('th', null, 'Entregador'),
-              React.createElement('th', null, 'Início médio'),
-              React.createElement('th', null, 'Fim médio'),
-              React.createElement('th', null, '% com foto'),
-              React.createElement('th', null, 'Custo/pedido'),
-              React.createElement('th', null, 'KM suspeitas'),
-              React.createElement('th', null, 'Avaliação')
-            )
-          ),
-          React.createElement('tbody', null,
-            byEnt.map((e, i) => {
-              const issues = [];
-              if (e.pctFoto < 80) issues.push('fotos');
-              if (e.kmAnomalias > 2) issues.push('KM');
-
-              const avaliacao = issues.length === 0
-                ? React.createElement('span', { className: 'badge green' }, '✓ OK')
-                : React.createElement('span', { className: 'badge orange' }, `⚠ ${issues.join(', ')}`);
-
-              return React.createElement('tr', { key: e.entregador },
-                React.createElement('td', { style: { fontWeight: 500 } }, e.entregador),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
-                  e.avgInicio != null ? React.createElement('span', { style: { color: 'var(--primary)' } }, minutosParaHora(e.avgInicio)) : '—'
-                ),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
-                  e.avgFim != null
-                    ? React.createElement('span', { style: { color: (e.avgFim > (selectedTurno === 'MANHÃ' ? 720 : 1080)) ? 'var(--red)' : 'var(--orange)' } }, minutosParaHora(e.avgFim))
-                    : '—'
-                ),
-                React.createElement('td', null,
-                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                    React.createElement('div', { className: 'progress', style: { width: 60 } },
-                      React.createElement('div', { className: 'progress-fill', style: { width: `${e.pctFoto}%`, background: e.pctFoto >= 90 ? 'var(--green)' : e.pctFoto >= 70 ? 'var(--orange)' : 'var(--red)' } })
-                    ),
-                    React.createElement('span', { style: { fontSize: 11, fontFamily: 'var(--mono)', color: e.pctFoto >= 90 ? 'var(--green)' : e.pctFoto >= 70 ? 'var(--orange)' : 'var(--red)' } }, `${Math.round(e.pctFoto)}%`)
-                  )
-                ),
-                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
-                  e.avgCusto != null ? fmtR$(e.avgCusto) : '—'
-                ),
-                React.createElement('td', null,
-                  e.kmAnomalias > 0
-                    ? React.createElement('span', { className: 'badge yellow' }, `${e.kmAnomalias}x`)
-                    : React.createElement('span', { className: 'badge green' }, '0')
-                ),
-                React.createElement('td', null, avaliacao)
-              );
-            })
-          )
-        )
-      )
-    )
-  );
-}
-
-// ===================== AI MODAL =====================
-function AIModal({ onClose, data }) {
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: 'Olá! Sou o assistente de análise operacional. Posso analisar os dados dos seus entregadores. O que você quer saber?\n\nExemplos: "Quem está com mais problemas esta semana?" / "O custo por entrega está melhorando?" / "Qual turno termina mais tarde?"' }
-  ]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const messagesRef = useRef(null);
-
-  useEffect(() => {
-    if (messagesRef.current) {
-      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+        }
+      }
     }
-  }, [messages]);
+  });
+}
 
-  const buildContext = () => {
-    const hoje = data.filter(d => d.data === new Date().toLocaleDateString('pt-BR'));
-    const ultima2sem = data.filter(d => d.diasAtras <= 13 && !d.isLalamove);
-    const kmAnomSemana = data.filter(d => d.diasAtras <= 6 && d.kmAnomalia);
-    const semFoto = data.filter(d => d.data === new Date().toLocaleDateString('pt-BR') && !d.isLalamove && (!d.fotoInicio || !d.fotoFim));
-
-    const avgCustoSemana = avg(ultima2sem.filter(r => r.custoPedido > 0).map(r => r.custoPedido));
-    const byEnt = groupBy(ultima2sem, 'entregador');
-    const entStats = Object.entries(byEnt).map(([ent, rows]) => ({
-      ent,
-      avgFim: avg(rows.filter(r => r.fimMin).map(r => r.fimMin)),
-      pctFoto: rows.filter(r => r.fotoInicio && r.fotoFim).length / rows.length * 100,
-      kmProblemas: rows.filter(r => r.kmAnomalia).length
-    })).sort((a, b) => b.avgFim - a.avgFim);
-
-    return `Contexto dos dados operacionais (Orgânico do Chico - entregadores):
-    
-HOJE (${new Date().toLocaleDateString('pt-BR')}):
-- Total de rotas: ${hoje.length}
-- Sem foto: ${semFoto.length} entregadores (${semFoto.map(d=>d.entregador).join(', ') || 'nenhum'})
-- KM suspeitas hoje: ${hoje.filter(d=>d.kmAnomalia).length}
-
-ÚLTIMAS 2 SEMANAS (entregadores próprios):
-- Custo médio por pedido: R$ ${avgCustoSemana.toFixed(2)}
-- KM suspeitas: ${kmAnomSemana.length} ocorrências
-
-RANKING POR HORÁRIO DE FIM (médio):
-${entStats.slice(0,5).map((e,i) => `${i+1}. ${e.ent}: ${minutosParaHora(e.avgFim) || '--'}, ${e.pctFoto.toFixed(0)}% fotos, ${e.kmProblemas} KM suspeitas`).join('\n')}
-
-USO LALAMOVE (últimas 2 semanas): ${data.filter(d=>d.isLalamove && d.diasAtras<=13).length} usos`;
-  };
-
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
-    setInput('');
-    setMessages(m => [...m, { role: 'user', content: userMsg }]);
-    setLoading(true);
-
-    try {
-      const context = buildContext();
-      const response = await fetch('/api/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ _aiChat: true, context, question: userMsg, messages: messages.slice(-4) })
-      });
-
-      // Try Anthropic API directly
-      const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          system: `Você é um assistente analítico para operações de entregas de um delivery de orgânicos (Orgânico do Chico). Analise os dados fornecidos e responda em português, de forma clara, direta e útil. Foque em insights práticos e acionáveis. Use emojis quando apropriado para facilitar a leitura.`,
-          messages: [
-            ...messages.slice(-4).map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: `Contexto dos dados:\n${context}\n\nPergunta: ${userMsg}` }
-          ]
-        })
-      });
-
-      const apiData = await apiRes.json();
-      const reply = apiData.content?.[0]?.text || 'Desculpe, não consegui processar a resposta.';
-      setMessages(m => [...m, { role: 'assistant', content: reply }]);
-    } catch (e) {
-      setMessages(m => [...m, { role: 'assistant', content: '⚠️ Não foi possível conectar com a IA agora. Verifique sua conexão.' }]);
-    } finally {
-      setLoading(false);
+function makeBarChart(id, labels, datasets, tickFn) {
+  if (charts[id]) { charts[id].destroy(); }
+  const ctx = document.getElementById(id)?.getContext('2d');
+  if (!ctx) return;
+  charts[id] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: datasets.map(ds => ({
+        label: ds.label,
+        data: ds.data,
+        backgroundColor: ds.color,
+        borderRadius: 5,
+        borderSkipped: false,
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { family: 'Syne', size: 11 }, color: '#5c5650', boxWidth: 12 } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#5c5650' } },
+        y: {
+          grid: { color: 'rgba(0,0,0,0.04)' },
+          ticks: {
+            font: { family: 'DM Mono', size: 10 }, color: '#5c5650',
+            callback: tickFn || undefined
+          }
+        }
+      }
     }
-  };
-
-  return React.createElement('div', { className: 'modal-overlay', onClick: e => { if (e.target === e.currentTarget) onClose(); } },
-    React.createElement('div', { className: 'modal' },
-      React.createElement('div', { className: 'modal-header' },
-        React.createElement('div', { className: 'modal-title' }, '✨ Análise com IA'),
-        React.createElement('button', { className: 'modal-close', onClick: onClose }, '×')
-      ),
-      React.createElement('div', { className: 'modal-body', ref: messagesRef },
-        messages.map((m, i) =>
-          React.createElement('div', { key: i, className: `ai-msg ${m.role}` },
-            React.createElement('div', { style: { whiteSpace: 'pre-line' } }, m.content)
-          )
-        ),
-        loading && React.createElement('div', { className: 'ai-msg loading' }, '⏳ Analisando dados...')
-      ),
-      React.createElement('div', { className: 'modal-input' },
-        React.createElement('input', {
-          placeholder: 'Ex: Quem termina mais tarde?',
-          value: input,
-          onChange: e => setInput(e.target.value),
-          onKeyDown: e => e.key === 'Enter' && sendMessage(),
-          disabled: loading
-        }),
-        React.createElement('button', { onClick: sendMessage, disabled: loading || !input.trim() }, '→')
-      )
-    )
-  );
+  });
 }
 
-// ===================== MAIN APP =====================
-function App() {
-  const [tab, setTab] = useState('hoje');
-  const [data, setData] = useState(MOCK_DATA);
-  const [showAI, setShowAI] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-  const [loading, setLoading] = useState(false);
-  const [usingMock, setUsingMock] = useState(true);
-
-  const refresh = () => {
-    setLoading(true);
-    setTimeout(() => {
-      setLastUpdate(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-      setLoading(false);
-    }, 800);
-  };
-
-  const tabs = [
-    { id: 'hoje', label: 'Hoje', icon: '📋' },
-    { id: 'tendencias', label: 'Tendências', icon: '📈' },
-    { id: 'entregadores', label: 'Entregadores', icon: '👥' },
-    { id: 'km', label: 'KM Suspeitas', icon: '🛣️' },
-  ];
-
-  return React.createElement('div', { className: 'shell' },
-    React.createElement('header', { className: 'header' },
-      React.createElement('div', { className: 'logo' },
-        React.createElement('div', { className: 'logo-dot' }),
-        React.createElement('div', null,
-          React.createElement('div', { className: 'logo-text' }, 'Painel Operacional'),
-          React.createElement('div', { className: 'logo-sub' }, 'Orgânico do Chico')
-        )
-      ),
-      React.createElement('div', { className: 'header-right' },
-        usingMock && React.createElement('div', { style: { fontSize: 10, color: 'var(--orange)', fontFamily: 'var(--mono)', background: 'var(--orange-soft)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,159,67,0.2)' } }, 'DEMO'),
-        React.createElement('div', { className: 'last-update' }, `Atualizado ${lastUpdate}`),
-        React.createElement('button', { className: 'refresh-btn', onClick: refresh },
-          loading ? '⟳' : '↻',
-          'Atualizar'
-        )
-      )
-    ),
-
-    React.createElement('nav', { className: 'tabs' },
-      tabs.map(t =>
-        React.createElement('div', {
-          key: t.id,
-          className: `tab ${tab === t.id ? 'active' : ''}`,
-          onClick: () => setTab(t.id)
-        },
-          React.createElement('span', { className: 'tab-icon' }, t.icon),
-          t.label
-        )
-      )
-    ),
-
-    React.createElement('main', { className: 'content' },
-      tab === 'hoje' && React.createElement(TabHoje, { data }),
-      tab === 'tendencias' && React.createElement(TabTendencias, { data }),
-      tab === 'entregadores' && React.createElement(TabEntregadores, { data }),
-      tab === 'km' && React.createElement(TabKM, { data }),
-    ),
-
-    React.createElement('button', { className: 'ai-fab', onClick: () => setShowAI(true) },
-      '✨', 'Perguntar à IA'
-    ),
-
-    showAI && React.createElement(AIModal, { onClose: () => setShowAI(false), data })
-  );
+// ============================================================
+// TABS
+// ============================================================
+function showTab(id, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+id)?.classList.add('active');
+  el.classList.add('active');
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+// ============================================================
+// INIT
+// ============================================================
+loadData();
+setInterval(loadData, 5 * 60 * 1000); // auto-refresh a cada 5 min
 </script>
 </body>
 </html>
