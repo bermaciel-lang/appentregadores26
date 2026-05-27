@@ -284,7 +284,7 @@ th.sortable.sorted .sort-arrow{color:var(--ink)}
 <div class="page" id="tab-km">
   <div class="card">
     <div class="card-head">
-      <div class="card-title">🏆 Mais KM suspeitas no período</div>
+      <div class="card-title">🏆 Mais KM suspeitas no período <span style="font-weight:400;color:var(--ink2);font-size:11px;margin-left:6px">(excesso > 20% do previsto)</span></div>
     </div>
     <div id="rankingKm"></div>
   </div>
@@ -297,7 +297,7 @@ th.sortable.sorted .sort-arrow{color:var(--ink)}
       <table>
         <thead><tr>
           <th>Data</th><th>Entregador</th><th>Turno</th>
-          <th>KM sistema</th><th>KM entregador</th><th>Diferença</th><th>Excesso</th>
+          <th>KM previsto</th><th>KM entregador</th><th>Diferença</th><th>Excesso</th>
         </tr></thead>
         <tbody id="tbodyKm"></tbody>
       </table>
@@ -331,6 +331,25 @@ function isExcluido(ent) {
   if (!ent) return false;
   const e = String(ent).toLowerCase();
   return e.includes('lala') || e.includes('entregas cd');
+}
+
+// ============================================================
+// ENRIQUECIMENTO DE KM (referência, diferença, % excesso, anomalia)
+// refKm = MAX(K, L) da planilha; diffKm = coluna O (com fallback)
+// Critério de anomalia: diffKm positivo E excesso > 20% sobre refKm
+// ============================================================
+const ANOMALIA_PCT = 20; // limiar de excesso para marcar como "KM suspeita"
+
+function enrichKm(d) {
+  const refKm = Math.max(d.kmCalc || 0, d.kmSimp || 0);
+  const diff = d.diferencaKm != null ? d.diferencaKm : ((d.kmConsiderado || 0) - (d.kmCalc || 0));
+  const excessoPct = (refKm > 0 && diff > 0) ? (diff / refKm * 100) : 0;
+  return {
+    refKm,
+    diffKm: diff,
+    excessoPct,
+    kmAnomalia: !d.isLalamove && refKm > 0 && diff > 0 && excessoPct > ANOMALIA_PCT,
+  };
 }
 
 // ============================================================
@@ -470,11 +489,12 @@ async function loadData() {
         semana: Math.floor(diasAtras(d.data) / 7),
         inicioMin: horaToMin(d.inicioRota),
         fimMin: horaToMin(d.fimRota),
-        kmAnomalia: !d.isLalamove && d.kmCalc > 0 && d.kmConsiderado > d.kmCalc * 1.2,
       }));
       document.getElementById('demoBanner').style.display = 'none';
     }
-    // Exclusão fixa de Lala* e Entregas CD em toda análise (aplica em demo e real)
+    // Enriquece KM (refKm, diffKm, excessoPct, kmAnomalia) — aplica em demo e real
+    DATA = DATA.map(d => ({ ...d, ...enrichKm(d) }));
+    // Exclusão fixa de Lala* e Entregas CD em toda análise
     DATA = DATA.filter(d => !isExcluido(d.entregador));
     document.getElementById('updateTime').textContent = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     renderAll();
@@ -693,14 +713,9 @@ function renderEntregadores() {
     const comFim = rows.filter(r=>r.fimMin!=null);
     const comFoto = rows.filter(r=>r.fotoInicio&&r.fotoFim);
 
-    // KM extra: soma de diferencaKm > 0 (entregador rodou mais que o previsto)
-    // Fallback: se Apps Script ainda não retorna diferencaKm, deriva de (kmConsiderado - kmCalc).
-    const kmExtraSum = rows.reduce((s, r) => {
-      const diff = r.diferencaKm != null ? r.diferencaKm : ((r.kmConsiderado || 0) - (r.kmCalc || 0));
-      return s + (diff > 0 ? diff : 0);
-    }, 0);
-    // KM referência total no período (para calcular o %)
-    const kmRefSum = rows.reduce((s, r) => s + Math.max(r.kmCalc || 0, r.kmSimp || 0), 0);
+    // KM extra: soma da coluna O (diffKm) quando positiva — usa campos já enriquecidos em loadData
+    const kmExtraSum = rows.reduce((s, r) => s + (r.diffKm > 0 ? r.diffKm : 0), 0);
+    const kmRefSum = rows.reduce((s, r) => s + (r.refKm || 0), 0);
 
     return {
       ent,
@@ -781,42 +796,48 @@ function renderEntregadores() {
 // TAB KM
 // ============================================================
 function renderKM() {
-  // Filtra por período global (Lala/CD já removidos do DATA na carga)
+  // Filtra por período global. Critério de anomalia: excessoPct > 20% (Lala/CD já removidos)
+  // Ordenado do maior excesso pro menor — os piores aparecem no topo
   const anomalias = DATA.filter(r => r.kmAnomalia && r.diasAtras <= PERIODO_DIAS)
-                        .sort((a,b)=>a.diasAtras-b.diasAtras).slice(0, 50);
-  document.getElementById('badgeKm').textContent = `${anomalias.length} ocorrências (${PERIODO_DIAS} dias)`;
+                        .sort((a,b) => b.excessoPct - a.excessoPct).slice(0, 50);
+  document.getElementById('badgeKm').textContent = `${anomalias.length} ocorrências em ${PERIODO_DIAS}d (excesso > ${ANOMALIA_PCT}%)`;
 
-  // Ranking
+  // Ranking por entregador: nº de ocorrências + soma de km extras no período
   const byEnt = groupBy(anomalias, 'entregador');
   const ranking = Object.entries(byEnt)
-    .map(([ent, rows]) => ({ ent, count: rows.length }))
-    .sort((a,b) => b.count-a.count);
+    .map(([ent, rows]) => ({
+      ent,
+      count: rows.length,
+      kmTotal: rows.reduce((s, r) => s + (r.diffKm || 0), 0),
+    }))
+    .sort((a,b) => b.count - a.count);
   const maxCount = ranking[0]?.count || 1;
 
   document.getElementById('rankingKm').innerHTML = ranking.length === 0
-    ? '<div class="empty-state"><div class="empty-icon">✅</div>Nenhuma anomalia detectada</div>'
+    ? '<div class="empty-state"><div class="empty-icon">✅</div>Nenhuma anomalia no período</div>'
     : ranking.map((r,i) => `
       <div class="rank-row">
         <div class="rank-num">${i+1}</div>
         <div class="rank-name">${r.ent}</div>
         <div class="rank-bar-bg"><div class="rank-bar-fill" style="width:${(r.count/maxCount*100).toFixed(0)}%"></div></div>
-        <div class="rank-val" style="color:var(--orange)">${r.count}x</div>
+        <div class="rank-val">
+          <span style="color:var(--orange)">${r.count}x</span>
+          <span style="color:var(--ink2);font-size:11px;margin-left:6px">+${fmt(r.kmTotal)} km</span>
+        </div>
       </div>`).join('');
 
-  // Table
-  document.getElementById('tbodyKm').innerHTML = anomalias.map(r => {
-    const diff = (r.kmConsiderado||0) - (r.kmCalc||0);
-    const pct = r.kmCalc > 0 ? ((r.kmConsiderado/r.kmCalc-1)*100) : 0;
-    return `<tr>
+  // Tabela detalhada — mostra a coluna O (diffKm) e o excesso real (excessoPct)
+  document.getElementById('tbodyKm').innerHTML = anomalias.length === 0
+    ? `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--ink2)">Nenhuma anomalia no período (${PERIODO_DIAS}d)</td></tr>`
+    : anomalias.map(r => `<tr>
       <td style="font-family:var(--mono);font-size:11px">${r.data}</td>
       <td style="font-weight:600">${r.entregador}</td>
       <td><span class="badge gray">${r.turno}</span></td>
-      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.kmCalc)} km</td>
-      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.kmConsiderado)} km</td>
-      <td style="font-family:var(--mono);font-size:11.5px;color:var(--orange)">+${fmt(diff)} km</td>
-      <td><span class="badge yellow">+${fmt(pct,0)}%</span></td>
-    </tr>`;
-  }).join('');
+      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.refKm)} km</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${fmt(r.kmEntregador)} km</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:var(--orange)">+${fmt(r.diffKm)} km</td>
+      <td><span class="badge yellow">+${fmt(r.excessoPct,0)}%</span></td>
+    </tr>`).join('');
 }
 
 // ============================================================
