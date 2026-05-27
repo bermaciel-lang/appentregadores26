@@ -305,8 +305,8 @@ tr:hover td{background:var(--bg)}
 // ============================================================
 // CONFIG — troque a URL pelo seu Apps Script quando ativar dados reais
 // ============================================================
-const API_URL = '/api/dashboard'; // Vercel proxy
-const USE_DEMO = true; // mude para false quando tiver o Apps Script configurado
+const API_URL = '/api/painel-data/'; // Vercel proxy (trailing slash evita 308 redirect)
+const USE_DEMO = false; // dados reais via Apps Script
 
 // ============================================================
 // ESTADO GLOBAL
