@@ -6,6 +6,7 @@
 <title>Painel Operacional · Orgânico do Chico</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <style>
 /* ====== TOKENS ====== */
 :root{
@@ -227,20 +228,23 @@ th.sortable.sorted .sort-arrow{color:var(--ink)}
 <!-- ======== TAB TENDÊNCIAS ======== -->
 <div class="page" id="tab-tendencias">
   <div class="g3" id="kpisTend"></div>
-  <div class="card">
-    <div class="card-head">
-      <div class="card-title">⏰ Hora de término — por semana</div>
-      <div class="card-badge">Manhã vs Tarde</div>
+  <div class="g2">
+    <div class="card" style="margin-bottom:0">
+      <div class="card-head"><div class="card-title">🌅 Horário — Manhã</div><div class="card-badge" id="badgeManha">início vs fim</div></div>
+      <div class="chart-wrap tall"><canvas id="chartManha"></canvas></div>
     </div>
-    <div class="chart-wrap"><canvas id="chartFim"></canvas></div>
+    <div class="card" style="margin-bottom:0">
+      <div class="card-head"><div class="card-title">🌆 Horário — Tarde</div><div class="card-badge" id="badgeTarde">início vs fim</div></div>
+      <div class="chart-wrap tall"><canvas id="chartTarde"></canvas></div>
+    </div>
   </div>
   <div class="g2">
     <div class="card" style="margin-bottom:0">
-      <div class="card-head"><div class="card-title">💰 Custo por pedido</div></div>
+      <div class="card-head"><div class="card-title">💰 Custo por pedido</div><div class="card-badge" id="badgeCusto">—</div></div>
       <div class="chart-wrap"><canvas id="chartCusto"></canvas></div>
     </div>
     <div class="card" style="margin-bottom:0">
-      <div class="card-head"><div class="card-title">📸 % com foto</div></div>
+      <div class="card-head"><div class="card-title">📸 % com foto</div><div class="card-badge" id="badgeFoto">—</div></div>
       <div class="chart-wrap"><canvas id="chartFoto"></canvas></div>
     </div>
   </div>
@@ -630,76 +634,102 @@ function renderHoje() {
 // TAB TENDÊNCIAS
 // ============================================================
 function renderTendencias() {
-  // Build weekly buckets (filtra por período; Lala/CD já removidos do DATA)
-  const numSemanas = Math.max(1, Math.ceil(PERIODO_DIAS / 7));
-  const byWeek = {};
-  DATA.filter(r => r.diasAtras <= PERIODO_DIAS).forEach(r => {
-    const s = r.semana;
-    if (!byWeek[s]) byWeek[s] = [];
-    byWeek[s].push(r);
+  // Granularidade adaptativa: até 14 dias -> bucket por DIA; acima -> por SEMANA
+  const porDia = PERIODO_DIAS <= 14;
+  const filtered = DATA.filter(r => r.diasAtras <= PERIODO_DIAS);
+
+  // Agrupa em buckets (key = diasAtras se por dia, ou número de semanas atrás se por semana)
+  const buckets = {};
+  filtered.forEach(r => {
+    const key = porDia ? r.diasAtras : Math.floor(r.diasAtras / 7);
+    if (!buckets[key]) buckets[key] = [];
+    buckets[key].push(r);
   });
 
-  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,numSemanas).reverse();
-  const wLabels = weeks.map(s => s===0?'Esta sem':`S-${s}`);
-
-  const fimManha = weeks.map(s => {
-    const rows = byWeek[s].filter(r => r.turno==='MANHÃ' && r.fimMin!=null);
-    return rows.length ? avg(rows.map(r=>r.fimMin)) : null;
-  });
-  const fimTarde = weeks.map(s => {
-    const rows = byWeek[s].filter(r => r.turno==='TARDE' && r.fimMin!=null);
-    return rows.length ? avg(rows.map(r=>r.fimMin)) : null;
-  });
-  const custoSem = weeks.map(s => {
-    const rows = byWeek[s].filter(r => r.custoPedido > 0);
-    return rows.length ? avg(rows.map(r=>r.custoPedido)) : null;
-  });
-  const fotoSem = weeks.map(s => {
-    const rows = byWeek[s];
-    const comFoto = rows.filter(r => r.fotoInicio && r.fotoFim);
-    return rows.length ? (comFoto.length / rows.length * 100) : null;
+  // Ordena do mais antigo (key maior) pro mais recente (key menor) — leitura esquerda → direita
+  const keys = Object.keys(buckets).map(Number).sort((a, b) => b - a);
+  const labels = keys.map(k => {
+    if (porDia) {
+      const d = new Date(); d.setDate(d.getDate() - k);
+      return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    }
+    return k === 0 ? 'Esta sem' : `S-${k}`;
   });
 
-  // KPIs tendências
-  const lastW = weeks[weeks.length-1];
-  const prevW = weeks[weeks.length-2];
-  const lRows = byWeek[lastW] || [];
-  const pRows = byWeek[prevW] || [];
-  const lCusto = avg(lRows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido));
-  const pCusto = avg(pRows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido));
-  const deltaCusto = lCusto != null && pCusto != null ? lCusto - pCusto : null;
-  const lFimM = avg(lRows.filter(r=>r.turno==='MANHÃ'&&r.fimMin!=null).map(r=>r.fimMin));
-  const pFimM = avg(pRows.filter(r=>r.turno==='MANHÃ'&&r.fimMin!=null).map(r=>r.fimMin));
-  const deltaFim = lFimM != null && pFimM != null ? Math.round(lFimM - pFimM) : null;
+  // Helper: média de um campo num turno específico, dentro do bucket k
+  const serie = (turno, campo) => keys.map(k => {
+    const rs = buckets[k].filter(r => r.turno === turno && r[campo] != null);
+    return rs.length ? avg(rs.map(r => r[campo])) : null;
+  });
+  const inicioManha = serie('MANHÃ', 'inicioMin');
+  const fimManha    = serie('MANHÃ', 'fimMin');
+  const inicioTarde = serie('TARDE', 'inicioMin');
+  const fimTarde    = serie('TARDE', 'fimMin');
+
+  const custoSerie = keys.map(k => {
+    const rs = buckets[k].filter(r => r.custoPedido > 0);
+    return rs.length ? avg(rs.map(r => r.custoPedido)) : null;
+  });
+  const fotoSerie = keys.map(k => {
+    const rs = buckets[k];
+    if (!rs.length) return null;
+    return rs.filter(r => r.fotoInicio && r.fotoFim).length / rs.length * 100;
+  });
+
+  // === KPIs: comparam metade RECENTE vs metade ANTIGA do período ===
+  const half = Math.max(1, Math.floor(PERIODO_DIAS / 2));
+  const recentes = filtered.filter(r => r.diasAtras < half);
+  const antigos  = filtered.filter(r => r.diasAtras >= half);
+  const avgPair = (rows, turno, campo) => {
+    const rs = rows.filter(r => r.turno === turno && r[campo] != null);
+    return rs.length ? avg(rs.map(r => r[campo])) : null;
+  };
+  const lFimM = avgPair(recentes, 'MANHÃ', 'fimMin');
+  const pFimM = avgPair(antigos,  'MANHÃ', 'fimMin');
+  const deltaFim = (lFimM != null && pFimM != null) ? Math.round(lFimM - pFimM) : null;
+  const lFimT = avgPair(recentes, 'TARDE', 'fimMin');
+  const lCusto = avg(recentes.filter(r => r.custoPedido > 0).map(r => r.custoPedido));
+  const pCusto = avg(antigos.filter(r => r.custoPedido > 0).map(r => r.custoPedido));
+  const deltaCusto = (lCusto != null && pCusto != null) ? lCusto - pCusto : null;
 
   const trendHtml = (delta, unitFn, invertido=false) => {
     if (delta == null) return '';
     const good = invertido ? delta > 0 : delta < 0;
-    const cls = Math.abs(delta)<0.3&&!invertido ? 'neutral' : good ? 'good' : 'bad';
+    const cls = Math.abs(delta) < 0.3 && !invertido ? 'neutral' : good ? 'good' : 'bad';
     const sign = delta > 0 ? '+' : '';
     return `<div class="kpi-trend ${cls}">${sign}${unitFn(delta)}</div>`;
   };
+  const subLabel = `vs ${half}d anteriores`;
 
   document.getElementById('kpisTend').innerHTML = `
-    <div class="kpi ${lFimM && lFimM > 730 ? 'red' : 'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">🌅</div><div class="kpi-val">${lFimM?minToHora(lFimM):'—'}</div><div class="kpi-label">Fim médio manhã</div>${trendHtml(deltaFim,v=>`${Math.abs(v)} min`)}<div class="kpi-sub">vs semana anterior</div></div>
-    <div class="kpi blue"><div class="kpi-accent"></div><div class="kpi-icon">🌆</div><div class="kpi-val">${avg(lRows.filter(r=>r.turno==='TARDE'&&r.fimMin!=null).map(r=>r.fimMin)) ? minToHora(avg(lRows.filter(r=>r.turno==='TARDE'&&r.fimMin!=null).map(r=>r.fimMin))) : '—'}</div><div class="kpi-label">Fim médio tarde</div><div class="kpi-sub">esta semana</div></div>
-    <div class="kpi ${deltaCusto>0.3?'red':deltaCusto<-0.3?'green':'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">💰</div><div class="kpi-val">${lCusto?fmtR(lCusto):'—'}</div><div class="kpi-label">Custo por pedido</div>${trendHtml(deltaCusto,v=>`R$ ${Math.abs(v).toFixed(2)}`)}<div class="kpi-sub">vs semana anterior</div></div>
+    <div class="kpi ${lFimM && lFimM > 730 ? 'red' : 'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">🌅</div><div class="kpi-val">${lFimM ? minToHora(lFimM) : '—'}</div><div class="kpi-label">Fim médio manhã</div>${trendHtml(deltaFim, v => `${Math.abs(v)} min`)}<div class="kpi-sub">${subLabel}</div></div>
+    <div class="kpi blue"><div class="kpi-accent"></div><div class="kpi-icon">🌆</div><div class="kpi-val">${lFimT ? minToHora(lFimT) : '—'}</div><div class="kpi-label">Fim médio tarde</div><div class="kpi-sub">últimos ${half}d</div></div>
+    <div class="kpi ${deltaCusto > 0.3 ? 'red' : deltaCusto < -0.3 ? 'green' : 'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">💰</div><div class="kpi-val">${lCusto ? fmtR(lCusto) : '—'}</div><div class="kpi-label">Custo por pedido</div>${trendHtml(deltaCusto, v => `R$ ${Math.abs(v).toFixed(2)}`)}<div class="kpi-sub">${subLabel}</div></div>
   `;
 
-  // Charts
-  const tickFimFn = (val) => minToHora(val);
-  makeLineChart('chartFim', wLabels, [
-    { label: 'Manhã', data: fimManha, color: '#1a4fba' },
-    { label: 'Tarde', data: fimTarde, color: '#d35400' },
-  ], tickFimFn);
+  // === Gráficos: 2x manhã/tarde com início+fim, + custo, + % foto ===
+  const granul = `${keys.length} ${porDia ? 'dia' : 'semana'}${keys.length !== 1 ? 's' : ''}`;
+  ['badgeManha','badgeTarde','badgeCusto','badgeFoto'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = granul;
+  });
 
-  makeLineChart('chartCusto', wLabels, [
-    { label: 'R$/pedido', data: custoSem, color: '#1a7a4a' },
-  ]);
+  makeLineChart('chartManha', labels, [
+    { label: 'Início', data: inicioManha, color: '#1a4fba' },
+    { label: 'Fim',    data: fimManha,    color: '#d35400' },
+  ], v => minToHora(v), { showLabels: true, labelFormat: v => minToHora(v) });
 
-  makeLineChart('chartFoto', wLabels, [
-    { label: '% com foto', data: fotoSem, color: '#1a4fba' },
-  ], v => `${Math.round(v)}%`);
+  makeLineChart('chartTarde', labels, [
+    { label: 'Início', data: inicioTarde, color: '#1a4fba' },
+    { label: 'Fim',    data: fimTarde,    color: '#d35400' },
+  ], v => minToHora(v), { showLabels: true, labelFormat: v => minToHora(v) });
+
+  makeLineChart('chartCusto', labels, [
+    { label: 'R$/pedido', data: custoSerie, color: '#1a7a4a' },
+  ], v => `R$ ${v.toFixed(2).replace('.', ',')}`, { showLabels: true, labelFormat: v => 'R$ ' + v.toFixed(2).replace('.', ',') });
+
+  makeLineChart('chartFoto', labels, [
+    { label: '% com foto', data: fotoSerie, color: '#1a4fba' },
+  ], v => `${Math.round(v)}%`, { showLabels: true, labelFormat: v => `${Math.round(v)}%` });
 }
 
 // ============================================================
@@ -855,10 +885,12 @@ function renderKM() {
 // ============================================================
 // CHART HELPERS
 // ============================================================
-function makeLineChart(id, labels, datasets, tickFn) {
+function makeLineChart(id, labels, datasets, tickFn, opts={}) {
   if (charts[id]) { charts[id].destroy(); }
   const ctx = document.getElementById(id)?.getContext('2d');
   if (!ctx) return;
+  const showLabels = !!opts.showLabels;
+  const labelFormat = opts.labelFormat || (v => v);
   charts[id] = new Chart(ctx, {
     type: 'line',
     data: {
@@ -870,15 +902,34 @@ function makeLineChart(id, labels, datasets, tickFn) {
         backgroundColor: ds.color + '18',
         borderWidth: 2.5,
         pointRadius: 4,
+        pointHoverRadius: 6,
         pointBackgroundColor: ds.color,
         fill: true,
         tension: 0.35,
         spanGaps: true,
+        // Datalabels por dataset (anchor/align fixos; cor segue a linha)
+        datalabels: showLabels ? {
+          align: 'top',
+          anchor: 'end',
+          offset: 4,
+          color: ds.color,
+          font: { family: 'DM Mono', size: 10, weight: '600' },
+          formatter: (v) => v == null ? '' : labelFormat(v),
+        } : { display: false },
       }))
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { font: { family: 'Syne', size: 11 }, color: '#5c5650', boxWidth: 12 } } },
+      layout: { padding: { top: 18 } }, // espaço pros labels não estourarem em cima
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { font: { family: 'Syne', size: 11 }, color: '#5c5650', boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y == null ? '—' : labelFormat(ctx.parsed.y)}`
+          }
+        }
+      },
       scales: {
         x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#5c5650' } },
         y: {
@@ -889,7 +940,8 @@ function makeLineChart(id, labels, datasets, tickFn) {
           }
         }
       }
-    }
+    },
+    plugins: showLabels && window.ChartDataLabels ? [window.ChartDataLabels] : []
   });
 }
 
