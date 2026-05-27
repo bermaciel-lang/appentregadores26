@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Painel Operacional</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<style>
+:root {
+  --bg: #0a0f1e;
+  --surface: #111827;
+  --surface2: #1a2235;
+  --border: rgba(255,255,255,0.06);
+  --primary: #3d6dff;
+  --primary-soft: rgba(61,109,255,0.15);
+  --green: #10d97a;
+  --green-soft: rgba(16,217,122,0.12);
+  --orange: #ff9f43;
+  --orange-soft: rgba(255,159,67,0.12);
+  --red: #ff4d6d;
+  --red-soft: rgba(255,77,109,0.12);
+  --yellow: #ffd166;
+  --yellow-soft: rgba(255,209,102,0.12);
+  --text: #e8eaf2;
+  --muted: #6b7280;
+  --font: 'Space Grotesk', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;-webkit-font-smoothing:antialiased}
+#root{min-height:100vh}
+
+/* scrollbar */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* LAYOUT */
+.shell{display:flex;flex-direction:column;min-height:100vh}
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-dot{width:8px;height:8px;background:var(--primary);border-radius:50%;box-shadow:0 0 8px var(--primary);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.logo-text{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.logo-sub{font-size:11px;color:var(--muted);font-weight:400;font-family:var(--mono)}
+.header-right{display:flex;align-items:center;gap:8px}
+.refresh-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--font);display:flex;align-items:center;gap:6px;transition:.2s}
+.refresh-btn:hover{border-color:var(--primary);color:var(--primary)}
+.last-update{font-size:11px;color:var(--muted);font-family:var(--mono)}
+
+/* TABS */
+.tabs{display:flex;gap:2px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:.2s;color:var(--muted);border:1px solid transparent}
+.tab:hover{color:var(--text);background:var(--surface2)}
+.tab.active{color:var(--primary);background:var(--primary-soft);border-color:rgba(61,109,255,0.25)}
+.tab-icon{margin-right:6px}
+
+/* CONTENT */
+.content{flex:1;padding:20px;max-width:1200px;margin:0 auto;width:100%}
+
+/* ALERT BANNER */
+.alert-banner{background:linear-gradient(135deg,rgba(255,77,109,0.1),rgba(255,159,67,0.05));border:1px solid rgba(255,77,109,0.2);border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px;animation:fadeIn .4s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.alert-dot{width:8px;height:8px;background:var(--red);border-radius:50%;flex-shrink:0;box-shadow:0 0 8px var(--red)}
+.alert-text{font-size:13px;line-height:1.5;flex:1}
+.alert-count{font-weight:700;color:var(--red)}
+
+/* GRID */
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:20px}
+@media(max-width:900px){.grid-4{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr}}
+
+/* STAT CARD */
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;transition:.2s;cursor:default;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;right:0;width:60px;height:60px;border-radius:0 14px 0 60px;opacity:.08;transition:.2s}
+.stat-card.red::before{background:var(--red)}
+.stat-card.orange::before{background:var(--orange)}
+.stat-card.green::before{background:var(--green)}
+.stat-card.blue::before{background:var(--primary)}
+.stat-card.yellow::before{background:var(--yellow)}
+.stat-card:hover{border-color:var(--border);transform:translateY(-1px)}
+.stat-icon{font-size:20px;margin-bottom:10px}
+.stat-value{font-size:32px;font-weight:700;font-family:var(--mono);letter-spacing:-.03em;margin-bottom:4px}
+.stat-card.red .stat-value{color:var(--red)}
+.stat-card.orange .stat-value{color:var(--orange)}
+.stat-card.green .stat-value{color:var(--green)}
+.stat-card.blue .stat-value{color:var(--primary)}
+.stat-card.yellow .stat-value{color:var(--yellow)}
+.stat-label{font-size:12px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+.stat-sub{font-size:11px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+
+/* CARD */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px}
+.card-title{font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px;letter-spacing:-.01em}
+.card-title-icon{font-size:16px}
+.card-sub{font-size:11px;color:var(--muted);margin-left:auto;font-family:var(--mono)}
+
+/* TABLE */
+.table-wrap{overflow-x:auto;margin:0 -4px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px 12px;color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tr:hover td{background:rgba(255,255,255,.02)}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;font-family:var(--mono)}
+.badge.red{background:var(--red-soft);color:var(--red)}
+.badge.orange{background:var(--orange-soft);color:var(--orange)}
+.badge.green{background:var(--green-soft);color:var(--green)}
+.badge.blue{background:var(--primary-soft);color:var(--primary)}
+.badge.gray{background:rgba(107,114,128,.15);color:var(--muted)}
+.icon-check{color:var(--green)}
+.icon-x{color:var(--red)}
+.icon-warn{color:var(--orange)}
+
+/* CHART WRAPPER */
+.chart-wrap{height:240px;margin-top:8px}
+.chart-wrap.tall{height:300px}
+
+/* EMPTY */
+.empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+.empty-icon{font-size:32px;margin-bottom:8px}
+
+/* RANKING */
+.ranking-item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+.ranking-item:last-child{border-bottom:0}
+.rank-pos{width:26px;height:26px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:var(--mono);flex-shrink:0}
+.rank-pos.top1{background:rgba(255,215,0,.15);color:#ffd700}
+.rank-pos.top2{background:rgba(192,192,192,.15);color:#c0c0c0}
+.rank-pos.top3{background:rgba(205,127,50,.15);color:#cd7f32}
+.rank-name{flex:1;font-size:13px;font-weight:500}
+.rank-val{font-family:var(--mono);font-size:13px;font-weight:600}
+.rank-bar-wrap{flex:1;height:4px;background:var(--surface2);border-radius:2px;margin:0 12px;min-width:60px}
+.rank-bar{height:4px;border-radius:2px;transition:width .6s ease}
+
+/* AI BUTTON */
+.ai-fab{position:fixed;bottom:24px;right:24px;background:linear-gradient(135deg,var(--primary),#6b4fff);color:white;border:0;border-radius:50px;padding:14px 22px;font-size:14px;font-weight:600;font-family:var(--font);cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(61,109,255,.4);transition:.2s;z-index:200}
+.ai-fab:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(61,109,255,.5)}
+
+/* AI MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:600px;max-height:80vh;display:flex;flex-direction:column;animation:slideUp .3s ease}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.modal-header{padding:20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:16px;font-weight:600}
+.modal-close{background:var(--surface2);border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+.modal-body{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.ai-msg{padding:14px;border-radius:10px;font-size:13px;line-height:1.6}
+.ai-msg.user{background:var(--primary-soft);border:1px solid rgba(61,109,255,.2);margin-left:20px}
+.ai-msg.assistant{background:var(--surface2);border:1px solid var(--border);margin-right:20px}
+.ai-msg.loading{color:var(--muted);font-style:italic}
+.modal-input{padding:16px;border-top:1px solid var(--border);display:flex;gap:8px}
+.modal-input input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:13px;font-family:var(--font);outline:none}
+.modal-input input:focus{border-color:var(--primary)}
+.modal-input button{background:var(--primary);color:white;border:0;padding:10px 18px;border-radius:10px;font-size:13px;font-family:var(--font);font-weight:600;cursor:pointer;transition:.2s}
+.modal-input button:hover{opacity:.9}
+.modal-input button:disabled{opacity:.5;cursor:default}
+
+/* SECTION TITLE */
+.section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;padding-left:2px}
+
+/* TREND ARROW */
+.trend{font-size:11px;font-family:var(--mono);font-weight:600}
+.trend.up{color:var(--red)}
+.trend.down{color:var(--green)}
+.trend.neutral{color:var(--muted)}
+
+/* PROGRESS BAR */
+.progress{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:8px}
+.progress-fill{height:100%;border-radius:3px;transition:width .8s ease}
+
+/* WEEK LABEL */
+.week-chip{display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:10px;font-family:var(--mono);color:var(--muted);margin-right:4px}
+
+/* TOOLTIP CUSTOM */
+.custom-tooltip{background:var(--surface2)!important;border:1px solid var(--border)!important;border-radius:10px!important;padding:10px 14px!important;font-family:var(--font)!important;font-size:12px!important}
+
+/* LALAMOVE */
+.lalamove-badge{background:rgba(255,159,67,.15);color:var(--orange);border:1px solid rgba(255,159,67,.25);padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, RadialBarChart, RadialBar, Cell } = Recharts;
+
+// ===================== MOCK DATA =====================
+const ENTREGADORES = ["Ana Carolina","Camila","Cristina","Daniel","Edilene","José","Karina","Leia","Tamara","Cristiano"];
+const TURNOS = ["MANHÃ","TARDE"];
+
+function horaParaMinutos(h) {
+  if (!h) return null;
+  const [hh,mm] = h.split(':').map(Number);
+  return hh * 60 + mm;
+}
+
+function minutosParaHora(m) {
+  if (m == null) return null;
+  const h = Math.floor(m / 60);
+  const min = Math.round(m % 60);
+  return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+}
+
+function gerarDadosMock() {
+  const dados = [];
+  const hoje = new Date();
+
+  for (let diasAtras = 59; diasAtras >= 0; diasAtras--) {
+    const d = new Date(hoje);
+    d.setDate(d.getDate() - diasAtras);
+    if (d.getDay() === 0) continue; // skip sunday
+
+    const dataStr = d.toLocaleDateString('pt-BR');
+    const semana = `S${Math.floor(diasAtras / 7) + 1}`;
+
+    TURNOS.forEach(turno => {
+      const entsHoje = [...ENTREGADORES];
+      // Às vezes Lalamove aparece
+      if (Math.random() < 0.35) entsHoje.push('Lalamove 1');
+      if (Math.random() < 0.15) entsHoje.push('Lalamove 2');
+
+      entsHoje.forEach(ent => {
+        const isLala = ent.includes('Lalamove');
+        const qtde = isLala ? 1 : (8 + Math.floor(Math.random() * 8));
+        const kmRef = isLala ? 0 : (25 + Math.random() * 45);
+        const kmAnomalia = !isLala && Math.random() < 0.08;
+        const kmEnt = isLala ? 0 : Math.max(0, kmRef * (kmAnomalia ? 1.3 + Math.random() * 0.4 : (0.75 + Math.random() * 0.5)));
+
+        const baseInicio = turno === 'MANHÃ' ? 490 + Math.floor(Math.random() * 40) : 840 + Math.floor(Math.random() * 40);
+        const baseFim = turno === 'MANHÃ' ? 660 + Math.floor(Math.random() * 60) : 1020 + Math.floor(Math.random() * 60);
+
+        // Some deliverers tend to be late
+        const lateTendency = ['Cristiano','Daniel'].includes(ent) ? 30 : 0;
+        const earlyTendency = ['Ana Carolina','Karina'].includes(ent) ? -15 : 0;
+
+        const inicioMin = baseInicio + lateTendency + earlyTendency + (Math.random() - 0.5) * 20;
+        const fimMin = baseFim + lateTendency + earlyTendency + (Math.random() - 0.5) * 30;
+
+        const temFotoInicio = isLala || Math.random() > 0.12;
+        const temFotoFim = isLala || Math.random() > 0.12;
+        const temHorario = isLala || Math.random() > 0.04;
+
+        const custoPedido = isLala
+          ? (qtde === 1 ? 7.5 : 8.5)
+          : (7 + Math.random() * 3);
+
+        dados.push({
+          data: dataStr,
+          dataObj: new Date(d),
+          semana,
+          diasAtras,
+          entregador: ent,
+          turno,
+          qtde,
+          kmCalc: isLala ? 0 : kmRef,
+          kmSimp: isLala ? 0 : kmRef * (0.9 + Math.random() * 0.2),
+          kmEntregador: kmEnt,
+          kmConsiderado: isLala ? 0 : (kmAnomalia ? kmRef * 1.5 : kmRef),
+          kmAnomalia: kmAnomalia && !isLala,
+          valorTotal: qtde * custoPedido,
+          custoPedido,
+          inicioRota: temHorario && !isLala ? minutosParaHora(inicioMin) : null,
+          fimRota: temHorario && !isLala ? minutosParaHora(fimMin) : null,
+          inicioMin: temHorario && !isLala ? inicioMin : null,
+          fimMin: temHorario && !isLala ? fimMin : null,
+          fotoInicio: temFotoInicio ? 'Foto início' : null,
+          fotoFim: temFotoFim ? 'Foto fim' : null,
+          isLalamove: isLala,
+        });
+      });
+    });
+  }
+  return dados;
+}
+
+const MOCK_DATA = gerarDadosMock();
+
+// ===================== UTILS =====================
+function hoje() {
+  return new Date().toLocaleDateString('pt-BR');
+}
+
+function semanaAtual(d) {
+  const diff = Math.floor((new Date() - d) / (1000 * 60 * 60 * 24 * 7));
+  if (diff === 0) return 'Esta semana';
+  if (diff === 1) return 'Semana passada';
+  return `${diff} semanas atrás`;
+}
+
+function groupBy(arr, key) {
+  return arr.reduce((acc, item) => {
+    const k = typeof key === 'function' ? key(item) : item[key];
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(item);
+    return acc;
+  }, {});
+}
+
+function avg(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function fmt(n, dec=1) {
+  if (n == null || isNaN(n)) return '-';
+  return n.toFixed(dec).replace('.', ',');
+}
+
+function fmtR$(n) {
+  if (n == null || isNaN(n)) return '-';
+  return 'R$ ' + n.toFixed(2).replace('.', ',');
+}
+
+// ===================== CUSTOM TOOLTIP =====================
+const CustomTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return React.createElement('div', { className: 'custom-tooltip' },
+    React.createElement('div', { style: { marginBottom: 6, fontWeight: 600, color: '#e8eaf2' } }, label),
+    payload.map((p, i) =>
+      React.createElement('div', { key: i, style: { color: p.color, fontSize: 12 } },
+        `${p.name}: ${typeof p.value === 'number' ? fmt(p.value) : p.value}`
+      )
+    )
+  );
+};
+
+// ===================== COMPONENTS =====================
+function StatCard({ icon, value, label, sub, color, trend, trendDir }) {
+  return React.createElement('div', { className: `stat-card ${color}` },
+    React.createElement('div', { className: 'stat-icon' }, icon),
+    React.createElement('div', { className: 'stat-value' },
+      value,
+      trend && React.createElement('span', { className: `trend ${trendDir}`, style: { fontSize: 14, marginLeft: 8 } }, trend)
+    ),
+    React.createElement('div', { className: 'stat-label' }, label),
+    sub && React.createElement('div', { className: 'stat-sub' }, sub)
+  );
+}
+
+// ===================== TAB: HOJE =====================
+function TabHoje({ data }) {
+  const todayStr = hoje();
+  const todayData = data.filter(d => d.data === todayStr);
+
+  const semFotoInicio = todayData.filter(d => !d.isLalamove && !d.fotoInicio);
+  const semFotoFim = todayData.filter(d => !d.isLalamove && !d.fotoFim);
+  const semHorario = todayData.filter(d => !d.isLalamove && !d.inicioRota);
+  const kmSuspeita = todayData.filter(d => d.kmAnomalia);
+
+  const totalAlerts = semFotoInicio.length + semFotoFim.length + semHorario.length + kmSuspeita.length;
+
+  const allEntregadores = [...new Set(todayData.filter(d => !d.isLalamove).map(d => d.entregador))].sort();
+  const lalamoveHoje = todayData.filter(d => d.isLalamove);
+
+  return React.createElement('div', null,
+    totalAlerts > 0 && React.createElement('div', { className: 'alert-banner' },
+      React.createElement('div', { className: 'alert-dot' }),
+      React.createElement('div', { className: 'alert-text' },
+        React.createElement('span', { className: 'alert-count' }, `${totalAlerts} inconsistências `),
+        'detectadas hoje. Verifique os entregadores abaixo.'
+      )
+    ),
+
+    React.createElement('div', { className: 'grid-4' },
+      React.createElement(StatCard, { icon: '📸', value: semFotoInicio.length, label: 'Sem foto início', color: semFotoInicio.length > 0 ? 'red' : 'green', sub: semFotoInicio.length > 0 ? semFotoInicio.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
+      React.createElement(StatCard, { icon: '🏁', value: semFotoFim.length, label: 'Sem foto fim', color: semFotoFim.length > 0 ? 'red' : 'green', sub: semFotoFim.length > 0 ? semFotoFim.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
+      React.createElement(StatCard, { icon: '⏱️', value: semHorario.length, label: 'Sem horário', color: semHorario.length > 0 ? 'orange' : 'green', sub: semHorario.length > 0 ? semHorario.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' }),
+      React.createElement(StatCard, { icon: '🛣️', value: kmSuspeita.length, label: 'KM suspeita', color: kmSuspeita.length > 0 ? 'yellow' : 'green', sub: kmSuspeita.length > 0 ? kmSuspeita.map(d => d.entregador).join(', ').slice(0,40) : 'Todos ok' })
+    ),
+
+    lalamoveHoje.length > 0 && React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '🚐'),
+        'Lalamove hoje',
+        React.createElement('span', { className: 'lalamove-badge', style: { marginLeft: 'auto' } }, `${lalamoveHoje.length} uso${lalamoveHoje.length > 1 ? 's' : ''}`)
+      ),
+      React.createElement('table', null,
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            React.createElement('th', null, 'Nome'),
+            React.createElement('th', null, 'Turno'),
+            React.createElement('th', null, 'Qtde'),
+            React.createElement('th', null, 'Valor')
+          )
+        ),
+        React.createElement('tbody', null,
+          lalamoveHoje.map((d, i) =>
+            React.createElement('tr', { key: i },
+              React.createElement('td', null, d.entregador),
+              React.createElement('td', null, d.turno),
+              React.createElement('td', null, d.qtde),
+              React.createElement('td', null, fmtR$(d.valorTotal))
+            )
+          )
+        )
+      )
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '👥'),
+        'Status entregadores hoje',
+        React.createElement('span', { className: 'card-sub' }, todayStr)
+      ),
+      todayData.length === 0
+        ? React.createElement('div', { className: 'empty' },
+            React.createElement('div', { className: 'empty-icon' }, '📋'),
+            'Sem dados para hoje ainda'
+          )
+        : React.createElement('div', { className: 'table-wrap' },
+          React.createElement('table', null,
+            React.createElement('thead', null,
+              React.createElement('tr', null,
+                React.createElement('th', null, 'Entregador'),
+                React.createElement('th', null, 'Turno'),
+                React.createElement('th', null, 'Qtde'),
+                React.createElement('th', null, 'Início'),
+                React.createElement('th', null, 'Fim'),
+                React.createElement('th', null, 'Foto ↑'),
+                React.createElement('th', null, 'Foto ↓'),
+                React.createElement('th', null, 'KM'),
+                React.createElement('th', null, 'Status')
+              )
+            ),
+            React.createElement('tbody', null,
+              allEntregadores.flatMap(ent => {
+                return todayData.filter(d => d.entregador === ent).map((d, i) => {
+                  const issues = [];
+                  if (!d.fotoInicio) issues.push('foto início');
+                  if (!d.fotoFim) issues.push('foto fim');
+                  if (!d.inicioRota) issues.push('horário');
+                  if (d.kmAnomalia) issues.push('KM alta');
+
+                  const status = issues.length === 0
+                    ? React.createElement('span', { className: 'badge green' }, '✓ OK')
+                    : React.createElement('span', { className: 'badge red' }, `⚠ ${issues.length} problema${issues.length > 1 ? 's' : ''}`);
+
+                  return React.createElement('tr', { key: `${ent}-${i}` },
+                    React.createElement('td', { style: { fontWeight: 500 } }, d.entregador),
+                    React.createElement('td', null, React.createElement('span', { className: 'badge gray' }, d.turno)),
+                    React.createElement('td', null, d.qtde),
+                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.inicioRota || React.createElement('span', { className: 'icon-warn' }, '—')),
+                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.fimRota || React.createElement('span', { className: 'icon-warn' }, '—')),
+                    React.createElement('td', null, d.fotoInicio ? React.createElement('span', { className: 'icon-check' }, '✓') : React.createElement('span', { className: 'icon-x' }, '✗')),
+                    React.createElement('td', null, d.fotoFim ? React.createElement('span', { className: 'icon-check' }, '✓') : React.createElement('span', { className: 'icon-x' }, '✗')),
+                    React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
+                      d.kmAnomalia
+                        ? React.createElement('span', { className: 'badge yellow' }, `${fmt(d.kmEntregador)} ⚠`)
+                        : fmt(d.kmEntregador)
+                    ),
+                    React.createElement('td', null, status)
+                  );
+                });
+              })
+            )
+          )
+        )
+    )
+  );
+}
+
+// ===================== TAB: KM =====================
+function TabKM({ data }) {
+  const anomalias = data
+    .filter(d => d.kmAnomalia)
+    .sort((a, b) => b.dataObj - a.dataObj)
+    .slice(0, 40);
+
+  const porEntregador = groupBy(anomalias, 'entregador');
+  const ranking = Object.entries(porEntregador)
+    .map(([ent, rows]) => ({
+      entregador: ent,
+      count: rows.length,
+      maxDiff: Math.max(...rows.map(r => r.kmEntregador - r.kmCalc)),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const maxCount = ranking[0]?.count || 1;
+
+  return React.createElement('div', null,
+    React.createElement('div', { className: 'section-title' }, 'Ranking de KM suspeitas (últimos 60 dias)'),
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '🏆'),
+        'Entregadores com mais KM suspeitas'
+      ),
+      ranking.length === 0
+        ? React.createElement('div', { className: 'empty' }, React.createElement('div', { className: 'empty-icon' }, '✅'), 'Nenhuma anomalia detectada')
+        : ranking.map((r, i) =>
+            React.createElement('div', { className: 'ranking-item', key: r.entregador },
+              React.createElement('div', { className: `rank-pos ${i === 0 ? 'top1' : i === 1 ? 'top2' : i === 2 ? 'top3' : ''}` }, i + 1),
+              React.createElement('div', { className: 'rank-name' }, r.entregador),
+              React.createElement('div', { className: 'rank-bar-wrap' },
+                React.createElement('div', { className: 'rank-bar', style: { width: `${(r.count / maxCount) * 100}%`, background: 'var(--yellow)' } })
+              ),
+              React.createElement('div', { className: 'rank-val', style: { color: 'var(--yellow)' } }, `${r.count}x`),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--mono)', marginLeft: 8, minWidth: 60 } }, `+${fmt(r.maxDiff)} km max`)
+            )
+          )
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '🔍'),
+        'Ocorrências recentes',
+        React.createElement('span', { className: 'card-sub' }, `${anomalias.length} total`)
+      ),
+      React.createElement('div', { className: 'table-wrap' },
+        React.createElement('table', null,
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              React.createElement('th', null, 'Data'),
+              React.createElement('th', null, 'Entregador'),
+              React.createElement('th', null, 'Turno'),
+              React.createElement('th', null, 'KM Sistema'),
+              React.createElement('th', null, 'KM Entregador'),
+              React.createElement('th', null, 'Diferença'),
+              React.createElement('th', null, 'Excesso')
+            )
+          ),
+          React.createElement('tbody', null,
+            anomalias.map((d, i) => {
+              const diff = d.kmEntregador - d.kmCalc;
+              const pct = (d.kmEntregador / d.kmCalc - 1) * 100;
+              return React.createElement('tr', { key: i },
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, d.data),
+                React.createElement('td', { style: { fontWeight: 500 } }, d.entregador),
+                React.createElement('td', null, React.createElement('span', { className: 'badge gray' }, d.turno)),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, `${fmt(d.kmCalc)} km`),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } }, `${fmt(d.kmEntregador)} km`),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--yellow)' } }, `+${fmt(diff)} km`),
+                React.createElement('td', null, React.createElement('span', { className: 'badge yellow' }, `+${fmt(pct, 0)}%`))
+              );
+            })
+          )
+        )
+      )
+    )
+  );
+}
+
+// ===================== TAB: TENDÊNCIAS =====================
+function TabTendencias({ data }) {
+  // Group by week for trends
+  const byWeek = useMemo(() => {
+    const weeks = {};
+    data.filter(d => !d.isLalamove).forEach(d => {
+      const weekNum = Math.floor(d.diasAtras / 7);
+      const weekLabel = `S${weekNum + 1}`;
+      if (!weeks[weekNum]) weeks[weekNum] = { label: weekLabel, weekNum, rows: [] };
+      weeks[weekNum].rows.push(d);
+    });
+
+    return Object.values(weeks)
+      .sort((a, b) => b.weekNum - a.weekNum)
+      .slice(0, 8)
+      .reverse()
+      .map(w => {
+        const manha = w.rows.filter(r => r.turno === 'MANHÃ' && r.fimMin != null);
+        const tarde = w.rows.filter(r => r.turno === 'TARDE' && r.fimMin != null);
+        const custos = w.rows.filter(r => r.custoPedido > 0).map(r => r.custoPedido);
+        const manhaInicio = w.rows.filter(r => r.turno === 'MANHÃ' && r.inicioMin != null);
+        const tardeInicio = w.rows.filter(r => r.turno === 'TARDE' && r.inicioMin != null);
+
+        return {
+          label: w.label,
+          fimManha: manha.length ? minutosParaHora(avg(manha.map(r => r.fimMin))) : null,
+          fimManhaMin: manha.length ? avg(manha.map(r => r.fimMin)) : null,
+          fimTarde: tarde.length ? minutosParaHora(avg(tarde.map(r => r.fimMin))) : null,
+          fimTardeMin: tarde.length ? avg(tarde.map(r => r.fimMin)) : null,
+          inicioManha: manhaInicio.length ? minutosParaHora(avg(manhaInicio.map(r => r.inicioMin))) : null,
+          inicioManhaMin: manhaInicio.length ? avg(manhaInicio.map(r => r.inicioMin)) : null,
+          inicioTarde: tardeInicio.length ? minutosParaHora(avg(tardeInicio.map(r => r.inicioMin))) : null,
+          inicioTardeMin: tardeInicio.length ? avg(tardeInicio.map(r => r.inicioMin)) : null,
+          custoPedido: custos.length ? avg(custos) : null,
+          anomalias: w.rows.filter(r => r.kmAnomalia).length,
+        };
+      });
+  }, [data]);
+
+  // Lalamove by week
+  const lalamoveByWeek = useMemo(() => {
+    const weeks = {};
+    data.forEach(d => {
+      const weekNum = Math.floor(d.diasAtras / 7);
+      const weekLabel = `S${weekNum + 1}`;
+      if (!weeks[weekNum]) weeks[weekNum] = { label: weekLabel, weekNum, total: 0, lalamove: 0, custo: 0 };
+      weeks[weekNum].total++;
+      if (d.isLalamove) { weeks[weekNum].lalamove++; weeks[weekNum].custo += d.valorTotal; }
+    });
+    return Object.values(weeks)
+      .sort((a, b) => b.weekNum - a.weekNum)
+      .slice(0, 8)
+      .reverse()
+      .map(w => ({ ...w, pct: w.total > 0 ? (w.lalamove / w.total * 100) : 0 }));
+  }, [data]);
+
+  // Last two weeks comparison for trends
+  const ultimaSemana = byWeek[byWeek.length - 1];
+  const semanaAnterior = byWeek[byWeek.length - 2];
+
+  const deltaFimManha = ultimaSemana && semanaAnterior
+    ? (ultimaSemana.fimManhaMin || 0) - (semanaAnterior.fimManhaMin || 0)
+    : 0;
+  const deltaCusto = ultimaSemana && semanaAnterior
+    ? (ultimaSemana.custoPedido || 0) - (semanaAnterior.custoPedido || 0)
+    : 0;
+
+  return React.createElement('div', null,
+    React.createElement('div', { className: 'grid-3' },
+      React.createElement(StatCard, {
+        icon: '🌅',
+        value: ultimaSemana?.fimManha || '--',
+        label: 'Fim médio manhã',
+        color: deltaFimManha > 15 ? 'red' : deltaFimManha < -15 ? 'green' : 'blue',
+        trend: deltaFimManha !== 0 ? `${deltaFimManha > 0 ? '+' : ''}${Math.round(deltaFimManha)} min` : null,
+        trendDir: deltaFimManha > 15 ? 'up' : deltaFimManha < -15 ? 'down' : 'neutral',
+        sub: 'vs semana anterior'
+      }),
+      React.createElement(StatCard, {
+        icon: '🌆',
+        value: ultimaSemana?.fimTarde || '--',
+        label: 'Fim médio tarde',
+        color: 'blue',
+        sub: ultimaSemana?.label
+      }),
+      React.createElement(StatCard, {
+        icon: '💰',
+        value: ultimaSemana?.custoPedido != null ? fmtR$(ultimaSemana.custoPedido) : '--',
+        label: 'Custo por pedido',
+        color: deltaCusto > 0.5 ? 'red' : deltaCusto < -0.5 ? 'green' : 'blue',
+        trend: deltaCusto !== 0 ? `${deltaCusto > 0 ? '+' : ''}R$ ${Math.abs(deltaCusto).toFixed(2)}` : null,
+        trendDir: deltaCusto > 0.5 ? 'up' : deltaCusto < -0.5 ? 'down' : 'neutral',
+        sub: 'vs semana anterior'
+      })
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '⏰'),
+        'Hora de término por semana'
+      ),
+      React.createElement('div', { className: 'chart-wrap' },
+        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+          React.createElement(LineChart, { data: byWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
+            React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
+            React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
+            React.createElement(YAxis, {
+              tickFormatter: v => minutosParaHora(v),
+              tick: { fill: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono' },
+              axisLine: false, tickLine: false,
+              domain: ['auto', 'auto']
+            }),
+            React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
+            React.createElement(Legend, { wrapperStyle: { fontSize: 12, color: '#6b7280' } }),
+            React.createElement(Line, { type: 'monotone', dataKey: 'fimManhaMin', name: 'Manhã', stroke: '#3d6dff', strokeWidth: 2.5, dot: { r: 4, fill: '#3d6dff' }, connectNulls: true }),
+            React.createElement(Line, { type: 'monotone', dataKey: 'fimTardeMin', name: 'Tarde', stroke: '#ff9f43', strokeWidth: 2.5, dot: { r: 4, fill: '#ff9f43' }, connectNulls: true })
+          )
+        )
+      )
+    ),
+
+    React.createElement('div', { className: 'grid-2' },
+      React.createElement('div', { className: 'card', style: { marginBottom: 0 } },
+        React.createElement('div', { className: 'card-title' },
+          React.createElement('span', { className: 'card-title-icon' }, '💰'),
+          'Custo por pedido (semana)'
+        ),
+        React.createElement('div', { className: 'chart-wrap' },
+          React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+            React.createElement(AreaChart, { data: byWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
+              React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
+              React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
+              React.createElement(YAxis, { tickFormatter: v => `R$ ${v.toFixed(1)}`, tick: { fill: '#6b7280', fontSize: 10 }, axisLine: false, tickLine: false }),
+              React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
+              React.createElement(Area, { type: 'monotone', dataKey: 'custoPedido', name: 'Custo/pedido', stroke: '#10d97a', fill: 'rgba(16,217,122,0.1)', strokeWidth: 2.5 })
+            )
+          )
+        )
+      ),
+
+      React.createElement('div', { className: 'card', style: { marginBottom: 0 } },
+        React.createElement('div', { className: 'card-title' },
+          React.createElement('span', { className: 'card-title-icon' }, '🚐'),
+          'Uso Lalamove por semana'
+        ),
+        React.createElement('div', { className: 'chart-wrap' },
+          React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+            React.createElement(BarChart, { data: lalamoveByWeek, margin: { top: 5, right: 20, left: 0, bottom: 5 } },
+              React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
+              React.createElement(XAxis, { dataKey: 'label', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
+              React.createElement(YAxis, { tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
+              React.createElement(Tooltip, { content: React.createElement(CustomTooltip) }),
+              React.createElement(Bar, { dataKey: 'lalamove', name: 'Uso Lalamove', fill: '#ff9f43', radius: [4, 4, 0, 0] })
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+// ===================== TAB: ENTREGADORES =====================
+function TabEntregadores({ data }) {
+  const [selectedTurno, setSelectedTurno] = useState('TODOS');
+
+  const filtered = useMemo(() =>
+    data.filter(d => !d.isLalamove && (selectedTurno === 'TODOS' || d.turno === selectedTurno) && d.diasAtras <= 13),
+    [data, selectedTurno]
+  );
+
+  const byEnt = useMemo(() => {
+    const groups = groupBy(filtered, 'entregador');
+    return Object.entries(groups).map(([ent, rows]) => {
+      const comInicio = rows.filter(r => r.inicioMin != null);
+      const comFim = rows.filter(r => r.fimMin != null);
+      const comFoto = rows.filter(r => r.fotoInicio && r.fotoFim);
+      const kmAnomalias = rows.filter(r => r.kmAnomalia);
+      const custos = rows.filter(r => r.custoPedido > 0);
+
+      return {
+        entregador: ent,
+        avgInicio: comInicio.length ? avg(comInicio.map(r => r.inicioMin)) : null,
+        avgFim: comFim.length ? avg(comFim.map(r => r.fimMin)) : null,
+        pctFoto: rows.length ? (comFoto.length / rows.length * 100) : 0,
+        kmAnomalias: kmAnomalias.length,
+        avgCusto: custos.length ? avg(custos.map(r => r.custoPedido)) : null,
+        total: rows.length,
+      };
+    }).sort((a, b) => (a.avgFim || 0) - (b.avgFim || 0));
+  }, [filtered]);
+
+  // For charts
+  const chartData = byEnt.map(e => ({
+    name: e.entregador.split(' ')[0],
+    'Início (min)': e.avgInicio ? Math.round(e.avgInicio) : null,
+    'Fim (min)': e.avgFim ? Math.round(e.avgFim) : null,
+    inicioHora: e.avgInicio ? minutosParaHora(e.avgInicio) : '--',
+    fimHora: e.avgFim ? minutosParaHora(e.avgFim) : '--',
+  }));
+
+  return React.createElement('div', null,
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+      ['TODOS','MANHÃ','TARDE'].map(t =>
+        React.createElement('button', {
+          key: t,
+          onClick: () => setSelectedTurno(t),
+          style: {
+            padding: '7px 16px',
+            borderRadius: 8,
+            border: '1px solid',
+            borderColor: selectedTurno === t ? 'rgba(61,109,255,0.4)' : 'var(--border)',
+            background: selectedTurno === t ? 'var(--primary-soft)' : 'var(--surface)',
+            color: selectedTurno === t ? 'var(--primary)' : 'var(--muted)',
+            fontFamily: 'var(--font)',
+            fontSize: 13,
+            fontWeight: 500,
+            cursor: 'pointer',
+            transition: '.2s'
+          }
+        }, t)
+      )
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '🌅'),
+        'Horário médio de início e fim (2 semanas)',
+        React.createElement('span', { className: 'card-sub' }, selectedTurno)
+      ),
+      React.createElement('div', { className: 'chart-wrap tall' },
+        React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+          React.createElement(BarChart, { data: chartData, margin: { top: 5, right: 20, left: 0, bottom: 20 } },
+            React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'rgba(255,255,255,0.05)' }),
+            React.createElement(XAxis, { dataKey: 'name', tick: { fill: '#6b7280', fontSize: 11 }, axisLine: false, tickLine: false }),
+            React.createElement(YAxis, {
+              tickFormatter: v => minutosParaHora(v),
+              tick: { fill: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono' },
+              axisLine: false, tickLine: false,
+              domain: ['auto', 'auto']
+            }),
+            React.createElement(Tooltip, {
+              formatter: (value, name) => [minutosParaHora(value), name],
+              contentStyle: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }
+            }),
+            React.createElement(Legend, { wrapperStyle: { fontSize: 12, color: '#6b7280' } }),
+            React.createElement(Bar, { dataKey: 'Início (min)', fill: '#3d6dff', radius: [4, 4, 0, 0] }),
+            React.createElement(Bar, { dataKey: 'Fim (min)', fill: '#ff9f43', radius: [4, 4, 0, 0] })
+          )
+        )
+      )
+    ),
+
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'card-title' },
+        React.createElement('span', { className: 'card-title-icon' }, '📊'),
+        'Comparativo por entregador'
+      ),
+      React.createElement('div', { className: 'table-wrap' },
+        React.createElement('table', null,
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              React.createElement('th', null, 'Entregador'),
+              React.createElement('th', null, 'Início médio'),
+              React.createElement('th', null, 'Fim médio'),
+              React.createElement('th', null, '% com foto'),
+              React.createElement('th', null, 'Custo/pedido'),
+              React.createElement('th', null, 'KM suspeitas'),
+              React.createElement('th', null, 'Avaliação')
+            )
+          ),
+          React.createElement('tbody', null,
+            byEnt.map((e, i) => {
+              const issues = [];
+              if (e.pctFoto < 80) issues.push('fotos');
+              if (e.kmAnomalias > 2) issues.push('KM');
+
+              const avaliacao = issues.length === 0
+                ? React.createElement('span', { className: 'badge green' }, '✓ OK')
+                : React.createElement('span', { className: 'badge orange' }, `⚠ ${issues.join(', ')}`);
+
+              return React.createElement('tr', { key: e.entregador },
+                React.createElement('td', { style: { fontWeight: 500 } }, e.entregador),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
+                  e.avgInicio != null ? React.createElement('span', { style: { color: 'var(--primary)' } }, minutosParaHora(e.avgInicio)) : '—'
+                ),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
+                  e.avgFim != null
+                    ? React.createElement('span', { style: { color: (e.avgFim > (selectedTurno === 'MANHÃ' ? 720 : 1080)) ? 'var(--red)' : 'var(--orange)' } }, minutosParaHora(e.avgFim))
+                    : '—'
+                ),
+                React.createElement('td', null,
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                    React.createElement('div', { className: 'progress', style: { width: 60 } },
+                      React.createElement('div', { className: 'progress-fill', style: { width: `${e.pctFoto}%`, background: e.pctFoto >= 90 ? 'var(--green)' : e.pctFoto >= 70 ? 'var(--orange)' : 'var(--red)' } })
+                    ),
+                    React.createElement('span', { style: { fontSize: 11, fontFamily: 'var(--mono)', color: e.pctFoto >= 90 ? 'var(--green)' : e.pctFoto >= 70 ? 'var(--orange)' : 'var(--red)' } }, `${Math.round(e.pctFoto)}%`)
+                  )
+                ),
+                React.createElement('td', { style: { fontFamily: 'var(--mono)', fontSize: 12 } },
+                  e.avgCusto != null ? fmtR$(e.avgCusto) : '—'
+                ),
+                React.createElement('td', null,
+                  e.kmAnomalias > 0
+                    ? React.createElement('span', { className: 'badge yellow' }, `${e.kmAnomalias}x`)
+                    : React.createElement('span', { className: 'badge green' }, '0')
+                ),
+                React.createElement('td', null, avaliacao)
+              );
+            })
+          )
+        )
+      )
+    )
+  );
+}
+
+// ===================== AI MODAL =====================
+function AIModal({ onClose, data }) {
+  const [messages, setMessages] = useState([
+    { role: 'assistant', content: 'Olá! Sou o assistente de análise operacional. Posso analisar os dados dos seus entregadores. O que você quer saber?\n\nExemplos: "Quem está com mais problemas esta semana?" / "O custo por entrega está melhorando?" / "Qual turno termina mais tarde?"' }
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const messagesRef = useRef(null);
+
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const buildContext = () => {
+    const hoje = data.filter(d => d.data === new Date().toLocaleDateString('pt-BR'));
+    const ultima2sem = data.filter(d => d.diasAtras <= 13 && !d.isLalamove);
+    const kmAnomSemana = data.filter(d => d.diasAtras <= 6 && d.kmAnomalia);
+    const semFoto = data.filter(d => d.data === new Date().toLocaleDateString('pt-BR') && !d.isLalamove && (!d.fotoInicio || !d.fotoFim));
+
+    const avgCustoSemana = avg(ultima2sem.filter(r => r.custoPedido > 0).map(r => r.custoPedido));
+    const byEnt = groupBy(ultima2sem, 'entregador');
+    const entStats = Object.entries(byEnt).map(([ent, rows]) => ({
+      ent,
+      avgFim: avg(rows.filter(r => r.fimMin).map(r => r.fimMin)),
+      pctFoto: rows.filter(r => r.fotoInicio && r.fotoFim).length / rows.length * 100,
+      kmProblemas: rows.filter(r => r.kmAnomalia).length
+    })).sort((a, b) => b.avgFim - a.avgFim);
+
+    return `Contexto dos dados operacionais (Orgânico do Chico - entregadores):
+    
+HOJE (${new Date().toLocaleDateString('pt-BR')}):
+- Total de rotas: ${hoje.length}
+- Sem foto: ${semFoto.length} entregadores (${semFoto.map(d=>d.entregador).join(', ') || 'nenhum'})
+- KM suspeitas hoje: ${hoje.filter(d=>d.kmAnomalia).length}
+
+ÚLTIMAS 2 SEMANAS (entregadores próprios):
+- Custo médio por pedido: R$ ${avgCustoSemana.toFixed(2)}
+- KM suspeitas: ${kmAnomSemana.length} ocorrências
+
+RANKING POR HORÁRIO DE FIM (médio):
+${entStats.slice(0,5).map((e,i) => `${i+1}. ${e.ent}: ${minutosParaHora(e.avgFim) || '--'}, ${e.pctFoto.toFixed(0)}% fotos, ${e.kmProblemas} KM suspeitas`).join('\n')}
+
+USO LALAMOVE (últimas 2 semanas): ${data.filter(d=>d.isLalamove && d.diasAtras<=13).length} usos`;
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput('');
+    setMessages(m => [...m, { role: 'user', content: userMsg }]);
+    setLoading(true);
+
+    try {
+      const context = buildContext();
+      const response = await fetch('/api/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _aiChat: true, context, question: userMsg, messages: messages.slice(-4) })
+      });
+
+      // Try Anthropic API directly
+      const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          system: `Você é um assistente analítico para operações de entregas de um delivery de orgânicos (Orgânico do Chico). Analise os dados fornecidos e responda em português, de forma clara, direta e útil. Foque em insights práticos e acionáveis. Use emojis quando apropriado para facilitar a leitura.`,
+          messages: [
+            ...messages.slice(-4).map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: `Contexto dos dados:\n${context}\n\nPergunta: ${userMsg}` }
+          ]
+        })
+      });
+
+      const apiData = await apiRes.json();
+      const reply = apiData.content?.[0]?.text || 'Desculpe, não consegui processar a resposta.';
+      setMessages(m => [...m, { role: 'assistant', content: reply }]);
+    } catch (e) {
+      setMessages(m => [...m, { role: 'assistant', content: '⚠️ Não foi possível conectar com a IA agora. Verifique sua conexão.' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return React.createElement('div', { className: 'modal-overlay', onClick: e => { if (e.target === e.currentTarget) onClose(); } },
+    React.createElement('div', { className: 'modal' },
+      React.createElement('div', { className: 'modal-header' },
+        React.createElement('div', { className: 'modal-title' }, '✨ Análise com IA'),
+        React.createElement('button', { className: 'modal-close', onClick: onClose }, '×')
+      ),
+      React.createElement('div', { className: 'modal-body', ref: messagesRef },
+        messages.map((m, i) =>
+          React.createElement('div', { key: i, className: `ai-msg ${m.role}` },
+            React.createElement('div', { style: { whiteSpace: 'pre-line' } }, m.content)
+          )
+        ),
+        loading && React.createElement('div', { className: 'ai-msg loading' }, '⏳ Analisando dados...')
+      ),
+      React.createElement('div', { className: 'modal-input' },
+        React.createElement('input', {
+          placeholder: 'Ex: Quem termina mais tarde?',
+          value: input,
+          onChange: e => setInput(e.target.value),
+          onKeyDown: e => e.key === 'Enter' && sendMessage(),
+          disabled: loading
+        }),
+        React.createElement('button', { onClick: sendMessage, disabled: loading || !input.trim() }, '→')
+      )
+    )
+  );
+}
+
+// ===================== MAIN APP =====================
+function App() {
+  const [tab, setTab] = useState('hoje');
+  const [data, setData] = useState(MOCK_DATA);
+  const [showAI, setShowAI] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+  const [loading, setLoading] = useState(false);
+  const [usingMock, setUsingMock] = useState(true);
+
+  const refresh = () => {
+    setLoading(true);
+    setTimeout(() => {
+      setLastUpdate(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      setLoading(false);
+    }, 800);
+  };
+
+  const tabs = [
+    { id: 'hoje', label: 'Hoje', icon: '📋' },
+    { id: 'tendencias', label: 'Tendências', icon: '📈' },
+    { id: 'entregadores', label: 'Entregadores', icon: '👥' },
+    { id: 'km', label: 'KM Suspeitas', icon: '🛣️' },
+  ];
+
+  return React.createElement('div', { className: 'shell' },
+    React.createElement('header', { className: 'header' },
+      React.createElement('div', { className: 'logo' },
+        React.createElement('div', { className: 'logo-dot' }),
+        React.createElement('div', null,
+          React.createElement('div', { className: 'logo-text' }, 'Painel Operacional'),
+          React.createElement('div', { className: 'logo-sub' }, 'Orgânico do Chico')
+        )
+      ),
+      React.createElement('div', { className: 'header-right' },
+        usingMock && React.createElement('div', { style: { fontSize: 10, color: 'var(--orange)', fontFamily: 'var(--mono)', background: 'var(--orange-soft)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,159,67,0.2)' } }, 'DEMO'),
+        React.createElement('div', { className: 'last-update' }, `Atualizado ${lastUpdate}`),
+        React.createElement('button', { className: 'refresh-btn', onClick: refresh },
+          loading ? '⟳' : '↻',
+          'Atualizar'
+        )
+      )
+    ),
+
+    React.createElement('nav', { className: 'tabs' },
+      tabs.map(t =>
+        React.createElement('div', {
+          key: t.id,
+          className: `tab ${tab === t.id ? 'active' : ''}`,
+          onClick: () => setTab(t.id)
+        },
+          React.createElement('span', { className: 'tab-icon' }, t.icon),
+          t.label
+        )
+      )
+    ),
+
+    React.createElement('main', { className: 'content' },
+      tab === 'hoje' && React.createElement(TabHoje, { data }),
+      tab === 'tendencias' && React.createElement(TabTendencias, { data }),
+      tab === 'entregadores' && React.createElement(TabEntregadores, { data }),
+      tab === 'km' && React.createElement(TabKM, { data }),
+    ),
+
+    React.createElement('button', { className: 'ai-fab', onClick: () => setShowAI(true) },
+      '✨', 'Perguntar à IA'
+    ),
+
+    showAI && React.createElement(AIModal, { onClose: () => setShowAI(false), data })
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
