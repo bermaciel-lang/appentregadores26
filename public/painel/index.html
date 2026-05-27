@@ -155,6 +155,19 @@ tr:hover td{background:var(--bg)}
 
 /* ====== DEMO BANNER ====== */
 .demo-bar{background:var(--yellow-bg);border-bottom:1px solid rgba(164,124,0,.2);padding:8px 20px;font-size:11px;color:var(--yellow);font-weight:600;text-align:center;font-family:var(--mono)}
+
+/* ====== PERIOD BAR (filtro de período global) ====== */
+.period-bar{background:var(--white);border-bottom:1px solid var(--line);padding:8px 20px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.period-label{font-size:10px;font-weight:700;color:var(--ink2);letter-spacing:.1em;margin-right:6px}
+.period-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--white);color:var(--ink2);font-size:12px;font-weight:600;font-family:var(--mono);transition:.15s}
+.period-btn:hover{background:var(--bg);color:var(--ink)}
+.period-btn.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+/* ====== SORTABLE HEADERS (clique pra ordenar) ====== */
+th.sortable{cursor:pointer;user-select:none;transition:.15s}
+th.sortable:hover{color:var(--ink);background:var(--bg)}
+.sort-arrow{display:inline-block;margin-left:4px;font-size:10px;color:var(--line);transition:.15s}
+th.sortable.sorted .sort-arrow{color:var(--ink)}
 </style>
 </head>
 <body>
@@ -178,7 +191,14 @@ tr:hover td{background:var(--bg)}
   <button class="tab-btn" onclick="showTab('tendencias',this)">📈 Tendências</button>
   <button class="tab-btn" onclick="showTab('entregadores',this)">👥 Entregadores</button>
   <button class="tab-btn" onclick="showTab('km',this)">🛣️ KM</button>
-  <button class="tab-btn" onclick="showTab('lalamove',this)">🚐 Lalamove</button>
+</div>
+
+<div class="period-bar">
+  <span class="period-label">PERÍODO:</span>
+  <button class="period-btn" onclick="setPeriodo(7,this)">7 dias</button>
+  <button class="period-btn active" onclick="setPeriodo(14,this)">14 dias</button>
+  <button class="period-btn" onclick="setPeriodo(28,this)">28 dias</button>
+  <button class="period-btn" onclick="setPeriodo(91,this)">91 dias</button>
 </div>
 
 <!-- ======== TAB HOJE ======== -->
@@ -240,12 +260,19 @@ tr:hover td{background:var(--bg)}
     <div class="chart-wrap tall"><canvas id="chartEntHorario"></canvas></div>
   </div>
   <div class="card">
-    <div class="card-head"><div class="card-title">📊 Comparativo por entregador</div></div>
+    <div class="card-head"><div class="card-title">📊 Comparativo por entregador</div><div class="card-badge">clique no cabeçalho pra ordenar</div></div>
     <div class="tbl-wrap">
-      <table>
+      <table id="tblEnt">
         <thead><tr>
-          <th>Entregador</th><th>Início médio</th><th>Fim médio</th>
-          <th>% Foto</th><th>Custo/pedido</th><th>KM suspeitas</th><th>Situação</th>
+          <th class="sortable" data-sort="ent">Entregador<span class="sort-arrow">↕</span></th>
+          <th class="sortable" data-sort="avgIni">Início médio<span class="sort-arrow">↕</span></th>
+          <th class="sortable sorted" data-sort="avgFim">Fim médio<span class="sort-arrow">↑</span></th>
+          <th class="sortable" data-sort="pctFoto">% Foto<span class="sort-arrow">↕</span></th>
+          <th class="sortable" data-sort="avgCusto">Custo/pedido<span class="sort-arrow">↕</span></th>
+          <th class="sortable" data-sort="kmAnom">KM suspeitas<span class="sort-arrow">↕</span></th>
+          <th class="sortable" data-sort="kmExtra">KM extra<span class="sort-arrow">↕</span></th>
+          <th class="sortable" data-sort="kmExtraPct">KM extra %<span class="sort-arrow">↕</span></th>
+          <th>Situação</th>
         </tr></thead>
         <tbody id="tbodyEnt"></tbody>
       </table>
@@ -257,7 +284,7 @@ tr:hover td{background:var(--bg)}
 <div class="page" id="tab-km">
   <div class="card">
     <div class="card-head">
-      <div class="card-title">🏆 Mais KM suspeitas (60 dias)</div>
+      <div class="card-title">🏆 Mais KM suspeitas no período</div>
     </div>
     <div id="rankingKm"></div>
   </div>
@@ -278,27 +305,6 @@ tr:hover td{background:var(--bg)}
   </div>
 </div>
 
-<!-- ======== TAB LALAMOVE ======== -->
-<div class="page" id="tab-lalamove">
-  <div class="g3" id="kpisLala"></div>
-  <div class="card">
-    <div class="card-head"><div class="card-title">🚐 Usos por semana</div></div>
-    <div class="chart-wrap"><canvas id="chartLala"></canvas></div>
-  </div>
-  <div class="card">
-    <div class="card-head">
-      <div class="card-title">📋 Histórico de usos (60 dias)</div>
-    </div>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr>
-          <th>Data</th><th>Turno</th><th>Entregador</th><th>Qtde</th><th>Custo</th>
-        </tr></thead>
-        <tbody id="tbodyLala"></tbody>
-      </table>
-    </div>
-  </div>
-</div>
 </div><!-- /shell -->
 
 <script>
@@ -313,7 +319,19 @@ const USE_DEMO = false; // dados reais via Apps Script
 // ============================================================
 let DATA = [];
 let TURNO_FILTRO = 'TODOS';
+let PERIODO_DIAS = 14;       // janela analítica padrão (botões: 7/14/28/91)
+let SORT_FIELD = 'avgFim';   // coluna ordenada na tabela Entregadores
+let SORT_DIR = 'asc';        // 'asc' | 'desc'
 let charts = {};
+
+// ============================================================
+// EXCLUSÃO FIXA: Lala* e Entregas CD nunca aparecem em comparativos
+// ============================================================
+function isExcluido(ent) {
+  if (!ent) return false;
+  const e = String(ent).toLowerCase();
+  return e.includes('lala') || e.includes('entregas cd');
+}
 
 // ============================================================
 // HELPERS
@@ -456,6 +474,8 @@ async function loadData() {
       }));
       document.getElementById('demoBanner').style.display = 'none';
     }
+    // Exclusão fixa de Lala* e Entregas CD em toda análise (aplica em demo e real)
+    DATA = DATA.filter(d => !isExcluido(d.entregador));
     document.getElementById('updateTime').textContent = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     renderAll();
   } catch(e) {
@@ -474,7 +494,38 @@ function renderAll() {
   renderTendencias();
   renderEntregadores();
   renderKM();
-  renderLalamove();
+}
+
+// ============================================================
+// SETTERS DE FILTRO GLOBAL
+// ============================================================
+function setPeriodo(dias, el) {
+  PERIODO_DIAS = dias;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderAll();
+}
+
+function setSort(field) {
+  if (SORT_FIELD === field) {
+    SORT_DIR = SORT_DIR === 'asc' ? 'desc' : 'asc';
+  } else {
+    SORT_FIELD = field;
+    SORT_DIR = 'asc';
+  }
+  renderEntregadores();
+}
+
+// Comparador genérico que põe nulos no fim
+function cmpField(a, b, field, dir) {
+  const va = a[field], vb = b[field];
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  if (typeof va === 'string') {
+    return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  }
+  return dir === 'asc' ? va - vb : vb - va;
 }
 
 // ============================================================
@@ -547,15 +598,16 @@ function renderHoje() {
 // TAB TENDÊNCIAS
 // ============================================================
 function renderTendencias() {
-  // Build weekly buckets
+  // Build weekly buckets (filtra por período; Lala/CD já removidos do DATA)
+  const numSemanas = Math.max(1, Math.ceil(PERIODO_DIAS / 7));
   const byWeek = {};
-  DATA.filter(r => !r.isLalamove).forEach(r => {
+  DATA.filter(r => r.diasAtras <= PERIODO_DIAS).forEach(r => {
     const s = r.semana;
     if (!byWeek[s]) byWeek[s] = [];
     byWeek[s].push(r);
   });
 
-  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,8).reverse();
+  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,numSemanas).reverse();
   const wLabels = weeks.map(s => s===0?'Esta sem':`S-${s}`);
 
   const fimManha = weeks.map(s => {
@@ -631,7 +683,8 @@ function setTurno(t, el) {
 }
 
 function renderEntregadores() {
-  const base = DATA.filter(r => !r.isLalamove && r.diasAtras <= 13);
+  // Aplica filtro de período + turno (Lala/CD já foram removidos do DATA na carga)
+  const base = DATA.filter(r => r.diasAtras <= PERIODO_DIAS);
   const filtered = TURNO_FILTRO === 'TODOS' ? base : base.filter(r => r.turno === TURNO_FILTRO);
   const byEnt = groupBy(filtered, 'entregador');
 
@@ -639,6 +692,16 @@ function renderEntregadores() {
     const comIni = rows.filter(r=>r.inicioMin!=null);
     const comFim = rows.filter(r=>r.fimMin!=null);
     const comFoto = rows.filter(r=>r.fotoInicio&&r.fotoFim);
+
+    // KM extra: soma de diferencaKm > 0 (entregador rodou mais que o previsto)
+    // Fallback: se Apps Script ainda não retorna diferencaKm, deriva de (kmConsiderado - kmCalc).
+    const kmExtraSum = rows.reduce((s, r) => {
+      const diff = r.diferencaKm != null ? r.diferencaKm : ((r.kmConsiderado || 0) - (r.kmCalc || 0));
+      return s + (diff > 0 ? diff : 0);
+    }, 0);
+    // KM referência total no período (para calcular o %)
+    const kmRefSum = rows.reduce((s, r) => s + Math.max(r.kmCalc || 0, r.kmSimp || 0), 0);
+
     return {
       ent,
       avgIni: comIni.length ? avg(comIni.map(r=>r.inicioMin)) : null,
@@ -646,10 +709,30 @@ function renderEntregadores() {
       pctFoto: rows.length ? comFoto.length/rows.length*100 : 0,
       kmAnom: rows.filter(r=>r.kmAnomalia).length,
       avgCusto: avg(rows.filter(r=>r.custoPedido>0).map(r=>r.custoPedido)),
+      kmExtra: kmExtraSum,
+      kmExtraPct: kmRefSum > 0 ? (kmExtraSum / kmRefSum * 100) : 0,
     };
-  }).sort((a,b) => (a.avgFim||0)-(b.avgFim||0));
+  });
 
-  // Chart horário
+  // Ordenação dinâmica conforme cabeçalho clicado
+  stats.sort((a,b) => cmpField(a, b, SORT_FIELD, SORT_DIR));
+
+  // Atualiza setas e classe "sorted" nos cabeçalhos
+  document.querySelectorAll('#tblEnt th.sortable').forEach(th => {
+    const f = th.getAttribute('data-sort');
+    const arrow = th.querySelector('.sort-arrow');
+    if (f === SORT_FIELD) {
+      th.classList.add('sorted');
+      arrow.textContent = SORT_DIR === 'asc' ? '↑' : '↓';
+    } else {
+      th.classList.remove('sorted');
+      arrow.textContent = '↕';
+    }
+    // Liga o click (idempotente)
+    th.onclick = () => setSort(f);
+  });
+
+  // Chart horário (segue mesma ordem da tabela)
   makeBarChart('chartEntHorario',
     stats.map(s=>s.ent.split(' ')[0]),
     [
@@ -659,17 +742,22 @@ function renderEntregadores() {
     v => minToHora(v)
   );
 
-  // Table
-  document.getElementById('tbodyEnt').innerHTML = stats.map(s => {
+  // Tabela
+  document.getElementById('tbodyEnt').innerHTML = stats.length === 0
+    ? `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--ink2)">Sem dados no período (${PERIODO_DIAS} dias)</td></tr>`
+    : stats.map(s => {
     const issues = [];
     if (s.pctFoto < 80) issues.push('fotos');
     if (s.kmAnom > 2) issues.push('KM');
+    if (s.kmExtraPct > 15) issues.push('KM extra');
     const sit = issues.length === 0
       ? `<span class="badge green">✓ OK</span>`
       : `<span class="badge orange">⚠ ${issues.join(', ')}</span>`;
     const fimColor = s.avgFim > (TURNO_FILTRO==='TARDE'?1080:720) ? 'color:var(--red)' : 'color:var(--orange)';
     const fotoPct = Math.round(s.pctFoto);
     const fotoColor = fotoPct>=90?'var(--green)':fotoPct>=70?'var(--orange)':'var(--red)';
+    // Cores de KM extra: até 5%=verde, 5-15%=laranja, >15%=vermelho
+    const kmExtraColor = s.kmExtraPct < 5 ? 'var(--green)' : s.kmExtraPct < 15 ? 'var(--orange)' : 'var(--red)';
     return `<tr>
       <td style="font-weight:600">${s.ent}</td>
       <td style="font-family:var(--mono);font-size:11.5px;color:var(--blue)">${s.avgIni!=null?minToHora(s.avgIni):'—'}</td>
@@ -682,6 +770,8 @@ function renderEntregadores() {
       </td>
       <td style="font-family:var(--mono);font-size:11.5px">${s.avgCusto!=null?fmtR(s.avgCusto):'—'}</td>
       <td>${s.kmAnom>0?`<span class="badge yellow">${s.kmAnom}x</span>`:`<span class="badge green">0</span>`}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:${kmExtraColor}">${s.kmExtra>0?`+${fmt(s.kmExtra)} km`:'—'}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:${kmExtraColor}">${s.kmExtra>0?`+${fmt(s.kmExtraPct,1)}%`:'—'}</td>
       <td>${sit}</td>
     </tr>`;
   }).join('');
@@ -691,8 +781,10 @@ function renderEntregadores() {
 // TAB KM
 // ============================================================
 function renderKM() {
-  const anomalias = DATA.filter(r => r.kmAnomalia).sort((a,b)=>a.diasAtras-b.diasAtras).slice(0, 50);
-  document.getElementById('badgeKm').textContent = `${anomalias.length} ocorrências (60 dias)`;
+  // Filtra por período global (Lala/CD já removidos do DATA na carga)
+  const anomalias = DATA.filter(r => r.kmAnomalia && r.diasAtras <= PERIODO_DIAS)
+                        .sort((a,b)=>a.diasAtras-b.diasAtras).slice(0, 50);
+  document.getElementById('badgeKm').textContent = `${anomalias.length} ocorrências (${PERIODO_DIAS} dias)`;
 
   // Ranking
   const byEnt = groupBy(anomalias, 'entregador');
@@ -725,37 +817,6 @@ function renderKM() {
       <td><span class="badge yellow">+${fmt(pct,0)}%</span></td>
     </tr>`;
   }).join('');
-}
-
-// ============================================================
-// TAB LALAMOVE
-// ============================================================
-function renderLalamove() {
-  const all = DATA.filter(r => r.isLalamove);
-  const last30 = all.filter(r => r.diasAtras <= 29);
-  const prev30 = all.filter(r => r.diasAtras > 29 && r.diasAtras <= 59);
-  const delta = last30.length - prev30.length;
-
-  const custoTotal30 = last30.reduce((a,r) => a + (r.custoPedido * r.qtde || 0), 0);
-  const byWeek = groupBy(all.filter(r=>r.diasAtras<=55), r => r.semana);
-  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>b-a).slice(0,8).reverse();
-
-  document.getElementById('kpisLala').innerHTML = `
-    <div class="kpi ${last30.length>10?'red':'blue'}"><div class="kpi-accent"></div><div class="kpi-icon">🚐</div><div class="kpi-val">${last30.length}</div><div class="kpi-label">Usos (30 dias)</div><div class="kpi-trend ${delta>0?'bad':'good'}">${delta>0?'+':''}${delta} vs anterior</div></div>
-    <div class="kpi yellow"><div class="kpi-accent"></div><div class="kpi-icon">💰</div><div class="kpi-val">${fmtR(custoTotal30)}</div><div class="kpi-label">Custo 30 dias</div><div class="kpi-sub">${last30.length} usos</div></div>
-    <div class="kpi blue"><div class="kpi-accent"></div><div class="kpi-icon">📋</div><div class="kpi-val">${all.filter(r=>r.diasAtras<=6).length}</div><div class="kpi-label">Esta semana</div><div class="kpi-sub">usos lalamove</div></div>
-  `;
-
-  const lalaData = weeks.map(s => ({ sem: s===0?'Esta sem':`S-${s}`, count: (byWeek[s]||[]).length }));
-  makeBarChart('chartLala', lalaData.map(x=>x.sem), [{ label: 'Usos', data: lalaData.map(x=>x.count), color: '#d35400' }]);
-
-  document.getElementById('tbodyLala').innerHTML = all.slice(0,50).map(r => `<tr>
-    <td style="font-family:var(--mono);font-size:11px">${r.data}</td>
-    <td><span class="badge gray">${r.turno}</span></td>
-    <td style="font-weight:600">${r.entregador}</td>
-    <td style="font-family:var(--mono)">${r.qtde}</td>
-    <td style="font-family:var(--mono)">${fmtR(r.custoPedido * r.qtde)}</td>
-  </tr>`).join('');
 }
 
 // ============================================================
