@@ -664,7 +664,7 @@ async function handleFinalizarRota() {
   (function init() {
     if (redirectIfNoDriver()) return;
     driverTitle.textContent = state.driver;
-    driverNameText.textContent = state.driver;
+    if (driverNameText) driverNameText.textContent = state.driver; // pode não existir mais (removido o duplicado)
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
