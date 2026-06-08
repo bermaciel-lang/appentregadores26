@@ -29,13 +29,6 @@
 
     <main class="content">
       <section class="summary-card">
-        <div class="summary-row summary-row-mobile">
-          <div>
-            <div class="summary-title">Entregador selecionado</div>
-            <div class="summary-driver" id="driverNameText">-</div>
-          </div>
-        </div>
-
         <div class="toolbar stack-mobile">
   <button type="button" class="ghost-btn" id="btnTrocar">Trocar entregador</button>
   <button type="button" class="primary-btn" id="btnIniciarRota">Iniciar entregas</button>
@@ -44,6 +37,8 @@
 </div>
   <button type="button" class="ghost-btn" id="btnFinalizarRota">Finalizar rota</button>
 </div>
+
+        <div id="infoRota" class="info-rota"></div>
 
         <div class="footer-note" id="refreshInfo">Clique em “Iniciar entregas” para informar KM e foto antes de começar.</div>
         <div id="warningBox" class="warning-box hidden top-gap"></div>

@@ -269,7 +269,8 @@ async function carregarEntregasPorEntregador(entregador) {
     return {
       data: items,
       stale: false,
-      rotaIniciada: res.rotaIniciada || false
+      rotaIniciada: res.rotaIniciada || false,
+      rotaInfo: res.rotaInfo || null
     };
   } catch (error) {
     const cached = getFreshCache(cacheName) || readCache(cacheName);
@@ -304,6 +305,11 @@ async function carregarEntregasPorEntregador(entregador) {
 
 async function apiMarcarCancelado(row, obs) {
     return apiGet({ action: 'marcarCancelado', row, obs: obs || '' }, { retries: 3 });
+  }
+
+  // Corrige o KM inicial/final já registrado (tipo = 'inicial' | 'final').
+  async function apiEditarKm(entregador, tipo, km) {
+    return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km }, { retries: 3 });
   }
 
   // ===== Fila offline: se o envio falhar (sem sinal), guarda e reenvia sozinho =====
@@ -472,7 +478,8 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     gerarResumoEntregas,
     enfileirar,
     processarFila,
-    filaRowsPendentes
+    filaRowsPendentes,
+    apiEditarKm
 
   };
 })();

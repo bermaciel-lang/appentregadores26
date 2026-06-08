@@ -591,3 +591,61 @@ button, select, input, textarea {
 }
 
 .btn-cancelado { background: #d1d5db; color: #374151; }
+
+/* ===== Estados dos botões de rota (iniciar/finalizar) ===== */
+.primary-btn.route-success,
+.ghost-btn.route-success {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+}
+.ghost-btn.route-ready {
+  background: var(--orange);
+  color: #fff;
+  border-color: var(--orange);
+}
+/* Botão grande de Finalizar embaixo da lista */
+.btn-finalizar-bottom {
+  width: 100%;
+  margin-top: 14px;
+  background: var(--orange);
+  color: #fff;
+  border: none;
+  font-size: 16px;
+  font-weight: 800;
+  padding: 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.btn-finalizar-bottom.route-success { background: var(--green); }
+.btn-finalizar-bottom:disabled { opacity: .75; }
+/* Lembrete "marque finalizar" */
+.lembrete-finalizar {
+  margin-top: 14px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ===== Linhas de ações da entrega (2 / 3 / 2) ===== */
+.acoes { display: grid; gap: 10px; margin-top: 10px; }
+.acoes.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.acoes.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.acoes .action-btn { min-height: 48px; }
+.acoes.c3 .action-btn { font-size: 12px; padding: 8px 4px; }
+
+/* ===== Painel "o que foi registrado" (KM/foto) embaixo dos botões de rota ===== */
+.info-rota { margin-top: 12px; display: grid; gap: 8px; }
+.info-rota-linha {
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px;
+}
+.info-rota-linha .acoes-mini { display: flex; gap: 8px; flex-wrap: wrap; }
+.mini-btn {
+  background: #e8eefc; color: var(--primary); border: 1px solid #c7d6f7;
+  border-radius: 8px; padding: 6px 10px; font-weight: 700; font-size: 12px; cursor: pointer;
+}

@@ -6,6 +6,7 @@
     driver: savedDriver,
     refreshTimer: null,
     items: [],
+    rotaInfo: {}, // { kmInicial, kmFinal, fotoInicio, fotoFim, inicio, fim }
     sendingAction: false,
     enviando: null, // { row, act } -> mostra "Enviando..." no card
     sendingRouteAction: false,
@@ -90,8 +91,8 @@
     });
   }
 
-function pedirKm(mensagem) {
-  const raw = prompt(mensagem);
+function pedirKm(mensagem, valorAtual) {
+  const raw = prompt(mensagem, valorAtual || '');
 
   if (raw === null) return null; // cancelou -> aborta a ação
 
@@ -216,14 +217,16 @@ function pedirKm(mensagem) {
         ${obsHtml}
         ${statusBanner}
 
-<div class="action-grid">
+        <div class="acoes c2">
           <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}" ${dis}>🚚 Iniciar</button>
           <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}" ${dis}>💬 WhatsApp</button>
-          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}" ${dis}>${enviandoEsta && state.enviando.act === 'done' ? '⏳ Enviando…' : '✅ Entregue'}</button>
         </div>
-        <div class="action-grid action-grid-small">
-          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}" ${dis}>⛔ Cliente não recebeu</button>
+        <div class="acoes c3">
+          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}" ${dis}>${enviandoEsta && state.enviando.act === 'done' ? '⏳…' : '✅ Entregue'}</button>
           <button type="button" class="action-btn btn-cancelado" data-act="cancelado" data-row="${item.row}" ${dis}>✖ Cancelado</button>
+          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}" ${dis}>⛔ Não recebeu</button>
+        </div>
+        <div class="acoes c2">
           <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}" ${dis}>📍 Maps</button>
           <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}" ${dis}>🗺️ Waze</button>
         </div>
@@ -231,9 +234,86 @@ function pedirKm(mensagem) {
     `;
   }
 
+  // Uma entrega está "resolvida" se foi Entregue, Não entregue ou Cancelado.
+  // ("Indo para entrega" e vazio NÃO contam como resolvida.)
+  function statusResolvido(item) {
+    const s = String(item && item.status || '').toLowerCase();
+    return s.indexOf('entregue') >= 0 || s.indexOf('não entreg') >= 0 || s.indexOf('nao entreg') >= 0 || s.indexOf('cancel') >= 0;
+  }
+
+  // Cor + ✓ nos botões de Iniciar/Finalizar (topo) conforme o estado da rota.
+  function atualizarBotoesRota() {
+    const bi = document.getElementById('btnIniciarRota');
+    const bf = document.getElementById('btnFinalizarRota');
+    if (bi) {
+      if (state.rotaIniciada || state.rotaFinalizada) { bi.textContent = '✓ Rota iniciada'; bi.classList.add('route-success'); bi.disabled = true; }
+      else { bi.textContent = 'Iniciar entregas'; bi.classList.remove('route-success'); bi.disabled = false; }
+    }
+    if (bf) {
+      bf.classList.remove('route-ready', 'route-success');
+      if (state.rotaFinalizada) { bf.textContent = '✓ Rota finalizada'; bf.classList.add('route-success'); bf.disabled = true; }
+      else if (state.rotaIniciada) { bf.textContent = 'Finalizar rota'; bf.classList.add('route-ready'); bf.disabled = false; }
+      else { bf.textContent = 'Finalizar rota'; bf.disabled = false; }
+    }
+  }
+
+  // Painel "o que foi registrado" embaixo dos botões: KM + foto + editar/reenviar.
+  function renderInfoRota() {
+    const el = document.getElementById('infoRota');
+    if (!el) return;
+    const ri = state.rotaInfo || {};
+    const temInicio = !!(ri.inicio || ri.kmInicial || state.rotaIniciada || state.rotaFinalizada);
+    const temFim = !!(ri.fim || ri.kmFinal || state.rotaFinalizada);
+    if (!temInicio && !temFim) { el.innerHTML = ''; return; }
+
+    function linha(titulo, km, fotoOk, tipoKm, tipoFoto) {
+      return `<div class="info-rota-linha">
+        <span><b>${titulo}:</b> KM ${km ? api.esc(km) : '—'} · Foto ${fotoOk ? '✅ enviada' : '❌ não enviada'}</span>
+        <span class="acoes-mini">
+          <button type="button" class="mini-btn" data-info="km-${tipoKm}">✏️ Editar KM</button>
+          <button type="button" class="mini-btn" data-info="foto-${tipoFoto}">📷 ${fotoOk ? 'Reenviar' : 'Enviar'} foto</button>
+        </span>
+      </div>`;
+    }
+
+    let html = '';
+    if (temInicio) html += linha('Início registrado', ri.kmInicial, ri.fotoInicio, 'inicial', 'inicio');
+    if (temFim) html += linha('Fim registrado', ri.kmFinal, ri.fotoFim, 'final', 'fim');
+    el.innerHTML = html;
+  }
+
+  async function editarKm(tipo) { // 'inicial' | 'final'
+    const atual = tipo === 'final' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
+    const novo = pedirKm('Corrigir o KM ' + (tipo === 'final' ? 'final' : 'inicial') + ':', atual);
+    if (novo === null) return; // cancelou
+    try {
+      const res = await api.apiEditarKm(state.driver, tipo, novo);
+      if (!res || !res.ok) throw new Error();
+      alert('✅ KM atualizado na planilha.');
+      await carregarTudo(false);
+    } catch (e) { alert('❌ Não foi possível salvar o KM agora. Confira a conexão e tente de novo.'); }
+  }
+
+  async function reenviarFoto(tipo) { // 'inicio' | 'fim'
+    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
+    const foto = await pedirFotoObrigatoria();
+    if (!foto || !foto.base64) { alert('Nenhuma foto selecionada.'); return; }
+    try {
+      const res = tipo === 'fim'
+        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
+        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+      if (!res || !res.ok) throw new Error();
+      alert(res.semFoto ? '⚠️ A foto ainda não subiu — tente de novo com sinal melhor.' : '✅ Foto enviada.');
+      await carregarTudo(false);
+    } catch (e) { alert('❌ Não foi possível enviar a foto agora.'); }
+  }
+
   function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
     refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
+
+    atualizarBotoesRota();
+    renderInfoRota();
 
     if (!state.rotaIniciada) {
       sectionsRoot.innerHTML = '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
@@ -241,12 +321,25 @@ function pedirKm(mensagem) {
       return;
     }
 
+    // Lembrete quando todas as entregas estão marcadas (e a rota ainda não foi finalizada).
+    const todasMarcadas = state.items.length > 0 && state.items.every(statusResolvido);
+    const lembrete = (todasMarcadas && !state.rotaFinalizada)
+      ? '<div class="lembrete-finalizar">✅ Todas as entregas foram marcadas! Não esqueça de clicar em <b>FINALIZAR ROTA</b> 👇</div>'
+      : '';
+
+    // Botão grande de Finalizar embaixo da lista.
+    const fimEnviando = state.sendingRouteAction;
+    const fimTxt = state.rotaFinalizada ? '✓ Rota finalizada' : (fimEnviando ? '⏳ Enviando…' : '🏁 Finalizar rota');
+    const botaoFim = `<button type="button" class="btn-finalizar-bottom ${state.rotaFinalizada ? 'route-success' : ''}" data-route="finalizar" ${state.rotaFinalizada || fimEnviando ? 'disabled' : ''}>${fimTxt}</button>`;
+
     sectionsRoot.innerHTML = `
       <section class="section-card">
         <div class="delivery-list">
           ${state.items.map(renderEntregaCard).join('')}
         </div>
       </section>
+      ${lembrete}
+      ${botaoFim}
     `;
 
     sectionsRoot.classList.remove('hidden');
@@ -259,6 +352,7 @@ function pedirKm(mensagem) {
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
+      if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
 
       const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
       const assinaturaSalva = sessionStorage.getItem('rota_assinatura_' + state.driver);
@@ -397,6 +491,7 @@ async function handleFinalizarRota() {
   loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
   loadingRota.classList.remove('hidden');
   btnFinalizarRota.disabled = true;
+  renderList(); // o botão de baixo mostra "⏳ Enviando…"
 
   try {
     const res = await api.apiFinalizarRota(
@@ -417,14 +512,16 @@ async function handleFinalizarRota() {
     sessionStorage.removeItem('rota_assinatura_' + state.driver);
 
     await carregarTudo(false);
-    alert('Rota finalizada com sucesso.');
+    if (res.semFoto) alert('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.');
+    else alert('Rota finalizada com sucesso. ✓');
   } catch (error) {
     console.error(error);
-    alert('Não foi possível finalizar a rota.');
+    alert('Não foi possível finalizar a rota. Tente de novo.');
   } finally {
     loadingRota.classList.add('hidden');
     btnFinalizarRota.disabled = false;
     state.sendingRouteAction = false;
+    renderList();
   }
 }
 
@@ -530,7 +627,19 @@ async function handleFinalizarRota() {
     carregarTudo(true); // mostra "Carregando…" como feedback de que clicou
   });
 
+  document.getElementById('infoRota').addEventListener('click', function (event) {
+    const btn = event.target.closest('button[data-info]');
+    if (!btn) return;
+    const acao = btn.getAttribute('data-info');
+    if (acao === 'km-inicial') editarKm('inicial');
+    else if (acao === 'km-final') editarKm('final');
+    else if (acao === 'foto-inicio') reenviarFoto('inicio');
+    else if (acao === 'foto-fim') reenviarFoto('fim');
+  });
+
   sectionsRoot.addEventListener('click', function (event) {
+    const fin = event.target.closest('button[data-route="finalizar"]');
+    if (fin) { handleFinalizarRota(); return; }
     const btn = event.target.closest('button[data-act]');
     if (!btn) return;
     handleAction(btn.getAttribute('data-act'), Number(btn.getAttribute('data-row')));
@@ -555,7 +664,7 @@ async function handleFinalizarRota() {
   (function init() {
     if (redirectIfNoDriver()) return;
     driverTitle.textContent = state.driver;
-    driverNameText.textContent = state.driver;
+    if (driverNameText) driverNameText.textContent = state.driver; // pode não existir mais (removido o duplicado)
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
