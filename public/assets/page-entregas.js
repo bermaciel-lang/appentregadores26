@@ -422,7 +422,7 @@ function pedirKm(mensagem, valorAtual) {
       return;
     }
 
-    const km = pedirKm('Digite a quilometragem inicial do carro (pode deixar em branco se não der):');
+    const km = pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // só aborta se cancelar
 
     // Foto NÃO bloqueia: se não der pra tirar, a rota inicia mesmo assim.
@@ -478,7 +478,7 @@ async function handleFinalizarRota() {
     return;
   }
 
-  const km = pedirKm('Digite a quilometragem final do carro (pode deixar em branco se não der):');
+  const km = pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
   if (km === null) return; // só aborta se cancelar
 
   // Foto NÃO bloqueia: se não der pra tirar, a rota finaliza mesmo assim.
