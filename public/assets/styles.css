@@ -663,3 +663,7 @@ button, select, input, textarea {
   background: #e8eefc; color: var(--primary); border: 1px solid #c7d6f7;
   border-radius: 8px; padding: 6px 10px; font-weight: 700; font-size: 12px; cursor: pointer;
 }
+
+/* Cabeçalho da Tela do entregador mais enxuto (tiramos o nome e a seta, sobrava muito azul) */
+.hero-dark { padding-top: 16px; padding-bottom: 16px; }
+.hero-dark .topbar-title { font-size: 20px; }
