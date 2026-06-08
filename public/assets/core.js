@@ -288,20 +288,52 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 }
 
+  // Escritas de status: 3 tentativas (rede de celular oscila). É seguro repetir
+  // porque marcar a mesma linha de novo grava o mesmo valor (não duplica nada).
   async function apiIniciarEntrega(row) {
-    return apiGet({ action: 'iniciarEntrega', row }, { retries: 0 });
+    return apiGet({ action: 'iniciarEntrega', row }, { retries: 3 });
   }
 
   async function apiMarcarEntregue(row, obs) {
-    return apiGet({ action: 'marcarEntregue', row, obs: obs || '' }, { retries: 0 });
+    return apiGet({ action: 'marcarEntregue', row, obs: obs || '' }, { retries: 3 });
   }
 
   async function apiMarcarNaoEntregue(row, obs) {
-    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 0 });
+    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 3 });
   }
 
 async function apiMarcarCancelado(row, obs) {
-    return apiGet({ action: 'marcarCancelado', row, obs: obs || '' }, { retries: 0 });
+    return apiGet({ action: 'marcarCancelado', row, obs: obs || '' }, { retries: 3 });
+  }
+
+  // ===== Fila offline: se o envio falhar (sem sinal), guarda e reenvia sozinho =====
+  function filaKey() { return C.STORAGE_CACHE_PREFIX + 'fila_v1'; }
+  function filaLer() { try { return JSON.parse(localStorage.getItem(filaKey()) || '[]'); } catch (e) { return []; } }
+  function filaSalvar(arr) { localStorage.setItem(filaKey(), JSON.stringify(Array.isArray(arr) ? arr : [])); }
+  function enfileirar(params, meta) {
+    const arr = filaLer();
+    arr.push({ id: String(Date.now()) + '_' + Math.random().toString(36).slice(2, 7), params: params, meta: meta || {}, ts: Date.now() });
+    filaSalvar(arr);
+  }
+  function filaRowsPendentes() {
+    const set = new Set();
+    filaLer().forEach((x) => { const r = Number(x.meta && x.meta.row); if (r) set.add(r); });
+    return set;
+  }
+  let _processandoFila = false;
+  async function processarFila() {
+    if (_processandoFila) return;
+    _processandoFila = true;
+    try {
+      const arr = filaLer();
+      for (const item of arr.slice()) {
+        try {
+          const res = await apiGet(item.params, { retries: 1 });
+          if (res && res.ok) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); }
+          else break; // ainda falhando -> tenta depois
+        } catch (e) { break; } // sem conexão -> tenta depois
+      }
+    } finally { _processandoFila = false; }
   }
 
   async function abrirWhatsapp(row) {
@@ -332,26 +364,38 @@ async function apiMarcarCancelado(row, obs) {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  // Tenta com foto via POST
-  try {
-    const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
-    if (res && res.ok) return res;
-  } catch (e) { /* POST falhou */ }
-
-  // Plano B: salva pelo menos KM e hora via GET (sem foto)
+  // Com foto: tenta o POST 2x antes de desistir da foto.
+  if (fotoBase64) {
+    for (let i = 0; i < 2; i += 1) {
+      try {
+        const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
+        if (res && res.ok) return res;
+      } catch (e) { /* tenta de novo */ }
+      await sleep(800 * (i + 1));
+    }
+    // Não subiu com foto: salva o KM e AVISA que a foto não foi (sem fingir sucesso).
+    const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial }, { retries: 1 });
+    if (res && res.ok) return Object.assign({}, res, { semFoto: true });
+    throw new Error((res && res.error) || 'Falha ao iniciar rota');
+  }
   const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial }, { retries: 1 });
   if (res && res.ok) return res;
   throw new Error((res && res.error) || 'Falha ao iniciar rota');
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  // Tenta com foto via POST
-  try {
-    const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
-    if (res && res.ok) return res;
-  } catch (e) { /* POST falhou */ }
-
-  // Plano B: salva pelo menos KM e hora via GET (sem foto)
+  if (fotoBase64) {
+    for (let i = 0; i < 2; i += 1) {
+      try {
+        const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
+        if (res && res.ok) return res;
+      } catch (e) { /* tenta de novo */ }
+      await sleep(800 * (i + 1));
+    }
+    const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal }, { retries: 1 });
+    if (res && res.ok) return Object.assign({}, res, { semFoto: true });
+    throw new Error((res && res.error) || 'Falha ao finalizar rota');
+  }
   const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal }, { retries: 1 });
   if (res && res.ok) return res;
   throw new Error((res && res.error) || 'Falha ao finalizar rota');
@@ -425,7 +469,10 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     apiIniciarRota,
     apiFinalizarRota,
     apiMarcarCancelado,
-    gerarResumoEntregas
+    gerarResumoEntregas,
+    enfileirar,
+    processarFila,
+    filaRowsPendentes
 
   };
 })();
