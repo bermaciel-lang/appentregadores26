@@ -7,6 +7,7 @@
     refreshTimer: null,
     items: [],
     sendingAction: false,
+    enviando: null, // { row, act } -> mostra "Enviando..." no card
     sendingRouteAction: false,
     rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
     rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
@@ -92,22 +93,20 @@
 function pedirKm(mensagem) {
   const raw = prompt(mensagem);
 
-  if (raw === null) return null;
+  if (raw === null) return null; // cancelou -> aborta a ação
 
   let value = String(raw).trim();
 
-  if (!value) {
-    alert('A quilometragem é obrigatória.');
-    return undefined;
-  }
+  // KM NÃO é obrigatório: se deixar vazio, segue sem registrar (não trava a rota).
+  if (!value) return '';
 
   // troca ponto por vírgula
   value = value.replace('.', ',');
 
-  // aceita apenas números inteiros ou decimais com vírgula
+  // se digitou algo que não é número, avisa mas SEGUE sem KM (não bloqueia).
   if (!/^\d+(,\d+)?$/.test(value)) {
-    alert('Digite somente números. Use vírgula para decimal. Exemplo: 12345 ou 12345,6');
-    return undefined;
+    alert('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.');
+    return '';
   }
 
   return value;
@@ -125,10 +124,12 @@ function pedirKm(mensagem) {
       document.body.appendChild(input);
 
       let resolved = false;
+      let gotFile = false; // marca assim que uma foto chega (evita o fallback descartá-la)
 
       input.addEventListener('change', async function () {
         if (resolved) return;
         const file = input.files && input.files[0];
+        if (file) gotFile = true; // <- ANTES de comprimir, pra o fallback não derrubar a foto boa
         if (input.parentNode) document.body.removeChild(input);
 
         if (!file) {
@@ -143,24 +144,25 @@ function pedirKm(mensagem) {
           resolve(result);
         } catch (error) {
           console.error(error);
-          alert('Não foi possível preparar a foto.');
+          alert('Não foi possível preparar a foto. Tente tirar de novo.');
           resolved = true;
           resolve(null);
         }
       });
 
-// Fallback: se o usuário fechar a câmera sem escolher foto (apenas não-iOS)
+// Fallback: só conclui "sem foto" se NENHUMA foto chegou (e com folga de tempo,
+// pra câmeras lentas não perderem a foto). Apenas não-iOS.
       const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (!isIOS) {
         window.addEventListener('focus', function onFocus() {
           window.removeEventListener('focus', onFocus);
           setTimeout(function () {
-            if (!resolved) {
+            if (!resolved && !gotFile) {
               resolved = true;
               if (input.parentNode) document.body.removeChild(input);
               resolve(null);
             }
-          }, 500);
+          }, 1500);
         });
       }
 
@@ -172,6 +174,14 @@ function pedirKm(mensagem) {
     const key = api.statusKey(item.status);
     const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
     const obsPedido = String(item.observacaoPedido || '').trim();
+
+    // Feedback visual: esta entrega está sendo enviada? ou aguardando reenvio (offline)?
+    const enviandoEsta = state.enviando && Number(state.enviando.row) === Number(item.row);
+    const pendente = !enviandoEsta && api.filaRowsPendentes && api.filaRowsPendentes().has(Number(item.row));
+    const dis = enviandoEsta ? 'disabled' : '';
+    const statusBanner = enviandoEsta
+      ? '<div class="delivery-meta" style="color:#92400e;font-weight:600;">⏳ Enviando, aguarde…</div>'
+      : (pendente ? '<div class="delivery-meta" style="color:#92400e;font-weight:600;">⏳ Aguardando envio (vai subir sozinho quando a internet voltar)</div>' : '');
 
     let obsHtml = '';
 
@@ -204,17 +214,18 @@ function pedirKm(mensagem) {
         </div>
 
         ${obsHtml}
+        ${statusBanner}
 
 <div class="action-grid">
-          <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}">🚚 Iniciar</button>
-          <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}">💬 WhatsApp</button>
-          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}">✅ Entregue</button>
+          <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}" ${dis}>🚚 Iniciar</button>
+          <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}" ${dis}>💬 WhatsApp</button>
+          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}" ${dis}>${enviandoEsta && state.enviando.act === 'done' ? '⏳ Enviando…' : '✅ Entregue'}</button>
         </div>
         <div class="action-grid action-grid-small">
-          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}">⛔ Cliente não recebeu</button>
-          <button type="button" class="action-btn btn-cancelado" data-act="cancelado" data-row="${item.row}">✖ Cancelado</button>
-          <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}">📍 Maps</button>
-          <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}">🗺️ Waze</button>
+          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}" ${dis}>⛔ Cliente não recebeu</button>
+          <button type="button" class="action-btn btn-cancelado" data-act="cancelado" data-row="${item.row}" ${dis}>✖ Cancelado</button>
+          <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}" ${dis}>📍 Maps</button>
+          <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}" ${dis}>🗺️ Waze</button>
         </div>
       </article>
     `;
@@ -316,11 +327,11 @@ function pedirKm(mensagem) {
       return;
     }
 
-    const km = pedirKm('Digite a quilometragem inicial do carro:');
-    if (km === null || km === undefined) return;
+    const km = pedirKm('Digite a quilometragem inicial do carro (pode deixar em branco se não der):');
+    if (km === null) return; // só aborta se cancelar
 
+    // Foto NÃO bloqueia: se não der pra tirar, a rota inicia mesmo assim.
     const foto = await pedirFotoObrigatoria();
-
 
     state.sendingRouteAction = true;
 const loadingRota = document.getElementById('loadingRota');
@@ -345,7 +356,8 @@ btnIniciarRota.disabled = true;
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
 
       await carregarTudo(false);
-      alert('Rota iniciada com sucesso.');
+      if (res.semFoto) alert('Rota iniciada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, inicie a rota de novo só pra enviar a foto, ou avise o supervisor.');
+      else alert('Rota iniciada com sucesso.');
     } catch (error) {
       console.error(error);
       state.rotaIniciada = true;
@@ -371,9 +383,10 @@ async function handleFinalizarRota() {
     return;
   }
 
-  const km = pedirKm('Digite a quilometragem final do carro:');
-  if (km === null || km === undefined) return;
+  const km = pedirKm('Digite a quilometragem final do carro (pode deixar em branco se não der):');
+  if (km === null) return; // só aborta se cancelar
 
+  // Foto NÃO bloqueia: se não der pra tirar, a rota finaliza mesmo assim.
   const foto = await pedirFotoObrigatoria();
 
   state.sendingRouteAction = true;
@@ -426,86 +439,54 @@ async function handleFinalizarRota() {
       return;
     }
 
-    if (act === 'maps') {
-      try {
-        if (api.statusKey(item.status) !== 'start') {
-          const previous = updateLocalStatus(row, 'Indo para entrega');
-          const res = await api.apiIniciarEntrega(row);
-          if (!res || !res.ok) {
-            restoreLocalItem(row, previous);
-            throw new Error('Falha ao iniciar');
-          }
-        }
-        openSameTab(api.buildMapsUrl(item));
-      } catch (error) {
-        console.error(error);
-        alert('Não foi possível iniciar e abrir o Maps.');
-      }
-      return;
-    }
-
-    if (act === 'waze') {
-      try {
-        if (api.statusKey(item.status) !== 'start') {
-          const previous = updateLocalStatus(row, 'Indo para entrega');
-          const res = await api.apiIniciarEntrega(row);
-          if (!res || !res.ok) {
-            restoreLocalItem(row, previous);
-            throw new Error('Falha ao iniciar');
-          }
-        }
-        openSameTab(api.buildWazeUrl(item));
-      } catch (error) {
-        console.error(error);
-        alert('Não foi possível iniciar e abrir o Waze.');
-      }
-      return;
-    }
-
-    if (act === 'whats') {
-      try {
-        await api.abrirWhatsapp(row);
-      } catch (error) {
-        console.error(error);
-        alert('Não foi possível abrir o WhatsApp.');
-      }
-      return;
-    }
+    // Pergunta a observação ANTES de mostrar "Enviando…".
+    let nextStatus = null, obs;
+    if (act === 'done') { obs = prompt('Observação da entrega:') || ''; nextStatus = 'Entregue'; }
+    else if (act === 'fail') { obs = prompt('Motivo / observação:') || ''; nextStatus = 'Não entregue'; }
+    else if (act === 'cancelado') { obs = prompt('Motivo do cancelamento:') || ''; nextStatus = 'Cancelado'; }
+    else if (act === 'start') { nextStatus = 'Indo para entrega'; }
 
     state.sendingAction = true;
-    let previous = null;
+    state.enviando = { row: Number(row), act };
+    renderList(); // mostra "⏳ Enviando…" no card na hora
 
     try {
-      if (act === 'start') {
-        previous = updateLocalStatus(row, 'Indo para entrega');
-        const res = await api.apiIniciarEntrega(row);
-        if (!res || !res.ok) throw new Error('Falha ao iniciar');
-      } else if (act === 'done') {
-        const obs = prompt('Observação da entrega:') || '';
-        previous = updateLocalStatus(row, 'Entregue', obs);
-        const res = await api.apiMarcarEntregue(row, obs);
-        if (!res || !res.ok) throw new Error('Falha ao concluir');
-      } else if (act === 'fail') {
-        const obs = prompt('Motivo / observação:') || '';
-        previous = updateLocalStatus(row, 'Não entregue', obs);
-        const res = await api.apiMarcarNaoEntregue(row, obs);
-        if (!res || !res.ok) throw new Error('Falha ao marcar não entregue');
-      } else if (act === 'cancelado') {
-        const obs = prompt('Motivo do cancelamento:') || '';
-        previous = updateLocalStatus(row, 'Cancelado', obs);
-        const res = await api.apiMarcarCancelado(row, obs);
-        if (!res || !res.ok) throw new Error('Falha ao marcar cancelado');
+      // Maps/Waze: marca "indo" e abre o mapa (navega pra fora).
+      if (act === 'maps' || act === 'waze') {
+        if (api.statusKey(item.status) !== 'start') {
+          updateLocalStatus(row, 'Indo para entrega');
+          try { const r = await api.apiIniciarEntrega(row); if (!r || !r.ok) throw new Error('x'); }
+          catch (e) { api.enfileirar({ action: 'iniciarEntrega', row: row }, { row: Number(row) }); }
+        }
+        openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
+        return;
       }
 
-      window.setTimeout(function () {
-        carregarTudo(false);
-      }, 800);
+      if (act === 'whats') { await api.abrirWhatsapp(row); return; }
+
+      // Status (Iniciar / Entregue / Não entregue / Cancelado):
+      const params = act === 'start' ? { action: 'iniciarEntrega', row: row }
+        : act === 'done' ? { action: 'marcarEntregue', row: row, obs: obs || '' }
+        : act === 'fail' ? { action: 'marcarNaoEntregue', row: row, obs: obs || '' }
+        : { action: 'marcarCancelado', row: row, obs: obs || '' };
+
+      updateLocalStatus(row, nextStatus, obs); // já deixa marcado na tela
+      try {
+        const res = await api.apiGet(params, { retries: 3 });
+        if (!res || !res.ok) throw new Error('falhou');
+        window.setTimeout(function () { carregarTudo(false); }, 800);
+      } catch (e2) {
+        // NÃO desmarca: guarda na fila e reenvia sozinho quando a internet voltar.
+        api.enfileirar(params, { row: Number(row) });
+        alert('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").');
+      }
     } catch (error) {
       console.error(error);
-      restoreLocalItem(row, previous);
-      alert('Não foi possível concluir essa ação. Confira a conexão e tente de novo.');
+      alert('Não foi possível concluir essa ação. Tente de novo.');
     } finally {
       state.sendingAction = false;
+      state.enviando = null;
+      renderList();
     }
   }
 
@@ -513,6 +494,7 @@ async function handleFinalizarRota() {
     stopAutoRefresh();
     state.refreshTimer = window.setInterval(function () {
       if (document.visibilityState === 'visible') {
+        api.processarFila();
         carregarTudo(false);
       }
     }, window.APP_CONFIG.REFRESH_INTERVAL_MS);
@@ -544,7 +526,8 @@ async function handleFinalizarRota() {
   });
 
   document.getElementById('btnRefresh').addEventListener('click', function () {
-    carregarTudo(false);
+    api.processarFila();
+    carregarTudo(true); // mostra "Carregando…" como feedback de que clicou
   });
 
   sectionsRoot.addEventListener('click', function (event) {
@@ -555,8 +538,14 @@ async function handleFinalizarRota() {
 
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') {
+      api.processarFila();
       carregarTudo(false);
     }
+  });
+
+  // Quando a internet volta, reenvia o que ficou pendente na fila.
+  window.addEventListener('online', function () {
+    api.processarFila().then(function () { carregarTudo(false); });
   });
 
   window.addEventListener('beforeunload', function () {
@@ -567,6 +556,7 @@ async function handleFinalizarRota() {
     if (redirectIfNoDriver()) return;
     driverTitle.textContent = state.driver;
     driverNameText.textContent = state.driver;
+    api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
   })();
