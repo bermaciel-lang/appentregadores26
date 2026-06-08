@@ -15,10 +15,8 @@
     <header class="hero hero-dark">
       <div class="hero-inner topbar">
         <div class="topbar-left">
-          <button type="button" class="icon-btn" id="btnVoltar" aria-label="Voltar">←</button>
           <div>
-            <p class="hero-kicker no-margin">Tela do entregador</p>
-            <h1 class="topbar-title" id="driverTitle">Carregando...</h1>
+            <h1 class="topbar-title">Tela do entregador</h1>
           </div>
         </div>
         <div class="topbar-right">
@@ -29,6 +27,13 @@
 
     <main class="content">
       <section class="summary-card">
+        <div class="summary-row summary-row-mobile">
+          <div>
+            <div class="summary-title">Entregador</div>
+            <div class="summary-driver" id="driverNameText">-</div>
+          </div>
+        </div>
+
         <div class="toolbar stack-mobile">
   <button type="button" class="ghost-btn" id="btnTrocar">Trocar entregador</button>
   <button type="button" class="primary-btn" id="btnIniciarRota">Iniciar entregas</button>

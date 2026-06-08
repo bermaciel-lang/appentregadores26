@@ -602,10 +602,6 @@ async function handleFinalizarRota() {
     state.refreshTimer = null;
   }
 
-  document.getElementById('btnVoltar').addEventListener('click', function () {
-    window.location.href = '/';
-  });
-
   document.getElementById('btnTrocar').addEventListener('click', function () {
     sessionStorage.removeItem('rota_iniciada_' + state.driver);
     sessionStorage.removeItem('rota_finalizada_' + state.driver);
@@ -663,8 +659,8 @@ async function handleFinalizarRota() {
 
   (function init() {
     if (redirectIfNoDriver()) return;
-    driverTitle.textContent = state.driver;
-    if (driverNameText) driverNameText.textContent = state.driver; // pode não existir mais (removido o duplicado)
+    if (driverTitle) driverTitle.textContent = state.driver; // título virou fixo "Tela do entregador"
+    if (driverNameText) driverNameText.textContent = state.driver; // nome único, no cartão
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
