@@ -637,3 +637,15 @@ button, select, input, textarea {
 .acoes.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .acoes .action-btn { min-height: 48px; }
 .acoes.c3 .action-btn { font-size: 12px; padding: 8px 4px; }
+
+/* ===== Painel "o que foi registrado" (KM/foto) embaixo dos botões de rota ===== */
+.info-rota { margin-top: 12px; display: grid; gap: 8px; }
+.info-rota-linha {
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px;
+}
+.info-rota-linha .acoes-mini { display: flex; gap: 8px; flex-wrap: wrap; }
+.mini-btn {
+  background: #e8eefc; color: var(--primary); border: 1px solid #c7d6f7;
+  border-radius: 8px; padding: 6px 10px; font-weight: 700; font-size: 12px; cursor: pointer;
+}

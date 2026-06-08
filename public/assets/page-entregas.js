@@ -6,6 +6,7 @@
     driver: savedDriver,
     refreshTimer: null,
     items: [],
+    rotaInfo: {}, // { kmInicial, kmFinal, fotoInicio, fotoFim, inicio, fim }
     sendingAction: false,
     enviando: null, // { row, act } -> mostra "Enviando..." no card
     sendingRouteAction: false,
@@ -90,8 +91,8 @@
     });
   }
 
-function pedirKm(mensagem) {
-  const raw = prompt(mensagem);
+function pedirKm(mensagem, valorAtual) {
+  const raw = prompt(mensagem, valorAtual || '');
 
   if (raw === null) return null; // cancelou -> aborta a ação
 
@@ -256,11 +257,63 @@ function pedirKm(mensagem) {
     }
   }
 
+  // Painel "o que foi registrado" embaixo dos botões: KM + foto + editar/reenviar.
+  function renderInfoRota() {
+    const el = document.getElementById('infoRota');
+    if (!el) return;
+    const ri = state.rotaInfo || {};
+    const temInicio = !!(ri.inicio || ri.kmInicial || state.rotaIniciada || state.rotaFinalizada);
+    const temFim = !!(ri.fim || ri.kmFinal || state.rotaFinalizada);
+    if (!temInicio && !temFim) { el.innerHTML = ''; return; }
+
+    function linha(titulo, km, fotoOk, tipoKm, tipoFoto) {
+      return `<div class="info-rota-linha">
+        <span><b>${titulo}:</b> KM ${km ? api.esc(km) : '—'} · Foto ${fotoOk ? '✅ enviada' : '❌ não enviada'}</span>
+        <span class="acoes-mini">
+          <button type="button" class="mini-btn" data-info="km-${tipoKm}">✏️ Editar KM</button>
+          <button type="button" class="mini-btn" data-info="foto-${tipoFoto}">📷 ${fotoOk ? 'Reenviar' : 'Enviar'} foto</button>
+        </span>
+      </div>`;
+    }
+
+    let html = '';
+    if (temInicio) html += linha('Início registrado', ri.kmInicial, ri.fotoInicio, 'inicial', 'inicio');
+    if (temFim) html += linha('Fim registrado', ri.kmFinal, ri.fotoFim, 'final', 'fim');
+    el.innerHTML = html;
+  }
+
+  async function editarKm(tipo) { // 'inicial' | 'final'
+    const atual = tipo === 'final' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
+    const novo = pedirKm('Corrigir o KM ' + (tipo === 'final' ? 'final' : 'inicial') + ':', atual);
+    if (novo === null) return; // cancelou
+    try {
+      const res = await api.apiEditarKm(state.driver, tipo, novo);
+      if (!res || !res.ok) throw new Error();
+      alert('✅ KM atualizado na planilha.');
+      await carregarTudo(false);
+    } catch (e) { alert('❌ Não foi possível salvar o KM agora. Confira a conexão e tente de novo.'); }
+  }
+
+  async function reenviarFoto(tipo) { // 'inicio' | 'fim'
+    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
+    const foto = await pedirFotoObrigatoria();
+    if (!foto || !foto.base64) { alert('Nenhuma foto selecionada.'); return; }
+    try {
+      const res = tipo === 'fim'
+        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
+        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+      if (!res || !res.ok) throw new Error();
+      alert(res.semFoto ? '⚠️ A foto ainda não subiu — tente de novo com sinal melhor.' : '✅ Foto enviada.');
+      await carregarTudo(false);
+    } catch (e) { alert('❌ Não foi possível enviar a foto agora.'); }
+  }
+
   function renderList() {
     const resumo = api.gerarResumoEntregas(state.items);
     refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
 
     atualizarBotoesRota();
+    renderInfoRota();
 
     if (!state.rotaIniciada) {
       sectionsRoot.innerHTML = '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
@@ -299,6 +352,7 @@ function pedirKm(mensagem) {
     try {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
+      if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
 
       const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
       const assinaturaSalva = sessionStorage.getItem('rota_assinatura_' + state.driver);
@@ -571,6 +625,16 @@ async function handleFinalizarRota() {
   document.getElementById('btnRefresh').addEventListener('click', function () {
     api.processarFila();
     carregarTudo(true); // mostra "Carregando…" como feedback de que clicou
+  });
+
+  document.getElementById('infoRota').addEventListener('click', function (event) {
+    const btn = event.target.closest('button[data-info]');
+    if (!btn) return;
+    const acao = btn.getAttribute('data-info');
+    if (acao === 'km-inicial') editarKm('inicial');
+    else if (acao === 'km-final') editarKm('final');
+    else if (acao === 'foto-inicio') reenviarFoto('inicio');
+    else if (acao === 'foto-fim') reenviarFoto('fim');
   });
 
   sectionsRoot.addEventListener('click', function (event) {
