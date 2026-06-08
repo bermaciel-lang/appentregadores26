@@ -321,10 +321,11 @@ function pedirKm(mensagem, valorAtual) {
       return;
     }
 
-    // Lembrete quando todas as entregas estão marcadas (e a rota ainda não foi finalizada).
+    // Lembrete quando todas as entregas estão marcadas (e a rota ainda não foi
+    // finalizada). Fica NO TOPO, grande, fixo na tela e clicável (toca = finaliza).
     const todasMarcadas = state.items.length > 0 && state.items.every(statusResolvido);
-    const lembrete = (todasMarcadas && !state.rotaFinalizada)
-      ? '<div class="lembrete-finalizar">✅ Todas as entregas foram marcadas! Não esqueça de clicar em <b>FINALIZAR ROTA</b> 👇</div>'
+    const lembrete = (todasMarcadas && !state.rotaFinalizada && !state.sendingRouteAction)
+      ? '<button type="button" class="lembrete-finalizar" data-route="finalizar">✅ Todas as entregas marcadas!<br>👉 Toque aqui para FINALIZAR A ROTA</button>'
       : '';
 
     // Botão grande de Finalizar embaixo da lista.
@@ -333,12 +334,12 @@ function pedirKm(mensagem, valorAtual) {
     const botaoFim = `<button type="button" class="btn-finalizar-bottom ${state.rotaFinalizada ? 'route-success' : ''}" data-route="finalizar" ${state.rotaFinalizada || fimEnviando ? 'disabled' : ''}>${fimTxt}</button>`;
 
     sectionsRoot.innerHTML = `
+      ${lembrete}
       <section class="section-card">
         <div class="delivery-list">
           ${state.items.map(renderEntregaCard).join('')}
         </div>
       </section>
-      ${lembrete}
       ${botaoFim}
     `;
 

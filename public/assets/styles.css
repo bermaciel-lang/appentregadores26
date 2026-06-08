@@ -621,14 +621,28 @@ button, select, input, textarea {
 .btn-finalizar-bottom:disabled { opacity: .75; }
 /* Lembrete "marque finalizar" */
 .lembrete-finalizar {
-  margin-top: 14px;
-  background: #f0fdf4;
-  border: 1px solid #86efac;
-  color: #166534;
+  display: block;
+  width: 100%;
+  position: sticky;
+  top: 8px;
+  z-index: 30;
+  margin: 0 0 14px;
+  background: var(--green);
+  color: #fff;
+  border: none;
   border-radius: var(--radius);
-  padding: 12px 14px;
-  font-weight: 600;
+  padding: 16px 14px;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.35;
   text-align: center;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(22, 163, 74, .45);
+  animation: pulseLembrete 1.4s ease-in-out infinite;
+}
+@keyframes pulseLembrete {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.025); }
 }
 
 /* ===== Linhas de ações da entrega (2 / 3 / 2) ===== */
