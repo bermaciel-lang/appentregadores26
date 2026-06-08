@@ -93,22 +93,20 @@
 function pedirKm(mensagem) {
   const raw = prompt(mensagem);
 
-  if (raw === null) return null;
+  if (raw === null) return null; // cancelou -> aborta a ação
 
   let value = String(raw).trim();
 
-  if (!value) {
-    alert('A quilometragem é obrigatória.');
-    return undefined;
-  }
+  // KM NÃO é obrigatório: se deixar vazio, segue sem registrar (não trava a rota).
+  if (!value) return '';
 
   // troca ponto por vírgula
   value = value.replace('.', ',');
 
-  // aceita apenas números inteiros ou decimais com vírgula
+  // se digitou algo que não é número, avisa mas SEGUE sem KM (não bloqueia).
   if (!/^\d+(,\d+)?$/.test(value)) {
-    alert('Digite somente números. Use vírgula para decimal. Exemplo: 12345 ou 12345,6');
-    return undefined;
+    alert('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.');
+    return '';
   }
 
   return value;
@@ -329,11 +327,11 @@ function pedirKm(mensagem) {
       return;
     }
 
-    const km = pedirKm('Digite a quilometragem inicial do carro:');
-    if (km === null || km === undefined) return;
+    const km = pedirKm('Digite a quilometragem inicial do carro (pode deixar em branco se não der):');
+    if (km === null) return; // só aborta se cancelar
 
+    // Foto NÃO bloqueia: se não der pra tirar, a rota inicia mesmo assim.
     const foto = await pedirFotoObrigatoria();
-    if (!foto || !foto.base64) { alert('A foto do hodômetro é obrigatória para iniciar a rota. Tente de novo.'); return; }
 
     state.sendingRouteAction = true;
 const loadingRota = document.getElementById('loadingRota');
@@ -385,11 +383,11 @@ async function handleFinalizarRota() {
     return;
   }
 
-  const km = pedirKm('Digite a quilometragem final do carro:');
-  if (km === null || km === undefined) return;
+  const km = pedirKm('Digite a quilometragem final do carro (pode deixar em branco se não der):');
+  if (km === null) return; // só aborta se cancelar
 
+  // Foto NÃO bloqueia: se não der pra tirar, a rota finaliza mesmo assim.
   const foto = await pedirFotoObrigatoria();
-  if (!foto || !foto.base64) { alert('A foto do hodômetro é obrigatória para finalizar a rota. Tente de novo.'); return; }
 
   state.sendingRouteAction = true;
 
