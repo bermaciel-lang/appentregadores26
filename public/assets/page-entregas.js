@@ -611,6 +611,21 @@ async function handleFinalizarRota() {
     window.location.href = '/';
   });
 
+  // Botão "Trocar turno" (só no backend do painel, onde manhã/tarde coexistem). Volta pra
+  // home, onde o entregador escolhe o turno e o nome de novo. Não apaga o entregador salvo.
+  if (api.usandoPainel && api.usandoPainel()) {
+    const btnTrocar = document.getElementById('btnTrocar');
+    if (btnTrocar && !document.getElementById('btnTrocarTurno')) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.id = 'btnTrocarTurno';
+      b.className = 'ghost-btn';
+      b.textContent = '🔄 Trocar turno (' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde') + ')';
+      b.addEventListener('click', function () { window.location.href = '/'; });
+      btnTrocar.parentNode.insertBefore(b, btnTrocar);
+    }
+  }
+
   document.getElementById('btnIniciarRota').addEventListener('click', function () {
     handleIniciarRota();
   });
