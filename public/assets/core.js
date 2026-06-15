@@ -184,7 +184,9 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    const res = await fetch('/api/proxy', {
+    // Se houver override do painel neste aparelho, posta direto pra ele (cross-origin,
+    // com CORS); senão, usa o proxy do Vercel que fala com o Apps Script antigo.
+    const res = await fetch(C.POST_URL || '/api/proxy', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
