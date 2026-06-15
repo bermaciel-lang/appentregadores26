@@ -18,6 +18,13 @@ window.APP_CONFIG = {
 // antigo (Apps Script). Pra ativar num aparelho, no console do navegador:
 //   localStorage.setItem('app_api_url_override','/api/painel/')
 // Pra voltar ao antigo: localStorage.removeItem('app_api_url_override')
+// Liga/desliga por LINK (fácil no celular): ?painel=1 liga o app novo neste aparelho;
+// ?painel=0 volta pro antigo. Fica gravado no aparelho até trocar de novo.
+try {
+  var _q = new URLSearchParams(location.search);
+  if (_q.get('painel') === '1') localStorage.setItem('app_api_url_override', '/api/painel/');
+  if (_q.get('painel') === '0') localStorage.removeItem('app_api_url_override');
+} catch (e) {}
 try {
   var _ov = localStorage.getItem('app_api_url_override');
   if (_ov) {
