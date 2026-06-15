@@ -1,6 +1,13 @@
 (function () {
   const C = window.APP_CONFIG;
 
+  // Turno selecionado (MANHÃ/TARDE). Só é relevante no backend do PAINEL (Supabase), onde
+  // manhã e tarde coexistem; no backend antigo (Apps Script) o turno é ignorado (rota única).
+  function turnoPadrao() { return new Date().getHours() < 14 ? 'MANHÃ' : 'TARDE'; }
+  function getTurno() { try { return sessionStorage.getItem('app_turno') || turnoPadrao(); } catch (e) { return turnoPadrao(); } }
+  function setTurno(t) { try { sessionStorage.setItem('app_turno', t); } catch (e) {} }
+  function usandoPainel() { try { return !!localStorage.getItem('app_api_url_override'); } catch (e) { return false; } }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -245,8 +252,8 @@ async function postJson(body) {
   }
 
   async function carregarEntregadores() {
-    const result = await withCache('entregadores', async () => {
-      const res = await apiGet({ action: 'entregadores' });
+    const result = await withCache('entregadores_' + getTurno(), async () => {
+      const res = await apiGet({ action: 'entregadores', turno: getTurno() });
       if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregadores');
       return Array.isArray(res.items) ? res.items : [];
     });
@@ -254,12 +261,13 @@ async function postJson(body) {
   }
 
 async function carregarEntregasPorEntregador(entregador) {
-  const cacheName = 'entregas_' + String(entregador || '').trim().toLowerCase();
+  const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase();
 
   try {
     const res = await apiGet({
       action: 'entregas',
-      entregador
+      entregador,
+      turno: getTurno()
     });
 
     if (!res || !res.ok) {
@@ -312,7 +320,7 @@ async function apiMarcarCancelado(row, obs) {
 
   // Corrige o KM inicial/final já registrado (tipo = 'inicial' | 'final').
   async function apiEditarKm(entregador, tipo, km) {
-    return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km }, { retries: 3 });
+    return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() }, { retries: 3 });
   }
 
   // ===== Fila offline: se o envio falhar (sem sinal), guarda e reenvia sozinho =====
@@ -377,13 +385,13 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   if (fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
       try {
-        const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
+        const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, turno: getTurno(), fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
         if (res && res.ok) return res;
       } catch (e) { /* tenta de novo */ }
       await sleep(800 * (i + 1));
     }
     // Não subiu com foto: salva o KM e AVISA que a foto não foi (sem fingir sucesso).
-    const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial }, { retries: 1 });
+    const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial, turno: getTurno() }, { retries: 1 });
     if (res && res.ok) return Object.assign({}, res, { semFoto: true });
     throw new Error((res && res.error) || 'Falha ao iniciar rota');
   }
@@ -396,12 +404,12 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
   if (fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
       try {
-        const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
+        const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, turno: getTurno(), fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
         if (res && res.ok) return res;
       } catch (e) { /* tenta de novo */ }
       await sleep(800 * (i + 1));
     }
-    const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal }, { retries: 1 });
+    const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal, turno: getTurno() }, { retries: 1 });
     if (res && res.ok) return Object.assign({}, res, { semFoto: true });
     throw new Error((res && res.error) || 'Falha ao finalizar rota');
   }
@@ -412,7 +420,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
 
 
   function saveEntregasCache(entregador, items) {
-    const cacheName = 'entregas_' + String(entregador || '').toLowerCase();
+    const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').toLowerCase();
     writeCache(cacheName, Array.isArray(items) ? items : []);
   }
 
@@ -482,7 +490,11 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     enfileirar,
     processarFila,
     filaRowsPendentes,
-    apiEditarKm
+    apiEditarKm,
+    getTurno,
+    setTurno,
+    turnoPadrao,
+    usandoPainel
 
   };
 })();

@@ -21,6 +21,29 @@
     window.location.href = '/entregas/';
   }
 
+  // Seletor de turno (MANHÃ/TARDE) — só no backend do painel (Supabase), onde os dois
+  // turnos coexistem. O entregador escolhe antes de entrar; troca recarrega a lista.
+  function renderTurno() {
+    if (!api.usandoPainel || !api.usandoPainel()) return;
+    let bar = document.getElementById('turnoBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'turnoBar';
+      bar.style.cssText = 'display:flex;gap:8px;margin:12px 0;';
+      listEl.parentNode.insertBefore(bar, listEl);
+    }
+    const atual = api.getTurno();
+    bar.innerHTML = ['MANHÃ', 'TARDE'].map(function (t) {
+      const on = t === atual;
+      return '<button type="button" data-turno="' + t + '" style="flex:1;padding:12px;border-radius:10px;border:2px solid ' +
+        (on ? '#16a34a' : '#ccc') + ';background:' + (on ? '#16a34a' : '#fff') + ';color:' + (on ? '#fff' : '#333') +
+        ';font-weight:700;font-size:16px;cursor:pointer;">' + (t === 'MANHÃ' ? '🌅 Manhã' : '🌇 Tarde') + '</button>';
+    }).join('');
+    bar.querySelectorAll('[data-turno]').forEach(function (b) {
+      b.addEventListener('click', function () { api.setTurno(b.getAttribute('data-turno')); init(); });
+    });
+  }
+
   function renderDrivers(items) {
     loadingEl.classList.add('hidden');
     listEl.classList.remove('hidden');
@@ -46,6 +69,7 @@
 
   async function init() {
     try {
+      renderTurno();
       const saved = api.getSavedDriverName();
       if (saved) {
         savedDriverBox.classList.add('hidden');
@@ -60,7 +84,8 @@
         hideWarning();
       }
 
-      if (saved && items.includes(saved)) {
+      // No backend do painel, NÃO pula direto: o entregador escolhe o turno primeiro.
+      if (saved && items.includes(saved) && !(api.usandoPainel && api.usandoPainel())) {
         goToEntregas(saved);
         return;
       }
