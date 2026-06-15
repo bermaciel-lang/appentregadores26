@@ -16,7 +16,7 @@ window.APP_CONFIG = {
 // Se este celular tiver o override ligado, ele fala com o painel (via proxy /api/painel do
 // próprio Vercel — evita bloqueio de HTTP→HTTPS). Quem NÃO ligar continua 100% no fluxo
 // antigo (Apps Script). Pra ativar num aparelho, no console do navegador:
-//   localStorage.setItem('app_api_url_override','/api/painel')
+//   localStorage.setItem('app_api_url_override','/api/painel/')
 // Pra voltar ao antigo: localStorage.removeItem('app_api_url_override')
 try {
   var _ov = localStorage.getItem('app_api_url_override');
