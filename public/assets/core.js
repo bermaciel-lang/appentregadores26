@@ -155,7 +155,8 @@ function buildMapsUrl(item) {
   }
 
   function buildApiUrl(params) {
-    const url = new URL(C.API_URL);
+    // Aceita URL absoluta (Apps Script) OU caminho same-origin (/api/painel, no override).
+    const url = new URL(C.API_URL, window.location.origin);
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });

@@ -13,12 +13,17 @@ window.APP_CONFIG = {
 };
 
 // === Teste em paralelo do PAINEL (Etapa C) — override POR APARELHO ===
-// Se este celular tiver uma URL salva em localStorage, ele fala com o painel em vez do
-// Apps Script. Quem NÃO setar nada continua 100% no fluxo antigo. Pra ativar num aparelho,
-// rode no console do navegador:
-//   localStorage.setItem('app_api_url_override','https://SEU-PAINEL/api/entregador-app')
+// Se este celular tiver o override ligado, ele fala com o painel (via proxy /api/painel do
+// próprio Vercel — evita bloqueio de HTTP→HTTPS). Quem NÃO ligar continua 100% no fluxo
+// antigo (Apps Script). Pra ativar num aparelho, no console do navegador:
+//   localStorage.setItem('app_api_url_override','/api/painel')
 // Pra voltar ao antigo: localStorage.removeItem('app_api_url_override')
 try {
   var _ov = localStorage.getItem('app_api_url_override');
-  if (_ov) { window.APP_CONFIG.API_URL = _ov; window.APP_CONFIG.POST_URL = _ov; }
+  if (_ov) {
+    window.APP_CONFIG.API_URL = _ov;
+    window.APP_CONFIG.POST_URL = _ov;
+    // Proxy same-origin (começa com "/") responde JSON puro — não dá pra usar JSONP nele.
+    if (_ov.charAt(0) === '/') window.APP_CONFIG.API_MODE = 'json';
+  }
 } catch (e) {}
