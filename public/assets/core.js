@@ -369,6 +369,7 @@ async function apiMarcarCancelado(row, obs) {
         try {
           const res = await apiGet(item.params, { retries: 1 });
           if (res && res.ok) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); }
+          else if (res && res.naoEncontrado) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); } // parada não existe mais (rota refeita) -> descarta, não adianta repetir
           else break; // ainda falhando -> tenta depois
         } catch (e) { break; } // sem conexão -> tenta depois
       }

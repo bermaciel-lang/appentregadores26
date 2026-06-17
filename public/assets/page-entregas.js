@@ -366,6 +366,14 @@ function pedirKm(mensagem, valorAtual) {
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      } else if (!result.stale && !result.rotaIniciada && state.rotaIniciada) {
+        // O servidor (resposta FRESCA, não cache) diz que a rota NÃO está iniciada — ex.: o
+        // registro falhou no servidor mas o app marcou localmente, ou o supervisor resetou.
+        // Desfaz o estado local pra liberar o botão "Iniciar entregas" de novo. NUNCA faz isso
+        // com resposta de cache (stale) pra não "des-iniciar" uma rota quando está sem sinal.
+        state.rotaIniciada = false;
+        sessionStorage.removeItem('rota_iniciada_' + state.driver);
+        sessionStorage.removeItem('rota_assinatura_' + state.driver);
       }
 
       renderList();
@@ -391,7 +399,9 @@ function pedirKm(mensagem, valorAtual) {
     const previous = Object.assign({}, state.items[index]);
     state.items[index] = Object.assign({}, state.items[index], {
       status: nextStatus,
-      observacao: nextObs !== undefined ? nextObs : state.items[index].observacao
+      // a tela lê 'observacaoPedido' (mesma chave da API); gravar em 'observacao' fazia a
+      // observação digitada sumir até recarregar.
+      observacaoPedido: nextObs !== undefined ? nextObs : state.items[index].observacaoPedido
     });
 
     api.saveEntregasCache(state.driver, state.items);
