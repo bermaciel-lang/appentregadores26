@@ -151,19 +151,29 @@ function pedirKm(mensagem, valorAtual) {
         }
       });
 
-// Fallback: só conclui "sem foto" se NENHUMA foto chegou (e com folga de tempo,
-// pra câmeras lentas não perderem a foto). Apenas não-iOS.
+// Fallback (só não-iOS): detecta quando o entregador CANCELOU a câmera (voltou sem foto).
+// No Android o evento 'focus' (volta pro app) chega ANTES do 'change' (o arquivo da foto),
+// e em celular/câmera mais lentos a foto demora vários segundos. O corte fixo de 1,5s
+// DESCARTAVA a foto que chegava depois (a foto "não ia"). Agora ficamos CHECANDO se a foto
+// apareceu e só concluímos "sem foto" depois de ~8s sem nenhum arquivo. Se a foto chegar,
+// quem resolve é o handler de 'change' (com a foto).
       const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (!isIOS) {
         window.addEventListener('focus', function onFocus() {
           window.removeEventListener('focus', onFocus);
-          setTimeout(function () {
-            if (!resolved && !gotFile) {
-              resolved = true;
-              if (input.parentNode) document.body.removeChild(input);
-              resolve(null);
+          let tentativas = 0;
+          const iv = setInterval(function () {
+            // Foto chegou (ou está chegando) -> para de checar e deixa o 'change' resolver com ela.
+            if (resolved || gotFile || (input.files && input.files.length)) { clearInterval(iv); return; }
+            if (++tentativas >= 16) { // ~8s sem nenhum arquivo -> assume que cancelou
+              clearInterval(iv);
+              if (!resolved) {
+                resolved = true;
+                if (input.parentNode) document.body.removeChild(input);
+                resolve(null);
+              }
             }
-          }, 1500);
+          }, 500);
         });
       }
 
