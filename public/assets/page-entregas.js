@@ -445,8 +445,9 @@ function pedirKm(mensagem, valorAtual) {
     const km = pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // só aborta se cancelar
 
-    // Foto NÃO bloqueia: se não der pra tirar, a rota inicia mesmo assim.
+    // Foto NÃO bloqueia, MAS não pode passar despercebido: se não veio foto, confirma na cara.
     const foto = await pedirFotoObrigatoria();
+    if (!foto && !confirm('⚠️ A FOTO do KM inicial NÃO foi enviada.\n\nIniciar a rota mesmo assim, SEM foto? (avise o supervisor)\n\nOK = iniciar sem foto · Cancelar = tirar a foto de novo')) return;
 
     state.sendingRouteAction = true;
 const loadingRota = document.getElementById('loadingRota');
@@ -501,8 +502,9 @@ async function handleFinalizarRota() {
   const km = pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
   if (km === null) return; // só aborta se cancelar
 
-  // Foto NÃO bloqueia: se não der pra tirar, a rota finaliza mesmo assim.
+  // Foto NÃO bloqueia, MAS não pode passar despercebido: se não veio foto, confirma na cara.
   const foto = await pedirFotoObrigatoria();
+  if (!foto && !confirm('⚠️ A FOTO do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)\n\nOK = finalizar sem foto · Cancelar = tirar a foto de novo')) return;
 
   state.sendingRouteAction = true;
 
