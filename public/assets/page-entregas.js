@@ -376,11 +376,11 @@ function pedirKm(mensagem, valorAtual) {
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      } else if (!result.stale && !result.rotaIniciada && state.rotaIniciada) {
-        // O servidor (resposta FRESCA, não cache) diz que a rota NÃO está iniciada — ex.: o
-        // registro falhou no servidor mas o app marcou localmente, ou o supervisor resetou.
-        // Desfaz o estado local pra liberar o botão "Iniciar entregas" de novo. NUNCA faz isso
-        // com resposta de cache (stale) pra não "des-iniciar" uma rota quando está sem sinal.
+      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada) {
+        // SÓ no fluxo do PAINEL (Etapa C), onde a resposta SEMPRE traz rotaIniciada de verdade.
+        // No fluxo ANTIGO (Apps Script) a resposta NÃO traz esse campo (vem false), então isto
+        // NÃO roda — senão "des-iniciava" a rota do entregador a cada refresh (bug reportado).
+        // Aqui (painel) o servidor diz que a rota não está iniciada → libera o "Iniciar" de novo.
         state.rotaIniciada = false;
         sessionStorage.removeItem('rota_iniciada_' + state.driver);
         sessionStorage.removeItem('rota_assinatura_' + state.driver);
