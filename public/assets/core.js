@@ -212,6 +212,27 @@ async function postJson(body) {
   }
 }
 
+// ===== Espelho pro PAINEL (Etapa C, ponte) =====
+// Manda KM/foto pro NOSSO sistema ALÉM da planilha — pra essas infos aparecerem no painel
+// (Resumo de rotas) sem depender de puxar da planilha depois. Só roda quando este aparelho
+// está no fluxo ANTIGO (planilha): se já estiver no painel (override), o envio principal já
+// vai pra lá e duplicar seria à toa. É BEST-EFFORT: dispara e não espera — não trava o
+// entregador nem falha a ação se o painel estiver fora do ar (a planilha é a fonte principal).
+// Obs.: só espelhamos KM/foto (iniciar/finalizar rota), que casam por data+turno+entregador.
+// Os status de cada entrega (entregue/não) NÃO dá pra espelhar: o "row" da planilha é
+// diferente do id do banco — isso só na virada completa (piloto Etapa C).
+function espelharNoPainel(body) {
+  try {
+    if (usandoPainel()) return;
+    fetch('/api/painel/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body || {}),
+      cache: 'no-store'
+    }).catch(function () {});
+  } catch (e) {}
+}
+
   async function apiGet(params, options) {
     const opt = options || {};
     const url = buildApiUrl(params);
@@ -320,6 +341,7 @@ async function apiMarcarCancelado(row, obs) {
 
   // Corrige o KM inicial/final já registrado (tipo = 'inicial' | 'final').
   async function apiEditarKm(entregador, tipo, km) {
+    espelharNoPainel({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() });
     return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() }, { retries: 3 });
   }
 
@@ -381,6 +403,8 @@ async function apiMarcarCancelado(row, obs) {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+  // Espelha pro nosso sistema (além da planilha) — KM inicial + foto de início.
+  espelharNoPainel({ action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
   // Com foto: tenta o POST 2x antes de desistir da foto.
   if (fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
@@ -401,6 +425,8 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+  // Espelha pro nosso sistema (além da planilha) — KM final + foto de fim.
+  espelharNoPainel({ action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
   if (fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
       try {
