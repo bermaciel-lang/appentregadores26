@@ -15,42 +15,35 @@ window.APP_CONFIG = {
 };
 
 // ====================================================================
-// VIRADA (Etapa C): o PADRÃO agora é o NOSSO SISTEMA (painel), via proxy same-origin
-// /api/painel/ (o proxy do Vercel evita o bloqueio HTTP→HTTPS). O fluxo antigo (planilha)
-// fica como ROLLBACK POR APARELHO.
+// VIRADA FORÇADA (Bernardo, 19/06/2026): TODOS os aparelhos vão pro NOSSO SISTEMA (painel),
+// via proxy same-origin /api/painel/. O rollback POR APARELHO (flag `app_planilha`) foi
+// APOSENTADO: mesmo um celular que tinha ficado PRESO no fluxo antigo é trazido pro sistema
+// no próximo carregamento (a gente apaga o flag). Sobrou só um escape de EMERGÊNCIA, NÃO
+// grudento: abrir com ?planilha=1 usa o Apps Script SÓ naquele acesso e não fixa nada —
+// recarregou normal, volta pro sistema. (Rollback de verdade agora = reverter este commit.)
 //
-//   • Voltar UM aparelho pro antigo:  abrir o app com  ?planilha=1   (ou ?painel=0)
-//   • Voltar pro sistema (padrão):    abrir o app com  ?painel=1     (ou ?planilha=0)
-//   Fica gravado no aparelho até trocar de novo.
-//
-// Importante: a chave `app_api_url_override` continua sendo o que o usandoPainel() lê pra
-// saber que está no fluxo-novo (sync-reversa, espelho, UI). Por isso, no padrão a gente
-// GRAVA ela = '/api/painel/'; no rollback a gente REMOVE.
+// `app_api_url_override` = '/api/painel/' segue sendo o que o usandoPainel() lê (sync-reversa,
+// espelho, UI), então no padrão a gente GRAVA ela.
 // ====================================================================
 try {
   var _q = new URLSearchParams(location.search);
-  if (_q.get('planilha') === '1' || _q.get('painel') === '0') {   // ROLLBACK pro antigo
-    localStorage.setItem('app_planilha', '1');
+  var _emergenciaAntigo = (_q.get('planilha') === '1' || _q.get('painel') === '0');
+  localStorage.removeItem('app_planilha'); // limpa qualquer rollback que tenha ficado preso
+  if (_emergenciaAntigo) {
+    // EMERGÊNCIA: fluxo antigo (Apps Script) só neste acesso — não grava override, não fica preso.
     localStorage.removeItem('app_api_url_override');
-  }
-  if (_q.get('painel') === '1' || _q.get('planilha') === '0') {   // VOLTAR pro padrão (sistema)
-    localStorage.removeItem('app_planilha');
+  } else {
+    // PADRÃO FORÇADO = sistema (painel).
     localStorage.setItem('app_api_url_override', '/api/painel/');
+    window.APP_CONFIG.API_URL = '/api/painel/';
+    window.APP_CONFIG.POST_URL = '/api/painel/';
+    window.APP_CONFIG.API_MODE = 'json'; // proxy same-origin responde JSON puro (não dá JSONP)
   }
-} catch (e) {}
-
-try {
-  var _rollback = localStorage.getItem('app_planilha') === '1';
-  // Padrão = sistema: se o aparelho não pediu rollback e ainda não tem o override, grava ele.
-  if (!_rollback && !localStorage.getItem('app_api_url_override')) {
-    localStorage.setItem('app_api_url_override', '/api/painel/');
-  }
-  var _ov = _rollback ? null : localStorage.getItem('app_api_url_override');
-  if (_ov) {
-    window.APP_CONFIG.API_URL = _ov;
-    window.APP_CONFIG.POST_URL = _ov;
-    // Proxy same-origin (começa com "/") responde JSON puro — não dá pra usar JSONP nele.
-    if (_ov.charAt(0) === '/') window.APP_CONFIG.API_MODE = 'json';
-  }
-  // se _rollback: mantém os valores BASE (Apps Script) acima = fluxo antigo
-} catch (e) {}
+} catch (e) {
+  // Se algo falhar, ainda assim força o sistema (não cai no Apps Script por acidente).
+  try {
+    window.APP_CONFIG.API_URL = '/api/painel/';
+    window.APP_CONFIG.POST_URL = '/api/painel/';
+    window.APP_CONFIG.API_MODE = 'json';
+  } catch (e2) {}
+}
