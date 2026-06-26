@@ -91,26 +91,44 @@
     });
   }
 
-function pedirKm(mensagem, valorAtual) {
-  const raw = prompt(mensagem, valorAtual || '');
+// Pede o KM ao entregador.
+//  - obrigatorio = false (padrão): pode deixar vazio (segue sem registrar). Usado quando
+//    NÃO há foto — aí o sistema usa o KM calculado.
+//  - obrigatorio = true: NÃO aceita vazio nem inválido; fica pedindo até vir um número (ou
+//    a pessoa cancelar). Usado quando ELA ENVIOU FOTO (o KM passa a ser obrigatório).
+// Retorna: KM já no formato do servidor (PONTO decimal) | '' (sem KM) | null (cancelou).
+async function pedirKm(mensagem, valorAtual, obrigatorio) {
+  while (true) {
+    const raw = await AppUI.perguntar(mensagem, {
+      titulo: 'Quilometragem',
+      valor: valorAtual || '',
+      placeholder: 'Ex.: 12345',
+      inputmode: 'decimal', // abre o teclado numérico no celular
+      textoOk: 'Salvar',
+      tom: obrigatorio ? 'warn' : undefined,
+    });
 
-  if (raw === null) return null; // cancelou -> aborta a ação
+    if (raw === null) return null; // cancelou -> aborta a ação
 
-  let value = String(raw).trim();
+    let value = String(raw).trim().replace('.', ','); // padroniza com vírgula pra validar
 
-  // KM NÃO é obrigatório: se deixar vazio, segue sem registrar (não trava a rota).
-  if (!value) return '';
+    // Vazio:
+    if (!value) {
+      if (obrigatorio) { await AppUI.alerta('O KM é obrigatório. Digite o KM do carro pra continuar.', { titulo: 'Falta o KM', tom: 'warn' }); continue; }
+      return ''; // sem foto pode seguir sem KM (usa o calculado, não trava a rota)
+    }
 
-  // troca ponto por vírgula
-  value = value.replace('.', ',');
+    // Não é número:
+    if (!/^\d+(,\d+)?$/.test(value)) {
+      if (obrigatorio) { valorAtual = value; await AppUI.alerta('KM inválido. Digite só números (ex.: 12345).', { titulo: 'KM inválido', tom: 'warn' }); continue; }
+      await AppUI.alerta('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.', { titulo: 'KM inválido', tom: 'warn' });
+      return '';
+    }
 
-  // se digitou algo que não é número, avisa mas SEGUE sem KM (não bloqueia).
-  if (!/^\d+(,\d+)?$/.test(value)) {
-    alert('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.');
-    return '';
+    // IMPORTANTE: manda com PONTO decimal. O servidor faz Number(km) e "123,5" virava NaN
+    // -> o KM NÃO salvava (perdia a informação). "12345" e "123.5" salvam certo.
+    return value.replace(',', '.');
   }
-
-  return value;
 }
 
   function pedirFotoObrigatoria() {
@@ -145,7 +163,7 @@ function pedirKm(mensagem, valorAtual) {
           resolve(result);
         } catch (error) {
           console.error(error);
-          alert('Não foi possível preparar a foto. Tente tirar de novo.');
+          await AppUI.alerta('Não foi possível preparar a foto. Tente tirar de novo.', { tom: 'warn' });
           resolved = true;
           resolve(null);
         }
@@ -294,28 +312,29 @@ function pedirKm(mensagem, valorAtual) {
 
   async function editarKm(tipo) { // 'inicial' | 'final'
     const atual = tipo === 'final' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
-    const novo = pedirKm('Corrigir o KM ' + (tipo === 'final' ? 'final' : 'inicial') + ':', atual);
+    const novo = await pedirKm('Corrigir o KM ' + (tipo === 'final' ? 'final' : 'inicial') + ':', atual);
     if (novo === null) return; // cancelou
     try {
       const res = await api.apiEditarKm(state.driver, tipo, novo);
       if (!res || !res.ok) throw new Error();
-      alert('✅ KM atualizado na planilha.');
+      await AppUI.alerta('KM atualizado. ✅', { tom: 'success' });
       await carregarTudo(false);
-    } catch (e) { alert('❌ Não foi possível salvar o KM agora. Confira a conexão e tente de novo.'); }
+    } catch (e) { await AppUI.alerta('Não foi possível salvar o KM agora. Confira a conexão e tente de novo.', { tom: 'danger' }); }
   }
 
   async function reenviarFoto(tipo) { // 'inicio' | 'fim'
     const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
     const foto = await pedirFotoObrigatoria();
-    if (!foto || !foto.base64) { alert('Nenhuma foto selecionada.'); return; }
+    if (!foto || !foto.base64) { await AppUI.alerta('Nenhuma foto selecionada.', { tom: 'warn' }); return; }
     try {
       const res = tipo === 'fim'
         ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
         : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
       if (!res || !res.ok) throw new Error();
-      alert(res.semFoto ? '⚠️ A foto ainda não subiu — tente de novo com sinal melhor.' : '✅ Foto enviada.');
+      if (res.semFoto) await AppUI.alerta('A foto ainda não subiu — tente de novo com sinal melhor.', { tom: 'warn' });
+      else await AppUI.alerta('Foto enviada. ✅', { tom: 'success' });
       await carregarTudo(false);
-    } catch (e) { alert('❌ Não foi possível enviar a foto agora.'); }
+    } catch (e) { await AppUI.alerta('Não foi possível enviar a foto agora.', { tom: 'danger' }); }
   }
 
   function renderList() {
@@ -427,9 +446,9 @@ function pedirKm(mensagem, valorAtual) {
     renderList();
   }
 
-  function openSameTab(url) {
+  async function openSameTab(url) {
     if (!url || url === '#') {
-      alert('Endereço não disponível para abrir.');
+      await AppUI.alerta('Endereço não disponível para abrir.', { tom: 'warn' });
       return;
     }
     window.location.assign(url);
@@ -438,16 +457,31 @@ function pedirKm(mensagem, valorAtual) {
   async function handleIniciarRota() {
     if (state.sendingRouteAction) return;
     if (state.rotaIniciada) {
-      alert('A rota já foi iniciada.');
+      await AppUI.alerta('A rota já foi iniciada.', { tom: 'warn' });
       return;
     }
 
-    const km = pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
-    if (km === null) return; // só aborta se cancelar
+    let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
+    if (km === null) return; // cancelou o KM -> aborta
 
-    // Foto NÃO bloqueia, MAS não pode passar despercebido: se não veio foto, confirma na cara.
     const foto = await pedirFotoObrigatoria();
-    if (!foto && !confirm('⚠️ A FOTO do KM inicial NÃO foi enviada.\n\nIniciar a rota mesmo assim, SEM foto? (avise o supervisor)\n\nOK = iniciar sem foto · Cancelar = tirar a foto de novo')) return;
+
+    if (foto) {
+      // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
+      if (!km) {
+        km = await pedirKm('Você enviou a foto. Agora informe o KM inicial do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
+        if (km === null) {
+          await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
+          return; // não salva nada pela metade
+        }
+      }
+    } else {
+      // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
+      const segue = await AppUI.confirmar('A foto do KM inicial NÃO foi enviada.\n\nIniciar a rota mesmo assim, SEM foto? (avise o supervisor)', {
+        titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Iniciar sem foto', textoCancelar: 'Tirar foto',
+      });
+      if (!segue) return;
+    }
 
     state.sendingRouteAction = true;
 const loadingRota = document.getElementById('loadingRota');
@@ -472,8 +506,8 @@ btnIniciarRota.disabled = true;
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
 
       await carregarTudo(false);
-      if (res.semFoto) alert('Rota iniciada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, inicie a rota de novo só pra enviar a foto, ou avise o supervisor.');
-      else alert('Rota iniciada com sucesso.');
+      if (res.semFoto) await AppUI.alerta('Rota iniciada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, inicie a rota de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
+      else await AppUI.alerta('Rota iniciada com sucesso. ✓', { tom: 'success' });
     } catch (error) {
       console.error(error);
       state.rotaIniciada = true;
@@ -483,7 +517,7 @@ btnIniciarRota.disabled = true;
       sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaErr);
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
       await carregarTudo(false);
-      alert('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.');
+      await AppUI.alerta('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.', { tom: 'warn' });
     } finally {
 loadingRota.classList.add('hidden');
 btnIniciarRota.disabled = false;
@@ -495,16 +529,31 @@ async function handleFinalizarRota() {
   if (state.sendingRouteAction) return;
 
   if (!state.rotaIniciada) {
-    alert('Clique primeiro em "Iniciar entregas".');
+    await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
     return;
   }
 
-  const km = pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
-  if (km === null) return; // só aborta se cancelar
+  let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
+  if (km === null) return; // cancelou o KM -> aborta
 
-  // Foto NÃO bloqueia, MAS não pode passar despercebido: se não veio foto, confirma na cara.
   const foto = await pedirFotoObrigatoria();
-  if (!foto && !confirm('⚠️ A FOTO do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)\n\nOK = finalizar sem foto · Cancelar = tirar a foto de novo')) return;
+
+  if (foto) {
+    // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
+    if (!km) {
+      km = await pedirKm('Você enviou a foto. Agora informe o KM final do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
+      if (km === null) {
+        await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
+        return; // não salva nada pela metade
+      }
+    }
+  } else {
+    // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
+    const segue = await AppUI.confirmar('A foto do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)', {
+      titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
+    });
+    if (!segue) return;
+  }
 
   state.sendingRouteAction = true;
 
@@ -535,11 +584,11 @@ async function handleFinalizarRota() {
     sessionStorage.removeItem('rota_assinatura_' + state.driver);
 
     await carregarTudo(false);
-    if (res.semFoto) alert('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.');
-    else alert('Rota finalizada com sucesso. ✓');
+    if (res.semFoto) await AppUI.alerta('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
+    else await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
   } catch (error) {
     console.error(error);
-    alert('Não foi possível finalizar a rota. Tente de novo.');
+    await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
   } finally {
     loadingRota.classList.add('hidden');
     btnFinalizarRota.disabled = false;
@@ -555,15 +604,41 @@ async function handleFinalizarRota() {
     if (!item) return;
 
     if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
-      alert('Clique primeiro em "Iniciar entregas".');
+      await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
       return;
     }
 
-    // Pergunta a observação ANTES de mostrar "Enviando…".
+    // Pergunta a observação ANTES de mostrar "Enviando…". A observação é OPCIONAL: tocar
+    // "Pular" segue sem ela (mesmo comportamento de antes, só que com nome claro no botão).
     let nextStatus = null, obs;
-    if (act === 'done') { obs = prompt('Observação da entrega:') || ''; nextStatus = 'Entregue'; }
-    else if (act === 'fail') { obs = prompt('Motivo / observação:') || ''; nextStatus = 'Não entregue'; }
-    else if (act === 'cancelado') { obs = prompt('Motivo do cancelamento:') || ''; nextStatus = 'Cancelado'; }
+    if (act === 'done') {
+      // 3 opções rápidas pra registrar COMO foi a entrega. Cancelar aqui ABORTA (não marca).
+      const tipo = await AppUI.escolher('Como foi a entrega?', [
+        { valor: 'maos', rotulo: '🤝 Entregue em mãos', tom: 'success' },
+        { valor: 'portaria', rotulo: '🏢 Entregue na portaria' },
+        { valor: 'terceiros', rotulo: '👤 Entregue para terceiros' },
+      ], { titulo: '✅ Confirmar entrega' });
+      if (tipo === null) return; // cancelou -> NÃO marca como entregue
+
+      if (tipo === 'maos') {
+        obs = 'Entregue em mãos';
+      } else {
+        // Portaria/terceiros: pergunta QUEM recebeu (nome é opcional — pode tocar "Pular").
+        const base = tipo === 'portaria' ? 'Entregue na portaria' : 'Entregue para terceiros';
+        const nome = await AppUI.perguntar('Quem recebeu? (nome da pessoa)', {
+          titulo: tipo === 'portaria' ? '🏢 Entregue na portaria' : '👤 Entregue para terceiros',
+          placeholder: 'Ex.: porteiro João',
+          textoOk: 'Confirmar',
+          textoCancelar: 'Pular',
+        });
+        // Texto vai concatenado pra coluna "Observações" do Rotas do dia (obs_entregador).
+        // Esse mesmo texto/estrutura serve depois pro WhatsApp automático ao cliente.
+        obs = (nome && nome.trim()) ? (base + ' (recebido por: ' + nome.trim() + ')') : base;
+      }
+      nextStatus = 'Entregue';
+    }
+    else if (act === 'fail') { obs = (await AppUI.perguntar('Motivo / observação:', { titulo: '⛔ Não recebeu', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''; nextStatus = 'Não entregue'; }
+    else if (act === 'cancelado') { obs = (await AppUI.perguntar('Motivo do cancelamento:', { titulo: '✖ Cancelado', tom: 'warn', placeholder: 'Ex.: pedido duplicado', textoOk: 'Confirmar cancelamento', textoCancelar: 'Pular' })) || ''; nextStatus = 'Cancelado'; }
     else if (act === 'start') { nextStatus = 'Indo para entrega'; }
 
     state.sendingAction = true;
@@ -578,7 +653,7 @@ async function handleFinalizarRota() {
           try { const r = await api.apiIniciarEntrega(row); if (!r || !r.ok) throw new Error('x'); }
           catch (e) { api.enfileirar({ action: 'iniciarEntrega', row: row }, { row: Number(row) }); }
         }
-        openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
+        await openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
         return;
       }
 
@@ -598,11 +673,11 @@ async function handleFinalizarRota() {
       } catch (e2) {
         // NÃO desmarca: guarda na fila e reenvia sozinho quando a internet voltar.
         api.enfileirar(params, { row: Number(row) });
-        alert('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").');
+        await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
       }
     } catch (error) {
       console.error(error);
-      alert('Não foi possível concluir essa ação. Tente de novo.');
+      await AppUI.alerta('Não foi possível concluir essa ação. Tente de novo.', { tom: 'danger' });
     } finally {
       state.sendingAction = false;
       state.enviando = null;

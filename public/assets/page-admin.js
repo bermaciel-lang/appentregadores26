@@ -1,15 +1,20 @@
-(function () {
+(async function () {
   const api = window.AppEntrega;
 
-  function askPassword() {
+  async function askPassword() {
     if (api.getAdminAuth()) return true;
-    const senha = prompt('Digite a senha do admin:');
+    const senha = await AppUI.perguntar('Digite a senha do admin:', {
+      titulo: '🔒 Acesso restrito',
+      placeholder: 'Senha',
+      tipoCampo: 'password',
+      textoOk: 'Entrar',
+    });
     if (senha === null) {
       window.location.href = '/';
       return false;
     }
     if (senha !== window.APP_CONFIG.ADMIN_PASSWORD) {
-      alert('Senha inválida.');
+      await AppUI.alerta('Senha inválida.', { tom: 'danger', titulo: 'Senha inválida' });
       window.location.href = '/';
       return false;
     }
@@ -17,7 +22,7 @@
     return true;
   }
 
-  if (!askPassword()) return;
+  if (!(await askPassword())) return;
 
   const state = {
     map: null,
