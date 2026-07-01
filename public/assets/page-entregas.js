@@ -523,6 +523,8 @@ loadingRota.classList.add('hidden');
 btnIniciarRota.disabled = false;
       state.sendingRouteAction = false;
     }
+    // Liga o rastreamento GPS da rota (não trava nada se falhar).
+    try { if (state.rotaIniciada && window.Rastreio) window.Rastreio.iniciar(state.driver); } catch (e) {}
   }
 
 async function handleFinalizarRota() {
@@ -582,6 +584,8 @@ async function handleFinalizarRota() {
     sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
     sessionStorage.removeItem('rota_iniciada_' + state.driver);
     sessionStorage.removeItem('rota_assinatura_' + state.driver);
+    // Desliga o rastreamento GPS (rota finalizada).
+    try { if (window.Rastreio) window.Rastreio.parar(); } catch (e) {}
 
     await carregarTudo(false);
     if (res.semFoto) await AppUI.alerta('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
