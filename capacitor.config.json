@@ -1,0 +1,10 @@
+{
+  "appId": "br.com.organicodochico.entregas",
+  "appName": "Entregas Orgânico do Chico",
+  "webDir": "public",
+  "server": {
+    "url": "https://appentregadores26.vercel.app",
+    "cleartext": false,
+    "allowNavigation": ["appentregadores26.vercel.app"]
+  }
+}

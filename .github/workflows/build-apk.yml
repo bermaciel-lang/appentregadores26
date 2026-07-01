@@ -1,0 +1,51 @@
+name: Gerar APK (Entregas ODC)
+
+# Gera o .apk do app Android (Capacitor embrulha o site + plugin de GPS). Build DEBUG (instalável
+# pra teste, sem precisar de chave de assinatura ainda). Roda ao mexer na config OU manualmente.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'scripts/android-manifest-patch.mjs'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Adicionar a plataforma Android
+        run: npx cap add android
+
+      - name: Permissões de localização no Manifest
+        run: node scripts/android-manifest-patch.mjs
+
+      - name: Build do APK (debug)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Publicar o APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: entregas-odc-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

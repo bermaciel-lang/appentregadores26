@@ -7,6 +7,12 @@
     "start": "npx serve public -l 3000"
   },
   "dependencies": {
-    "googleapis": "^171.4.0"
+    "googleapis": "^171.4.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/android": "^6.2.0",
+    "@capacitor-community/background-geolocation": "^1.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
   }
 }
