@@ -112,27 +112,27 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     let value = String(raw).trim().replace('.', ','); // padroniza com vírgula pra validar
 
-    // VAZIO ou ZERADO: alguns entregadores zeram o odômetro e digitam 0 / 0,00 — o sistema trata
-    // isso como "sem KM" e usa o KM CALCULADO (do sistema). Antes de seguir, CONFIRMA com o entregador.
-    const zerado = !value || /^0+(,0+)?$/.test(value);
+    // EM BRANCO (não digitou NADA): o sistema usa o KM CALCULADO. Confirma antes de seguir.
+    // OBS: 0 / 0,0 / 0,00 / 0.00 é leitura VÁLIDA (quem zerou o odômetro) e passa NORMAL, sem aviso.
+    const vazio = !value;
 
     // Não-vazio e não é número válido:
-    if (!zerado && !/^\d+(,\d+)?$/.test(value)) {
+    if (!vazio && !/^\d+(,\d+)?$/.test(value)) {
       if (obrigatorio) { valorAtual = value; await AppUI.alerta('KM inválido. Digite só números (ex.: 12345).', { titulo: 'KM inválido', tom: 'warn' }); continue; }
       await AppUI.alerta('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.', { titulo: 'KM inválido', tom: 'warn' });
       return '';
     }
 
-    // Vazio/zerado -> pergunta se tem certeza (e avisa que vai usar o KM do sistema).
-    if (zerado) {
+    // Em branco -> pergunta se tem certeza (e avisa que vai usar o KM do sistema).
+    if (vazio) {
       if (obrigatorio) {
         valorAtual = value;
-        await AppUI.alerta('Você enviou a foto, então o KM é obrigatório e não pode ficar zerado. Digite o KM do carro.', { titulo: 'Falta o KM', tom: 'warn' });
+        await AppUI.alerta('Você enviou a foto, então o KM é obrigatório. Digite o KM do carro.', { titulo: 'Falta o KM', tom: 'warn' });
         continue;
       }
       const seguirSemKm = await AppUI.confirmar(
-        'O KM ficou VAZIO / ZERADO (0).\n\nSe seguir assim, o sistema vai considerar o KM CALCULADO (do sistema), NÃO o do seu carro.\n\nTem certeza que quer deixar sem o KM?',
-        { titulo: '⚠️ KM vazio', tom: 'warn', textoOk: 'Sim, seguir sem KM', textoCancelar: 'Voltar e digitar' }
+        'O KM ficou EM BRANCO (você não digitou nada).\n\nSe seguir assim, o sistema vai considerar o KM CALCULADO (do sistema), NÃO o do seu carro.\n\nTem certeza que quer deixar sem o KM?',
+        { titulo: '⚠️ KM em branco', tom: 'warn', textoOk: 'Sim, seguir sem KM', textoCancelar: 'Voltar e digitar' }
       );
       if (seguirSemKm) return '';    // confirmou: segue sem KM (usa o do sistema)
       valorAtual = value; continue;  // quer digitar de novo
