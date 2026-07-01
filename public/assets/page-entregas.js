@@ -112,17 +112,30 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     let value = String(raw).trim().replace('.', ','); // padroniza com vírgula pra validar
 
-    // Vazio:
-    if (!value) {
-      if (obrigatorio) { await AppUI.alerta('O KM é obrigatório. Digite o KM do carro pra continuar.', { titulo: 'Falta o KM', tom: 'warn' }); continue; }
-      return ''; // sem foto pode seguir sem KM (usa o calculado, não trava a rota)
-    }
+    // VAZIO ou ZERADO: alguns entregadores zeram o odômetro e digitam 0 / 0,00 — o sistema trata
+    // isso como "sem KM" e usa o KM CALCULADO (do sistema). Antes de seguir, CONFIRMA com o entregador.
+    const zerado = !value || /^0+(,0+)?$/.test(value);
 
-    // Não é número:
-    if (!/^\d+(,\d+)?$/.test(value)) {
+    // Não-vazio e não é número válido:
+    if (!zerado && !/^\d+(,\d+)?$/.test(value)) {
       if (obrigatorio) { valorAtual = value; await AppUI.alerta('KM inválido. Digite só números (ex.: 12345).', { titulo: 'KM inválido', tom: 'warn' }); continue; }
       await AppUI.alerta('KM inválido — seguindo sem registrar o KM. Avise o supervisor depois.', { titulo: 'KM inválido', tom: 'warn' });
       return '';
+    }
+
+    // Vazio/zerado -> pergunta se tem certeza (e avisa que vai usar o KM do sistema).
+    if (zerado) {
+      if (obrigatorio) {
+        valorAtual = value;
+        await AppUI.alerta('Você enviou a foto, então o KM é obrigatório e não pode ficar zerado. Digite o KM do carro.', { titulo: 'Falta o KM', tom: 'warn' });
+        continue;
+      }
+      const seguirSemKm = await AppUI.confirmar(
+        'O KM ficou VAZIO / ZERADO (0).\n\nSe seguir assim, o sistema vai considerar o KM CALCULADO (do sistema), NÃO o do seu carro.\n\nTem certeza que quer deixar sem o KM?',
+        { titulo: '⚠️ KM vazio', tom: 'warn', textoOk: 'Sim, seguir sem KM', textoCancelar: 'Voltar e digitar' }
+      );
+      if (seguirSemKm) return '';    // confirmou: segue sem KM (usa o do sistema)
+      valorAtual = value; continue;  // quer digitar de novo
     }
 
     // IMPORTANTE: manda com PONTO decimal. O servidor faz Number(km) e "123,5" virava NaN
