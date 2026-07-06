@@ -19,9 +19,13 @@
   async function goToEntregas(nome) {
     nome = String(nome || '').trim();
     if (!nome) return;
+    // CD e Lalamove/Lala NÃO são pessoas com telefone → não pedem PIN (mesma regra do painel:
+    // isExcluido = nome contém "lala" ou "cd", sem ligar pra maiúsculas). Ex.: "ENTREGAS CD",
+    // "LALAMOVE", "LALA 1", "LALA 2".
+    var semPin = /lala|\bcd\b/i.test(nome);
     // Device-bind: se este aparelho já logou com ESTE entregador, entra direto (sem PIN).
     var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
-    if (!(ti && ti.nome === nome)) {
+    if (!semPin && !(ti && ti.nome === nome)) {
       // 1º acesso deste entregador neste aparelho → pede o PIN (os últimos 4 do telefone dele).
       var pin = await AppUI.perguntar('Digite seu PIN\n(os últimos 4 números do seu telefone)', {
         titulo: 'Entrar — ' + nome, inputmode: 'numeric', textoOk: 'Entrar'
