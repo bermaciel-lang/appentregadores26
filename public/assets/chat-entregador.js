@@ -7,7 +7,7 @@
   var driver = api.getSavedDriverName();
   if (!driver) return;
 
-  var POLL_MS = 15000;
+  var POLL_MS = 8000;
   var LAST_SEEN_KEY = 'app_entregas_chat_lastseen';
   var ultimoId = 0;          // maior id já carregado (base do polling)
   var mensagens = [];        // todas carregadas, em ordem cronológica
@@ -20,6 +20,27 @@
   function nomeAutor(m) { return ehMinha(m) ? 'Você' : (m.autorNome || 'Central'); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function naoLidas() { var ls = lastSeen(); return mensagens.filter(function (m) { return m.id > ls && !ehMinha(m); }).length; }
+
+  // ---- Pop-up (banner no topo) ao chegar mensagem — some sozinho, toca pra abrir. Funciona no
+  // iPhone web também (onde notificação de SISTEMA não dispara pra site aberto no navegador). ----
+  var toastEl = null, toastTimer = null;
+  function mostrarToast(autor, corpo) {
+    try {
+      if (!toastEl) {
+        toastEl = document.createElement('div');
+        toastEl.style.cssText = 'position:fixed;top:12px;left:12px;right:12px;max-width:560px;margin:0 auto;z-index:6000;background:#2d7a3e;color:#fff;border-radius:14px;padding:12px 14px;box-shadow:0 8px 26px rgba(0,0,0,.32);cursor:pointer;display:none;';
+        toastEl.addEventListener('click', function () { esconderToast(); abrir(); });
+        document.body.appendChild(toastEl);
+      }
+      toastEl.innerHTML =
+        '<div style="font-size:12px;font-weight:800;opacity:.92;">🔔 ' + esc(autor) + ' · toque para responder</div>' +
+        '<div style="font-size:15px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(corpo || '') + '</div>';
+      toastEl.style.display = 'block';
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(esconderToast, 8000);
+    } catch (e) {}
+  }
+  function esconderToast() { try { if (toastEl) toastEl.style.display = 'none'; if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; } } catch (e) {} }
 
   // ---- Sininho no topo (com badge de não-lidas) ----
   var bell = document.createElement('button');
@@ -104,18 +125,17 @@
         pintarBadge();
         if (!aberto && novaDaCentral) {
           try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
-          // Pop-up ao ABRIR o app: se há não-lidas na 1ª carga, mostra o painel uma vez.
-          if (primeiraCarga && naoLidas() > 0) { abrir(); }
-          else if (!primeiraCarga) {
-            // App .apk: notificação NATIVA pra ele ver mesmo com o app em segundo plano.
-            try {
-              if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-                var LN = window.Capacitor.Plugins.LocalNotifications;
-                var ult = r.mensagens.filter(function (m) { return !ehMinha(m); }).slice(-1)[0];
-                if (LN && LN.schedule && ult) LN.schedule({ notifications: [{ id: (Date.now() % 100000), title: 'Mensagem da Central', body: String(ult.corpo || '').slice(0, 140) }] });
-              }
-            } catch (e) {}
-          }
+          var ult = r.mensagens.filter(function (m) { return !ehMinha(m); }).slice(-1)[0];
+          // POP-UP (banner) sempre que chega mensagem da Central: na 1ª carga só se há não-lidas;
+          // durante o uso, toda vez que chega uma nova. É o pop-up que faltava (e vale no iPhone web).
+          if (ult && (!primeiraCarga || naoLidas() > 0)) mostrarToast(nomeAutor(ult), ult.corpo);
+          // App .apk: notificação NATIVA também (pra ver com o app em segundo plano).
+          try {
+            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+              var LN = window.Capacitor.Plugins.LocalNotifications;
+              if (LN && LN.schedule && ult) LN.schedule({ notifications: [{ id: (Date.now() % 100000), title: 'Mensagem da Central', body: String(ult.corpo || '').slice(0, 140) }] });
+            }
+          } catch (e) {}
         }
       }
     } catch (e) { /* silencioso */ }
