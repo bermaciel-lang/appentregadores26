@@ -65,9 +65,10 @@
         '<button type="button" id="chatEntFechar" style="background:none;border:0;color:#fff;font-size:26px;cursor:pointer;line-height:1;">×</button>' +
       '</div>' +
       '<div id="chatEntLista" style="flex:1;overflow-y:auto;padding:12px;background:#f3f3f0;"></div>' +
-      '<div style="display:flex;gap:8px;padding:10px;border-top:1px solid #ddd;background:#fff;">' +
-        '<input id="chatEntInput" type="text" placeholder="Escreva uma mensagem..." autocomplete="off" style="flex:1;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:15px;" />' +
-        '<button type="button" id="chatEntEnviar" style="background:#2d7a3e;color:#fff;border:0;border-radius:10px;padding:0 18px;font-size:15px;font-weight:700;cursor:pointer;">Enviar</button>' +
+      '<div style="display:flex;gap:8px;padding:10px;border-top:1px solid #ddd;background:#fff;align-items:center;">' +
+        '<button type="button" id="chatEntNudge" title="Chamar a atenção" style="background:#ffb300;border:0;border-radius:10px;width:46px;height:44px;font-size:20px;cursor:pointer;flex-shrink:0;">👋</button>' +
+        '<input id="chatEntInput" type="text" placeholder="Escreva uma mensagem..." autocomplete="off" style="flex:1;min-width:0;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:15px;" />' +
+        '<button type="button" id="chatEntEnviar" style="background:#2d7a3e;color:#fff;border:0;border-radius:10px;padding:0 16px;height:44px;font-size:15px;font-weight:700;cursor:pointer;flex-shrink:0;">Enviar</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
@@ -86,7 +87,7 @@
       return '<div style="display:flex;justify-content:' + (minha ? 'flex-end' : 'flex-start') + ';margin-bottom:8px;">' +
         '<div style="max-width:82%;background:' + (minha ? '#dcf8c6' : '#fff') + ';border-radius:12px;padding:8px 10px;box-shadow:0 1px 1px rgba(0,0,0,.12);">' +
           '<div style="font-size:11px;color:#2d7a3e;font-weight:700;margin-bottom:2px;">' + esc(nomeAutor(m)) + '</div>' +
-          '<div style="font-size:15px;white-space:pre-wrap;word-break:break-word;">' + esc(m.corpo) + '</div>' +
+          '<div style="font-size:15px;white-space:pre-wrap;word-break:break-word;">' + (ehNudge(m) ? '⚡ <b>Chamou a atenção!</b>' : esc(m.corpo)) + '</div>' +
         '</div></div>';
     }).join('') || '<div style="text-align:center;color:#888;margin-top:24px;">Nenhuma mensagem ainda.<br>A Central pode te chamar por aqui.</div>';
     listaEl.scrollTop = listaEl.scrollHeight;
@@ -119,6 +120,42 @@
   overlay.querySelector('#chatEntEnviar').addEventListener('click', enviar);
   inputEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); enviar(); } });
 
+  // ---- "Chamar a atenção" (tipo MSN): um toque faz a tela do outro TREMER + piscar + tocar ----
+  var NUDGE = '⚡ Chamou a atenção!'; // a própria frase é o marcador → o painel já mostra bonitinho
+  function ehNudge(m) { return m && m.corpo === NUDGE; }
+  async function enviarNudge() {
+    try {
+      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: NUDGE }, { retries: 2 });
+      if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); if (aberto) render(); }
+    } catch (e) {}
+  }
+  overlay.querySelector('#chatEntNudge').addEventListener('click', enviarNudge);
+  function bipAtencao() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+      var ac = new Ctx();
+      [0, 0.18, 0.36].forEach(function (t) {
+        var o = ac.createOscillator(), g = ac.createGain(); o.type = 'square'; o.frequency.value = 880;
+        o.connect(g); g.connect(ac.destination);
+        g.gain.setValueAtTime(0.001, ac.currentTime + t); g.gain.exponentialRampToValueAtTime(0.25, ac.currentTime + t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + t + 0.15);
+        o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.16);
+      });
+      setTimeout(function () { try { ac.close(); } catch (e) {} }, 900);
+    } catch (e) {}
+  }
+  function chamarAtencaoRecebida() {
+    try { if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 120]); } catch (e) {}
+    bipAtencao();
+    document.body.classList.add('chat-treme');
+    setTimeout(function () { document.body.classList.remove('chat-treme'); }, 800);
+    mostrarToast('Central', '⚡ Chamou a sua ATENÇÃO!');
+  }
+  (function () {
+    var st = document.createElement('style');
+    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0)}10%{transform:translate(-9px,4px)}20%{transform:translate(9px,-4px)}30%{transform:translate(-9px,-4px)}40%{transform:translate(9px,4px)}50%{transform:translate(-6px,3px)}60%{transform:translate(6px,-3px)}70%{transform:translate(-4px,-2px)}80%{transform:translate(4px,2px)}90%{transform:translate(-2px,1px)}}.chat-treme{animation:chatTreme .8s ease-in-out;}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}}';
+    document.head.appendChild(st);
+  })();
+
   async function puxar() {
     try {
       var r = await api.apiGet({ action: 'mensagens', entregador: driver, apos: ultimoId }, { retries: 1 });
@@ -128,19 +165,21 @@
         var novaDaCentral = r.mensagens.some(function (m) { return !ehMinha(m); });
         if (aberto) { setLastSeen(ultimoId); render(); }
         pintarBadge();
+        // "Chamar atenção" recebido da Central → treme/pisca/som (mesmo com o chat aberto). Não na 1ª carga.
+        if (!primeiraCarga && r.mensagens.some(function (m) { return !ehMinha(m) && ehNudge(m); })) chamarAtencaoRecebida();
         if (!aberto && novaDaCentral) {
-          try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
-          var ult = r.mensagens.filter(function (m) { return !ehMinha(m); }).slice(-1)[0];
-          // POP-UP (banner) sempre que chega mensagem da Central: na 1ª carga só se há não-lidas;
-          // durante o uso, toda vez que chega uma nova. É o pop-up que faltava (e vale no iPhone web).
-          if (ult && (!primeiraCarga || naoLidas() > 0)) mostrarToast(nomeAutor(ult), ult.corpo);
-          // App .apk: notificação NATIVA também (pra ver com o app em segundo plano).
-          try {
-            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-              var LN = window.Capacitor.Plugins.LocalNotifications;
-              if (LN && LN.schedule && ult) LN.schedule({ notifications: [{ id: (Date.now() % 100000), title: 'Mensagem da Central', body: String(ult.corpo || '').slice(0, 140) }] });
-            }
-          } catch (e) {}
+          // POP-UP (banner) pra mensagem NORMAL (nudge já trata no chamarAtencaoRecebida acima).
+          var ult = r.mensagens.filter(function (m) { return !ehMinha(m) && !ehNudge(m); }).slice(-1)[0];
+          if (ult && (!primeiraCarga || naoLidas() > 0)) {
+            try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
+            mostrarToast(nomeAutor(ult), ult.corpo);
+            try {
+              if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                var LN = window.Capacitor.Plugins.LocalNotifications;
+                if (LN && LN.schedule) LN.schedule({ notifications: [{ id: (Date.now() % 100000), title: 'Mensagem da Central', body: String(ult.corpo || '').slice(0, 140) }] });
+              }
+            } catch (e) {}
+          }
         }
       }
     } catch (e) { /* silencioso */ }
