@@ -161,23 +161,19 @@
     } catch (e) {}
   }
   function chamarAtencaoRecebida() {
-    try { if (navigator.vibrate) navigator.vibrate([250, 120, 250, 120, 500]); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 300]); } catch (e) {}
     bipAtencao();
-    // FLASH vermelho de tela cheia — impossível de perder (mesmo sem som, ex.: iPhone no silencioso).
-    var flash = document.createElement('div');
-    flash.className = 'nudge-flash';
-    flash.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#e53935;pointer-events:none;';
-    flash.innerHTML = '<div style="color:#fff;font-size:min(13vw,58px);font-weight:900;text-align:center;text-shadow:0 4px 14px rgba(0,0,0,.5);line-height:1.2;">⚡⚡⚡<br>ATENÇÃO!<br><span style="font-size:.5em;">A Central te chamou</span></div>';
-    document.body.appendChild(flash);
-    var alvo = document.querySelector('.page-shell') || document.body;
-    alvo.classList.add('chat-treme');
-    setTimeout(function () { alvo.classList.remove('chat-treme'); }, 1400);
-    setTimeout(function () { try { flash.remove(); } catch (e) {} }, 2800);
-    mostrarToast('Central', '⚡ Chamou a sua ATENÇÃO!');
+    // Banner central que pulsa e some sozinho (sem tela vermelha).
+    var el = document.createElement('div');
+    el.className = 'nudge-banner-app';
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#2d7a3e;color:#fff;padding:22px 26px;border-radius:16px;box-shadow:0 14px 44px rgba(0,0,0,.4);text-align:center;font-weight:800;pointer-events:none;max-width:88vw;';
+    el.innerHTML = '<div style="font-size:34px;">⚡</div><div style="font-size:18px;margin-top:4px;">CHAMARAM A SUA ATENÇÃO!</div><div style="font-size:14px;opacity:.9;margin-top:2px;font-weight:600;">Verifique o chat</div>';
+    document.body.appendChild(el);
+    setTimeout(function () { try { el.remove(); } catch (e) {} }, 4000);
   }
   (function () {
     var st = document.createElement('style');
-    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0) rotate(0)}8%{transform:translate(-16px,6px) rotate(-1deg)}16%{transform:translate(16px,-6px) rotate(1deg)}24%{transform:translate(-16px,-6px) rotate(-1deg)}32%{transform:translate(16px,6px) rotate(1deg)}40%{transform:translate(-13px,5px)}50%{transform:translate(13px,-5px)}60%{transform:translate(-10px,-4px)}70%{transform:translate(10px,4px)}80%{transform:translate(-6px,2px)}90%{transform:translate(4px,-1px)}}.chat-treme{animation:chatTreme .7s cubic-bezier(.36,.07,.19,.97) 2;}@keyframes nudgeFlash{0%{opacity:0}12%{opacity:.95}26%{opacity:.15}40%{opacity:.95}54%{opacity:.15}68%{opacity:.9}100%{opacity:0}}.nudge-flash{animation:nudgeFlash 2.8s ease-in-out;}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}.nudge-flash{animation:none;opacity:.5}}';
+    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0) rotate(0)}8%{transform:translate(-16px,6px) rotate(-1deg)}16%{transform:translate(16px,-6px) rotate(1deg)}24%{transform:translate(-16px,-6px) rotate(-1deg)}32%{transform:translate(16px,6px) rotate(1deg)}40%{transform:translate(-13px,5px)}50%{transform:translate(13px,-5px)}60%{transform:translate(-10px,-4px)}70%{transform:translate(10px,4px)}80%{transform:translate(-6px,2px)}90%{transform:translate(4px,-1px)}}.chat-treme{animation:chatTreme .7s cubic-bezier(.36,.07,.19,.97) 2;}@keyframes nudgeFlash{0%{opacity:0}12%{opacity:.95}26%{opacity:.15}40%{opacity:.95}54%{opacity:.15}68%{opacity:.9}100%{opacity:0}}.nudge-flash{animation:nudgeFlash 2.8s ease-in-out;}@keyframes nudgePulseA{0%{transform:translate(-50%,-50%) scale(.7);opacity:0}15%{transform:translate(-50%,-50%) scale(1.06);opacity:1}25%{transform:translate(-50%,-50%) scale(1)}85%{opacity:1}100%{opacity:0}}.nudge-banner-app{animation:nudgePulseA 4s ease-in-out}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}.nudge-flash{animation:none;opacity:.5}.nudge-banner-app{animation:none}}';
     document.head.appendChild(st);
   })();
 
