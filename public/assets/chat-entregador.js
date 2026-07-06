@@ -59,7 +59,7 @@
   overlay.id = 'chatEntOverlay';
   overlay.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(20,18,14,.4);z-index:5000;';
   overlay.innerHTML =
-    '<div style="position:absolute;inset:0;display:flex;flex-direction:column;background:#fff;max-width:600px;margin:0 auto;">' +
+    '<div id="chatEntModal" style="position:absolute;top:12px;bottom:12px;left:12px;right:12px;max-width:560px;margin-left:auto;margin-right:auto;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 14px 44px rgba(0,0,0,.45);">' +
       '<div style="display:flex;align-items:center;gap:8px;padding:12px 14px;background:#2d7a3e;color:#fff;">' +
         '<strong style="flex:1;font-size:16px;">💬 Mensagens da Central</strong>' +
         '<button type="button" id="chatEntFechar" style="background:none;border:0;color:#fff;font-size:26px;cursor:pointer;line-height:1;">×</button>' +
@@ -71,6 +71,7 @@
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) fechar(); }); // toca fora do modal = fecha
   var listaEl = overlay.querySelector('#chatEntLista');
   var inputEl = overlay.querySelector('#chatEntInput');
 
