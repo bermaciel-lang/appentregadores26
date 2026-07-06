@@ -130,29 +130,41 @@
     } catch (e) {}
   }
   overlay.querySelector('#chatEntNudge').addEventListener('click', enviarNudge);
+  // Áudio destravado no 1º toque do usuário (iOS/Safari só tocam som depois de um gesto).
+  var _ac = null;
+  function destravarAudio() { try { var Ctx = window.AudioContext || window.webkitAudioContext; if (!_ac && Ctx) _ac = new Ctx(); if (_ac && _ac.state === 'suspended') _ac.resume(); } catch (e) {} }
+  document.addEventListener('touchstart', destravarAudio, true);
+  document.addEventListener('click', destravarAudio, true);
   function bipAtencao() {
     try {
-      var Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
-      var ac = new Ctx();
-      [0, 0.18, 0.36].forEach(function (t) {
-        var o = ac.createOscillator(), g = ac.createGain(); o.type = 'square'; o.frequency.value = 880;
+      destravarAudio(); if (!_ac) return;
+      var ac = _ac, t0 = ac.currentTime;
+      [[0, 988], [0.16, 1319], [0.32, 988], [0.48, 1319], [0.64, 988]].forEach(function (p) {
+        var o = ac.createOscillator(), g = ac.createGain(); o.type = 'square'; o.frequency.value = p[1];
         o.connect(g); g.connect(ac.destination);
-        g.gain.setValueAtTime(0.001, ac.currentTime + t); g.gain.exponentialRampToValueAtTime(0.25, ac.currentTime + t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + t + 0.15);
-        o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.16);
+        g.gain.setValueAtTime(0.0001, t0 + p[0]); g.gain.exponentialRampToValueAtTime(0.6, t0 + p[0] + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + p[0] + 0.14);
+        o.start(t0 + p[0]); o.stop(t0 + p[0] + 0.15);
       });
-      setTimeout(function () { try { ac.close(); } catch (e) {} }, 900);
     } catch (e) {}
   }
   function chamarAtencaoRecebida() {
-    try { if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 120]); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([250, 120, 250, 120, 500]); } catch (e) {}
     bipAtencao();
-    document.body.classList.add('chat-treme');
-    setTimeout(function () { document.body.classList.remove('chat-treme'); }, 800);
+    // FLASH vermelho de tela cheia — impossível de perder (mesmo sem som, ex.: iPhone no silencioso).
+    var flash = document.createElement('div');
+    flash.className = 'nudge-flash';
+    flash.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#e53935;pointer-events:none;';
+    flash.innerHTML = '<div style="color:#fff;font-size:min(13vw,58px);font-weight:900;text-align:center;text-shadow:0 4px 14px rgba(0,0,0,.5);line-height:1.2;">⚡⚡⚡<br>ATENÇÃO!<br><span style="font-size:.5em;">A Central te chamou</span></div>';
+    document.body.appendChild(flash);
+    var alvo = document.querySelector('.page-shell') || document.body;
+    alvo.classList.add('chat-treme');
+    setTimeout(function () { alvo.classList.remove('chat-treme'); }, 1400);
+    setTimeout(function () { try { flash.remove(); } catch (e) {} }, 2800);
     mostrarToast('Central', '⚡ Chamou a sua ATENÇÃO!');
   }
   (function () {
     var st = document.createElement('style');
-    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0)}10%{transform:translate(-9px,4px)}20%{transform:translate(9px,-4px)}30%{transform:translate(-9px,-4px)}40%{transform:translate(9px,4px)}50%{transform:translate(-6px,3px)}60%{transform:translate(6px,-3px)}70%{transform:translate(-4px,-2px)}80%{transform:translate(4px,2px)}90%{transform:translate(-2px,1px)}}.chat-treme{animation:chatTreme .8s ease-in-out;}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}}';
+    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0) rotate(0)}8%{transform:translate(-16px,6px) rotate(-1deg)}16%{transform:translate(16px,-6px) rotate(1deg)}24%{transform:translate(-16px,-6px) rotate(-1deg)}32%{transform:translate(16px,6px) rotate(1deg)}40%{transform:translate(-13px,5px)}50%{transform:translate(13px,-5px)}60%{transform:translate(-10px,-4px)}70%{transform:translate(10px,4px)}80%{transform:translate(-6px,2px)}90%{transform:translate(4px,-1px)}}.chat-treme{animation:chatTreme .7s cubic-bezier(.36,.07,.19,.97) 2;}@keyframes nudgeFlash{0%{opacity:0}12%{opacity:.95}26%{opacity:.15}40%{opacity:.95}54%{opacity:.15}68%{opacity:.9}100%{opacity:0}}.nudge-flash{animation:nudgeFlash 2.8s ease-in-out;}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}.nudge-flash{animation:none;opacity:.5}}';
     document.head.appendChild(st);
   })();
 
