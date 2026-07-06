@@ -349,6 +349,32 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 }
 
+  // Posição instantânea do celular (best-effort). Aceita um fix recente (maximumAge) pra NÃO travar
+  // a marcação esperando GPS. Tenta o nativo (Capacitor) e cai no navegador. Devolve {lat,lng,precisao} ou null.
+  async function posicaoAtual() {
+    try {
+      var Cap = window.Capacitor;
+      if (Cap && Cap.Plugins && Cap.Plugins.Geolocation && Cap.isNativePlatform && Cap.isNativePlatform()) {
+        var pn = await Cap.Plugins.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 4000, maximumAge: 60000 });
+        if (pn && pn.coords) return { lat: pn.coords.latitude, lng: pn.coords.longitude, precisao: pn.coords.accuracy };
+      }
+    } catch (e) {}
+    try {
+      if (navigator.geolocation) {
+        return await new Promise(function (resolve) {
+          var done = false;
+          var t = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 4000);
+          navigator.geolocation.getCurrentPosition(
+            function (pos) { if (done) return; done = true; clearTimeout(t); resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, precisao: pos.coords.accuracy }); },
+            function () { if (done) return; done = true; clearTimeout(t); resolve(null); },
+            { enableHighAccuracy: true, timeout: 4000, maximumAge: 60000 }
+          );
+        });
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // Escritas de status: 3 tentativas (rede de celular oscila). É seguro repetir
   // porque marcar a mesma linha de novo grava o mesmo valor (não duplica nada).
   async function apiIniciarEntrega(row) {
@@ -356,9 +382,14 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 
   async function apiMarcarEntregue(row, obs) {
-    // ts_device = hora do CELULAR no instante do toque. O painel guarda em entregue_em pra depois
-    // comparar com a hora real por GPS (às vezes o entregador marca muito depois de entregar).
-    return apiGet({ action: 'marcarEntregue', row, obs: obs || '', ts_device: new Date().toISOString() }, { retries: 3 });
+    // ts_device = hora do CELULAR no toque; entregue_lat/lng = ONDE ele estava (anti-fraude, pra
+    // cruzar depois com o endereço do cliente). Tudo best-effort: sem GPS, manda só a hora.
+    var params = { action: 'marcarEntregue', row: row, obs: obs || '', ts_device: new Date().toISOString() };
+    try {
+      var pos = await posicaoAtual();
+      if (pos) { params.entregue_lat = pos.lat; params.entregue_lng = pos.lng; if (pos.precisao != null) params.entregue_precisao = Math.round(pos.precisao); }
+    } catch (e) {}
+    return apiGet(params, { retries: 3 });
   }
 
   async function apiMarcarNaoEntregue(row, obs) {
