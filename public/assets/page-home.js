@@ -16,7 +16,28 @@
     warningBox.textContent = '';
   }
 
-  function goToEntregas(nome) {
+  async function goToEntregas(nome) {
+    nome = String(nome || '').trim();
+    if (!nome) return;
+    // Device-bind: se este aparelho já logou com ESTE entregador, entra direto (sem PIN).
+    var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
+    if (!(ti && ti.nome === nome)) {
+      // 1º acesso deste entregador neste aparelho → pede o PIN (os últimos 4 do telefone dele).
+      var pin = await AppUI.perguntar('Digite seu PIN\n(os últimos 4 números do seu telefone)', {
+        titulo: 'Entrar — ' + nome, inputmode: 'numeric', textoOk: 'Entrar'
+      });
+      // MODO OBSERVA (fase de testes): ninguém fica travado. Guarda o token de quem acerta o PIN
+      // (device-bind: da próxima entra direto); quem cancela ou erra, entra assim mesmo por enquanto.
+      if (pin != null) {
+        var r = null;
+        try { r = await api.apiLogin(nome, String(pin).replace(/\D/g, '')); } catch (e) { r = null; }
+        if (r && r.ok && r.token) {
+          api.saveDriverToken(r.token, nome);
+        } else {
+          await AppUI.alerta('Não consegui confirmar seu PIN agora — você entrou assim mesmo. Se pedir de novo, confirme com o escritório o telefone do seu cadastro.');
+        }
+      }
+    }
     api.saveDriverName(nome);
     window.location.href = '/entregas/';
   }

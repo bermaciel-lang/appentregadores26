@@ -10,6 +10,7 @@ window.APP_CONFIG = {
   API_RETRY_COUNT: 2,
   CACHE_TTL_MS: 300000,
   STORAGE_DRIVER_KEY: 'app_entregas_driver_name',
+  STORAGE_TOKEN_KEY: 'app_entregas_driver_token',
   STORAGE_ADMIN_AUTH_KEY: 'app_entregas_admin_auth',
   STORAGE_CACHE_PREFIX: 'app_entregas_cache_v3_'
 };

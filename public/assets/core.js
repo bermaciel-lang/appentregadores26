@@ -82,6 +82,26 @@ function buildMapsUrl(item) {
     localStorage.removeItem(C.STORAGE_DRIVER_KEY);
   }
 
+  // ---- Token do aparelho (Fase 2 / login por PIN) ----
+  // Depois do 1º PIN certo, guardamos { token, nome } no aparelho (device-bind): nas próximas vezes
+  // o mesmo entregador entra sem digitar PIN. O SERVIDOR descobre quem é pelo token — o nome mandado
+  // é só referência. Trocar de entregador (outro nome) pede o PIN de novo.
+  function saveDriverToken(token, nome) {
+    try { localStorage.setItem(C.STORAGE_TOKEN_KEY, JSON.stringify({ token: String(token || ''), nome: String(nome || '').trim() })); } catch (e) {}
+  }
+  function getDriverTokenInfo() {
+    try { var o = JSON.parse(localStorage.getItem(C.STORAGE_TOKEN_KEY) || 'null'); return (o && o.token) ? o : null; } catch (e) { return null; }
+  }
+  function clearDriverToken() {
+    try { localStorage.removeItem(C.STORAGE_TOKEN_KEY); } catch (e) {}
+  }
+  // Login por PIN. Devolve { ok, token, nome } ou { ok:false, error }. Não anexa token (não tem ainda).
+  async function apiLogin(nome, pin) {
+    var aparelho = '';
+    try { aparelho = (navigator.userAgent || '').slice(0, 120); } catch (e) {}
+    return apiGet({ action: 'login', entregador: nome, pin: pin, aparelho: aparelho }, { retries: 1 });
+  }
+
   function setAdminAuth(ok) {
     localStorage.setItem(C.STORAGE_ADMIN_AUTH_KEY, ok ? '1' : '0');
   }
@@ -167,6 +187,14 @@ function buildMapsUrl(item) {
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
+    // Fase 2: anexa o token do aparelho em TODA request (menos o próprio login, que ainda não tem).
+    // O servidor descobre quem é o entregador pelo token e ignora o nome mandado.
+    try {
+      if (!params || params.action !== 'login') {
+        var ti = getDriverTokenInfo();
+        if (ti && ti.token && !url.searchParams.has('token')) url.searchParams.set('token', ti.token);
+      }
+    } catch (e) { /* sem token → segue sem (modo observa no servidor deixa passar) */ }
     return url.toString();
   }
 
@@ -500,6 +528,10 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     saveDriverName,
     getSavedDriverName,
     clearSavedDriverName,
+    saveDriverToken,
+    getDriverTokenInfo,
+    clearDriverToken,
+    apiLogin,
     saveEntregasCache,
     setAdminAuth,
     getAdminAuth,
