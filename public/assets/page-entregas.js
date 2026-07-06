@@ -833,11 +833,29 @@ async function handleFinalizarRota() {
     });
   }
 
+  // Reporta ao SISTEMA se este aparelho está com GPS/notificações LIGADOS ou DESLIGADOS (o painel
+  // mostra quem está ok e quem não). Não bloqueia nada; vale no app e no site.
+  async function reportarPermissoes() {
+    try {
+      var plat = ehNativo() ? 'app' : 'web';
+      var gps = 'desconhecido', notif = 'desconhecido';
+      if (ehNativo()) {
+        try { var G = window.Capacitor.Plugins.Geolocation, g = (G && G.checkPermissions) ? await G.checkPermissions() : null; if (g) gps = (g.location === 'granted' || g.coarseLocation === 'granted') ? 'on' : 'off'; } catch (e) {}
+        try { var LN = window.Capacitor.Plugins.LocalNotifications, n = (LN && LN.checkPermissions) ? await LN.checkPermissions() : null; if (n) notif = (n.display === 'granted') ? 'on' : 'off'; } catch (e) {}
+      } else {
+        try { if (navigator.permissions && navigator.permissions.query) { var r = await navigator.permissions.query({ name: 'geolocation' }); gps = r.state === 'granted' ? 'on' : (r.state === 'denied' ? 'off' : 'desconhecido'); } } catch (e) {}
+        try { notif = (typeof Notification === 'undefined') ? 'desconhecido' : (Notification.permission === 'granted' ? 'on' : (Notification.permission === 'denied' ? 'off' : 'desconhecido')); } catch (e) {}
+      }
+      api.apiGet({ action: 'permissoes', entregador: state.driver, gps: gps, notif: notif, plataforma: plat }, { retries: 1 });
+    } catch (e) {}
+  }
+
   (async function init() {
     if (redirectIfNoDriver()) return;
     if (driverTitle) driverTitle.textContent = state.driver; // título virou fixo "Tela do entregador"
     if (driverNameText) driverNameText.textContent = state.driver; // nome único, no cartão
     await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
+    reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
