@@ -21,26 +21,29 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function naoLidas() { var ls = lastSeen(); return mensagens.filter(function (m) { return m.id > ls && !ehMinha(m); }).length; }
 
-  // ---- Pop-up (banner no topo) ao chegar mensagem — some sozinho, toca pra abrir. Funciona no
-  // iPhone web também (onde notificação de SISTEMA não dispara pra site aberto no navegador). ----
-  var toastEl = null, toastTimer = null;
+  // ---- Pop-up ao chegar mensagem: card GRANDE no MEIO da tela, FICA até tocar (abre a conversa) ou
+  // fechar no X. Não some sozinho. Funciona no iPhone web também. ----
+  var toastEl = null;
   function mostrarToast(autor, corpo) {
     try {
-      if (!toastEl) {
-        toastEl = document.createElement('div');
-        toastEl.style.cssText = 'position:fixed;top:12px;left:12px;right:12px;max-width:560px;margin:0 auto;z-index:6000;background:#2d7a3e;color:#fff;border-radius:14px;padding:12px 14px;box-shadow:0 8px 26px rgba(0,0,0,.32);cursor:pointer;display:none;';
-        toastEl.addEventListener('click', function () { esconderToast(); abrir(); });
-        document.body.appendChild(toastEl);
-      }
-      toastEl.innerHTML =
-        '<div style="font-size:12px;font-weight:800;opacity:.92;">🔔 ' + esc(autor) + ' · toque para responder</div>' +
-        '<div style="font-size:15px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(corpo || '') + '</div>';
-      toastEl.style.display = 'block';
-      if (toastTimer) clearTimeout(toastTimer);
-      toastTimer = setTimeout(esconderToast, 8000);
+      esconderToast(); // substitui um anterior, se houver
+      toastEl = document.createElement('div');
+      toastEl.style.cssText = 'position:fixed;inset:0;z-index:6000;background:rgba(20,18,14,.45);display:flex;align-items:center;justify-content:center;padding:20px;';
+      var card = document.createElement('div');
+      card.style.cssText = 'background:#2d7a3e;color:#fff;border-radius:18px;padding:22px 20px 18px;max-width:420px;width:100%;box-shadow:0 14px 44px rgba(0,0,0,.45);position:relative;cursor:pointer;';
+      card.innerHTML =
+        '<button id="toastX" aria-label="Fechar" style="position:absolute;top:8px;right:10px;background:rgba(255,255,255,.22);border:0;color:#fff;font-size:22px;width:36px;height:36px;border-radius:50%;line-height:1;cursor:pointer;">×</button>' +
+        '<div style="font-size:38px;text-align:center;margin-bottom:6px;">💬</div>' +
+        '<div style="font-size:15px;font-weight:800;opacity:.95;margin-bottom:4px;">🔔 Mensagem de ' + esc(autor) + '</div>' +
+        '<div style="font-size:18px;line-height:1.4;white-space:pre-wrap;word-break:break-word;">' + esc(corpo || '') + '</div>' +
+        '<div style="margin-top:16px;text-align:center;background:rgba(255,255,255,.18);border-radius:10px;padding:11px;font-size:15px;font-weight:800;">Toque para abrir e responder</div>';
+      card.addEventListener('click', function () { esconderToast(); abrir(); });
+      card.querySelector('#toastX').addEventListener('click', function (e) { e.stopPropagation(); esconderToast(); });
+      toastEl.appendChild(card);
+      document.body.appendChild(toastEl);
     } catch (e) {}
   }
-  function esconderToast() { try { if (toastEl) toastEl.style.display = 'none'; if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; } } catch (e) {} }
+  function esconderToast() { try { if (toastEl) { toastEl.remove(); toastEl = null; } } catch (e) {} }
 
   // ---- Sininho no topo (com badge de não-lidas) ----
   var bell = document.createElement('button');
@@ -88,6 +91,7 @@
     listaEl.scrollTop = listaEl.scrollHeight;
   }
   function abrir() {
+    esconderToast(); // abriu a conversa (por aqui ou pelo sininho) → fecha o pop-up
     aberto = true; overlay.style.display = 'block';
     if (mensagens.length) setLastSeen(mensagens[mensagens.length - 1].id);
     pintarBadge(); render();
