@@ -328,11 +328,13 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 
   async function apiMarcarEntregue(row, obs) {
-    return apiGet({ action: 'marcarEntregue', row, obs: obs || '' }, { retries: 3 });
+    // ts_device = hora do CELULAR no instante do toque. O painel guarda em entregue_em pra depois
+    // comparar com a hora real por GPS (às vezes o entregador marca muito depois de entregar).
+    return apiGet({ action: 'marcarEntregue', row, obs: obs || '', ts_device: new Date().toISOString() }, { retries: 3 });
   }
 
   async function apiMarcarNaoEntregue(row, obs) {
-    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '' }, { retries: 3 });
+    return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '', ts_device: new Date().toISOString() }, { retries: 3 });
   }
 
 async function apiMarcarCancelado(row, obs) {
