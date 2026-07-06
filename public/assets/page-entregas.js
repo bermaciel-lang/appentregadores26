@@ -787,10 +787,57 @@ async function handleFinalizarRota() {
     stopAutoRefresh();
   });
 
-  (function init() {
+  // ---- Gate de permissões (SÓ no app .apk / nativo): exige NOTIFICAÇÕES + LOCALIZAÇÃO antes de abrir
+  // as entregas. No site (navegador) NÃO bloqueia nada — abre normal como hoje. ----
+  function ehNativo() { try { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch (e) { return false; } }
+  async function pedirNotifNativo() {
+    try { var LN = window.Capacitor.Plugins.LocalNotifications; if (LN && LN.requestPermissions) { var r = await LN.requestPermissions(); return r && r.display === 'granted' ? 'granted' : 'denied'; } } catch (e) {}
+    return 'unsupported';
+  }
+  async function pedirLocalNativo() {
+    try { var G = window.Capacitor.Plugins.Geolocation; if (G && G.requestPermissions) { var r = await G.requestPermissions(); return r && (r.location === 'granted' || r.coarseLocation === 'granted') ? 'granted' : 'denied'; } } catch (e) {}
+    return 'unsupported';
+  }
+  async function jaTemPermissoes() {
+    try {
+      var LN = window.Capacitor.Plugins.LocalNotifications, G = window.Capacitor.Plugins.Geolocation;
+      var n = (LN && LN.checkPermissions) ? await LN.checkPermissions() : { display: 'granted' };
+      var g = (G && G.checkPermissions) ? await G.checkPermissions() : { location: 'prompt' };
+      return (n.display === 'granted') && (g.location === 'granted' || g.coarseLocation === 'granted');
+    } catch (e) { return false; }
+  }
+  async function exigirPermissoes() {
+    if (!ehNativo()) return;              // site/navegador: não bloqueia (por enquanto)
+    if (await jaTemPermissoes()) return;  // já concedidas: abre direto
+    await new Promise(function (resolve) {
+      var ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#111;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;gap:16px;';
+      ov.innerHTML =
+        '<div style="font-size:46px;">🔔📍</div>' +
+        '<div style="font-size:20px;font-weight:800;">Ative 2 permissões pra começar</div>' +
+        '<div id="pgMsg" style="font-size:16px;line-height:1.5;max-width:330px;opacity:.92;">O app precisa das <b>notificações</b> (pra a Central te chamar) e da <b>localização</b> (pro KM e o rastreio). Toque abaixo e escolha <b>Permitir</b>.</div>' +
+        '<button id="pgBtn" style="background:#2d7a3e;color:#fff;border:0;border-radius:12px;padding:16px 30px;font-size:17px;font-weight:800;">Ativar e permitir</button>';
+      document.body.appendChild(ov);
+      var btn = ov.querySelector('#pgBtn'), msg = ov.querySelector('#pgMsg');
+      btn.addEventListener('click', async function () {
+        btn.disabled = true; btn.textContent = 'Pedindo...';
+        var notif = await pedirNotifNativo();
+        var local = await pedirLocalNativo();
+        var okN = (notif === 'granted' || notif === 'unsupported');
+        var okL = (local === 'granted' || local === 'unsupported');
+        if (okN && okL) { ov.remove(); resolve(); return; }
+        btn.disabled = false; btn.textContent = 'Tentar de novo';
+        var f = []; if (!okN) f.push('Notificações'); if (!okL) f.push('Localização');
+        msg.innerHTML = 'Faltou liberar: <b>' + f.join(' e ') + '</b>.<br>Se você negou antes, abra <b>Configurações do Android → Apps → Entregas → Permissões</b>, libere, e volte pra tocar em Tentar de novo.';
+      });
+    });
+  }
+
+  (async function init() {
     if (redirectIfNoDriver()) return;
     if (driverTitle) driverTitle.textContent = state.driver; // título virou fixo "Tela do entregador"
     if (driverNameText) driverNameText.textContent = state.driver; // nome único, no cartão
+    await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();

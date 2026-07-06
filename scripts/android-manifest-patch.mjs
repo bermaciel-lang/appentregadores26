@@ -10,6 +10,7 @@ const PERMS = [
   'FOREGROUND_SERVICE',
   'FOREGROUND_SERVICE_LOCATION',
   'WAKE_LOCK',
+  'POST_NOTIFICATIONS', // notificações no Android 13+ (chat/avisos no app)
 ];
 const faltando = PERMS.filter((p) => !m.includes(`android.permission.${p}`));
 if (!faltando.length) { console.log('Permissões já presentes.'); process.exit(0); }

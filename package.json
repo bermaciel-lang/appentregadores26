@@ -10,6 +10,8 @@
     "googleapis": "^171.4.0",
     "@capacitor/core": "^6.2.0",
     "@capacitor/android": "^6.2.0",
+    "@capacitor/geolocation": "^6.1.0",
+    "@capacitor/local-notifications": "^6.1.0",
     "@capacitor-community/background-geolocation": "^1.2.0"
   },
   "devDependencies": {

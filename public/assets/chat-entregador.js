@@ -105,7 +105,17 @@
         if (!aberto && novaDaCentral) {
           try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
           // Pop-up ao ABRIR o app: se há não-lidas na 1ª carga, mostra o painel uma vez.
-          if (primeiraCarga && naoLidas() > 0) abrir();
+          if (primeiraCarga && naoLidas() > 0) { abrir(); }
+          else if (!primeiraCarga) {
+            // App .apk: notificação NATIVA pra ele ver mesmo com o app em segundo plano.
+            try {
+              if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                var LN = window.Capacitor.Plugins.LocalNotifications;
+                var ult = r.mensagens.filter(function (m) { return !ehMinha(m); }).slice(-1)[0];
+                if (LN && LN.schedule && ult) LN.schedule({ notifications: [{ id: (Date.now() % 100000), title: 'Mensagem da Central', body: String(ult.corpo || '').slice(0, 140) }] });
+              }
+            } catch (e) {}
+          }
         }
       }
     } catch (e) { /* silencioso */ }
