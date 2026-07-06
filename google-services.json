@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "626370607028",
+    "project_id": "entregas-organico-do-chico",
+    "storage_bucket": "entregas-organico-do-chico.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:626370607028:android:7b49e832c78131248be4e1",
+        "android_client_info": {
+          "package_name": "br.com.organicodochico.entregas"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHfqldll4oNr-jOyeSTWrBBF0m98dsGKo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
