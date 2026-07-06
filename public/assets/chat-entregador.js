@@ -81,13 +81,22 @@
     badgeEl.textContent = n > 99 ? '99+' : String(n);
     badgeEl.style.display = n > 0 ? 'block' : 'none';
   }
+  function renderAnexo(m) {
+    var a = m && m.anexo; if (!a || !a.url) return '';
+    var t = String(a.tipo || ''), u = esc(a.url);
+    if (t.indexOf('image/') === 0) return '<a href="' + u + '" target="_blank" rel="noopener"><img src="' + u + '" style="max-width:200px;max-height:230px;border-radius:8px;display:block;margin-top:4px;" /></a>';
+    if (t.indexOf('audio/') === 0) return '<audio controls src="' + u + '" style="max-width:230px;margin-top:4px;"></audio>';
+    return '<a href="' + u + '" target="_blank" rel="noopener" style="display:inline-block;margin-top:4px;color:#2d7a3e;font-weight:700;">📎 ' + esc(a.nome || 'arquivo') + '</a>';
+  }
   function render() {
     listaEl.innerHTML = mensagens.map(function (m) {
       var minha = ehMinha(m);
+      var corpoHtml = ehNudge(m) ? '<div style="font-size:15px;">⚡ <b>Chamou a atenção!</b></div>'
+        : (m.corpo ? '<div style="font-size:15px;white-space:pre-wrap;word-break:break-word;">' + esc(m.corpo) + '</div>' : '');
       return '<div style="display:flex;justify-content:' + (minha ? 'flex-end' : 'flex-start') + ';margin-bottom:8px;">' +
         '<div style="max-width:82%;background:' + (minha ? '#dcf8c6' : '#fff') + ';border-radius:12px;padding:8px 10px;box-shadow:0 1px 1px rgba(0,0,0,.12);">' +
           '<div style="font-size:11px;color:#2d7a3e;font-weight:700;margin-bottom:2px;">' + esc(nomeAutor(m)) + '</div>' +
-          '<div style="font-size:15px;white-space:pre-wrap;word-break:break-word;">' + (ehNudge(m) ? '⚡ <b>Chamou a atenção!</b>' : esc(m.corpo)) + '</div>' +
+          corpoHtml + renderAnexo(m) +
         '</div></div>';
     }).join('') || '<div style="text-align:center;color:#888;margin-top:24px;">Nenhuma mensagem ainda.<br>A Central pode te chamar por aqui.</div>';
     listaEl.scrollTop = listaEl.scrollHeight;
@@ -125,6 +134,10 @@
   function ehNudge(m) { return m && m.corpo === NUDGE; }
   async function enviarNudge() {
     try {
+      var agora = Date.now(), last = Number(localStorage.getItem('chat_nudge_last') || 0) || 0;
+      var faltam = 5 * 60000 - (agora - last);
+      if (faltam > 0) { await AppUI.alerta('Você já chamou a atenção faz pouco. Espere ' + Math.ceil(faltam / 60000) + ' min pra chamar de novo.'); return; }
+      localStorage.setItem('chat_nudge_last', String(agora));
       var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: NUDGE }, { retries: 2 });
       if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); if (aberto) render(); }
     } catch (e) {}
