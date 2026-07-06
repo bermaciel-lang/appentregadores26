@@ -66,6 +66,8 @@
       '</div>' +
       '<div id="chatEntLista" style="flex:1;overflow-y:auto;padding:12px;background:#f3f3f0;"></div>' +
       '<div style="display:flex;gap:8px;padding:10px;border-top:1px solid #ddd;background:#fff;align-items:center;">' +
+        '<button type="button" id="chatEntAnexo" title="Enviar foto/áudio/arquivo" style="background:#eee;border:0;border-radius:10px;width:44px;height:44px;font-size:19px;cursor:pointer;flex-shrink:0;">📎</button>' +
+        '<input type="file" id="chatEntFile" accept="image/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" style="display:none;" />' +
         '<button type="button" id="chatEntNudge" title="Chamar a atenção" style="background:#ffb300;border:0;border-radius:10px;width:46px;height:44px;font-size:20px;cursor:pointer;flex-shrink:0;">👋</button>' +
         '<input id="chatEntInput" type="text" placeholder="Escreva uma mensagem..." autocomplete="off" style="flex:1;min-width:0;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:15px;" />' +
         '<button type="button" id="chatEntEnviar" style="background:#2d7a3e;color:#fff;border:0;border-radius:10px;padding:0 16px;height:44px;font-size:15px;font-weight:700;cursor:pointer;flex-shrink:0;">Enviar</button>' +
@@ -143,6 +145,26 @@
     } catch (e) {}
   }
   overlay.querySelector('#chatEntNudge').addEventListener('click', enviarNudge);
+
+  // Enviar ANEXO (foto/áudio/arquivo): lê como base64 e manda pela ponte (POST, não querystring).
+  var fileEl = overlay.querySelector('#chatEntFile'), anexoEl = overlay.querySelector('#chatEntAnexo');
+  anexoEl.addEventListener('click', function () { fileEl.click(); });
+  fileEl.addEventListener('change', function () { var f = fileEl.files && fileEl.files[0]; fileEl.value = ''; if (f) enviarArquivo(f); });
+  async function enviarArquivo(file) {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { await AppUI.alerta('Arquivo muito grande (máximo 8 MB).'); return; }
+    anexoEl.textContent = '⏳';
+    try {
+      var base64 = await new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = rej; fr.readAsDataURL(file); });
+      var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
+      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: file.name || 'arquivo', tipo: file.type || 'application/octet-stream' };
+      if (ti && ti.token) body.token = ti.token;
+      var r = await fetch('/api/painel/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }).then(function (x) { return x.json(); });
+      if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); render(); }
+      else await AppUI.alerta('Não consegui enviar o arquivo. Tente de novo.');
+    } catch (e) { await AppUI.alerta('Sem conexão pra enviar o arquivo agora.'); }
+    anexoEl.textContent = '📎';
+  }
   // Áudio destravado no 1º toque do usuário (iOS/Safari só tocam som depois de um gesto).
   var _ac = null;
   function destravarAudio() { try { var Ctx = window.AudioContext || window.webkitAudioContext; if (!_ac && Ctx) _ac = new Ctx(); if (_ac && _ac.state === 'suspended') _ac.resume(); } catch (e) {} }
