@@ -676,11 +676,16 @@ async function handleFinalizarRota() {
 
       if (act === 'whats') { await api.abrirWhatsapp(row); return; }
 
+      // Hora do APARELHO no instante do toque (ISO). Vai junto no envio; e SE cair na FILA offline,
+      // é reenviada COM ESTE horário quando a internet voltar. Assim o servidor carimba o entregue_em
+      // pela hora do CLIQUE (horaEntregaValida usa ts_device) — e não pela hora em que a conexão
+      // voltou. Sem isso, marcar várias entregues offline e reconectar subia TODAS com o mesmo horário.
+      const tsDevice = new Date().toISOString();
       // Status (Iniciar / Entregue / Não entregue / Cancelado):
-      const params = act === 'start' ? { action: 'iniciarEntrega', row: row }
-        : act === 'done' ? { action: 'marcarEntregue', row: row, obs: obs || '' }
-        : act === 'fail' ? { action: 'marcarNaoEntregue', row: row, obs: obs || '' }
-        : { action: 'marcarCancelado', row: row, obs: obs || '' };
+      const params = act === 'start' ? { action: 'iniciarEntrega', row: row, ts_device: tsDevice }
+        : act === 'done' ? { action: 'marcarEntregue', row: row, obs: obs || '', ts_device: tsDevice }
+        : act === 'fail' ? { action: 'marcarNaoEntregue', row: row, obs: obs || '', ts_device: tsDevice }
+        : { action: 'marcarCancelado', row: row, obs: obs || '', ts_device: tsDevice };
 
       updateLocalStatus(row, nextStatus, obs); // já deixa marcado na tela
       try {
