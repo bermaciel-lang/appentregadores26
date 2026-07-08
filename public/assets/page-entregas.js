@@ -855,6 +855,92 @@ async function handleFinalizarRota() {
     } catch (e) {}
   }
 
+  // ===== Mapa de CONFERÊNCIA da rota (Leaflet) — o entregador confere antes de sair =====
+  // Mostra: pinos numerados na ordem da rota (cor = status), o CD (🏭), a casa dele (🏠), a linha
+  // da sequência e a posição AO VIVO dele (🔵, GPS do aparelho — o gate de permissões já pediu).
+  // Objetivo: pegar endereço geocodificado ERRADO (pino fora do lugar) ANTES de iniciar a rota.
+  const mapaState = { map: null, camadas: null, gpsWatch: null, gpsMarker: null };
+
+  function corDaParada(status) {
+    const k = api.statusKey(status);
+    return k === 'done' ? '#16a34a' : k === 'fail' ? '#dc2626' : k === 'start' ? '#d97706' : '#2563eb';
+  }
+  function pinNumerado(n, cor) {
+    return L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13],
+      html: '<div style="width:26px;height:26px;border-radius:50%;background:' + cor + ';color:#fff;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);">' + n + '</div>' });
+  }
+  function pinEmoji(emoji) {
+    return L.divIcon({ className: '', iconSize: [30, 30], iconAnchor: [15, 15],
+      html: '<div style="font-size:24px;line-height:30px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">' + emoji + '</div>' });
+  }
+
+  function pararGpsMapa() {
+    if (mapaState.gpsWatch != null && navigator.geolocation) { navigator.geolocation.clearWatch(mapaState.gpsWatch); mapaState.gpsWatch = null; }
+  }
+  function iniciarGpsMapa() {
+    if (!navigator.geolocation) return;
+    pararGpsMapa();
+    mapaState.gpsWatch = navigator.geolocation.watchPosition(function (pos) {
+      const ll = [pos.coords.latitude, pos.coords.longitude];
+      if (!mapaState.gpsMarker) {
+        mapaState.gpsMarker = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).bindPopup('Você (GPS)').addTo(mapaState.map);
+      } else { mapaState.gpsMarker.setLatLng(ll); }
+    }, function () { /* sem permissão/sinal → mapa segue sem o ponto azul */ }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
+  }
+  function fecharMapa() { document.getElementById('mapaOverlay').classList.add('hidden'); pararGpsMapa(); }
+
+  async function abrirMapa() {
+    const overlay = document.getElementById('mapaOverlay');
+    const info = document.getElementById('mapaInfo');
+    overlay.classList.remove('hidden');
+    info.textContent = 'Carregando a rota…';
+    if (typeof L === 'undefined') { info.textContent = 'Não foi possível carregar o mapa (sem internet?).'; return; }
+
+    if (!mapaState.map) {
+      mapaState.map = L.map('mapaLeaflet');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapaState.map);
+    }
+    const map = mapaState.map;
+    setTimeout(function () { map.invalidateSize(); }, 120); // o container estava hidden → recalcula tamanho
+
+    if (mapaState.camadas) map.removeLayer(mapaState.camadas);
+    const grupo = L.layerGroup().addTo(map);
+    mapaState.camadas = grupo;
+
+    let res;
+    try { res = await api.apiGet({ action: 'mapaRota', entregador: state.driver, turno: api.getTurno() }); }
+    catch (e) { info.textContent = 'Não foi possível carregar a rota.'; return; }
+    if (!res || !res.ok) { info.textContent = 'Não foi possível carregar a rota.'; return; }
+
+    const paradas = Array.isArray(res.paradas) ? res.paradas : [];
+    const comCoord = paradas.filter(function (p) { return p.lat != null && p.lng != null; });
+    const semCoord = paradas.filter(function (p) { return p.lat == null || p.lng == null; });
+    const pts = [], linha = [];
+
+    if (res.cd && res.cd.lat != null) { L.marker([res.cd.lat, res.cd.lng], { icon: pinEmoji('🏭') }).bindPopup('CD (saída da rota)').addTo(grupo); pts.push([res.cd.lat, res.cd.lng]); linha.push([res.cd.lat, res.cd.lng]); }
+    comCoord.forEach(function (p, i) {
+      const ll = [p.lat, p.lng];
+      L.marker(ll, { icon: pinNumerado(p.ordem || (i + 1), corDaParada(p.status)) })
+        .bindPopup('<b>' + (p.ordem || (i + 1)) + '. ' + api.esc(p.cliente || '') + '</b><br>' + api.esc(p.endereco || '')).addTo(grupo);
+      linha.push(ll); pts.push(ll);
+    });
+    if (res.casa && res.casa.lat != null) { L.marker([res.casa.lat, res.casa.lng], { icon: pinEmoji('🏠') }).bindPopup('Sua casa (fim da rota)').addTo(grupo); linha.push([res.casa.lat, res.casa.lng]); pts.push([res.casa.lat, res.casa.lng]); }
+    if (linha.length >= 2) L.polyline(linha, { color: '#2563eb', weight: 3, opacity: 0.6, dashArray: '6,6' }).addTo(grupo);
+
+    if (pts.length) map.fitBounds(pts, { padding: [40, 40] }); else map.setView([-19.92, -43.94], 12);
+
+    let txt = comCoord.length + ' entrega(s) no mapa';
+    if (semCoord.length) txt += ' · ⚠️ ' + semCoord.length + ' sem localização: ' + semCoord.map(function (p) { return p.cliente; }).join(', ') + ' — endereço pode estar errado, avise o responsável.';
+    info.textContent = txt;
+
+    iniciarGpsMapa();
+  }
+
+  const btnMapaRota = document.getElementById('btnMapaRota');
+  if (btnMapaRota) btnMapaRota.addEventListener('click', abrirMapa);
+  const btnFecharMapa = document.getElementById('btnFecharMapa');
+  if (btnFecharMapa) btnFecharMapa.addEventListener('click', fecharMapa);
+
   (async function init() {
     if (redirectIfNoDriver()) return;
     if (driverTitle) driverTitle.textContent = state.driver; // título virou fixo "Tela do entregador"
