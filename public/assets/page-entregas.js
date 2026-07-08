@@ -690,22 +690,30 @@ async function handleFinalizarRota() {
       // pela hora do CLIQUE (horaEntregaValida usa ts_device) — e não pela hora em que a conexão
       // voltou. Sem isso, marcar várias entregues offline e reconectar subia TODAS com o mesmo horário.
       const tsDevice = new Date().toISOString();
-      // Status (Iniciar / Entregue / Não entregue / Cancelado):
-      const params = act === 'start' ? { action: 'iniciarEntrega', row: row, ts_device: tsDevice }
-        : act === 'done' ? { action: 'marcarEntregue', row: row, obs: obs || '', ts_device: tsDevice }
-        : act === 'fail' ? { action: 'marcarNaoEntregue', row: row, obs: obs || '', ts_device: tsDevice }
-        : { action: 'marcarCancelado', row: row, obs: obs || '', ts_device: tsDevice };
+      // DUPLICADAS vão JUNTAS ao INICIAR / ENTREGAR: pedidos do mesmo cliente+endereço têm o MESMO
+      // `numero` (o painel já colapsa e manda). O entregador vai a UM lugar só, então tocar Iniciar/
+      // Entregue numa marca TODAS as do mesmo número de uma vez. (Não-entregue/Cancelado seguem 1 a 1.)
+      const irmas = (act === 'start' || act === 'done') && item.numero != null
+        ? state.items.filter((x) => Number(x.numero) === Number(item.numero))
+        : [item];
+      // Só as que ainda NÃO estão no status alvo (a própria tocada sempre entra) — evita remarcar/enfileirar à toa.
+      const rowsAlvo = irmas
+        .filter((x) => Number(x.row) === Number(row) || api.statusKey(x.status) !== api.statusKey(nextStatus))
+        .map((x) => Number(x.row));
+      const paramsDe = (r) => act === 'start' ? { action: 'iniciarEntrega', row: r, ts_device: tsDevice }
+        : act === 'done' ? { action: 'marcarEntregue', row: r, obs: obs || '', ts_device: tsDevice }
+        : act === 'fail' ? { action: 'marcarNaoEntregue', row: r, obs: obs || '', ts_device: tsDevice }
+        : { action: 'marcarCancelado', row: r, obs: obs || '', ts_device: tsDevice };
 
-      updateLocalStatus(row, nextStatus, obs); // já deixa marcado na tela
-      try {
-        const res = await api.apiGet(params, { retries: 3 });
-        if (!res || !res.ok) throw new Error('falhou');
-        window.setTimeout(function () { carregarTudo(false); }, 800);
-      } catch (e2) {
-        // NÃO desmarca: guarda na fila e reenvia sozinho quando a internet voltar.
-        api.enfileirar(params, { row: Number(row) });
-        await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
+      rowsAlvo.forEach((r) => updateLocalStatus(r, nextStatus, obs)); // já deixa TODAS marcadas na tela
+      // Cada uma sobe sozinha; a que falhar vai pra fila offline (as que subiram NÃO reenviam).
+      const falhas = [];
+      for (const r of rowsAlvo) {
+        try { const res = await api.apiGet(paramsDe(r), { retries: 3 }); if (!res || !res.ok) throw new Error('falhou'); }
+        catch (e2) { api.enfileirar(paramsDe(r), { row: Number(r) }); falhas.push(r); }
       }
+      if (falhas.length) await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
+      window.setTimeout(function () { carregarTudo(false); }, 800);
     } catch (error) {
       console.error(error);
       await AppUI.alerta('Não foi possível concluir essa ação. Tente de novo.', { tom: 'danger' });
@@ -922,8 +930,20 @@ async function handleFinalizarRota() {
     if (!res || !res.ok) { info.textContent = 'Não foi possível carregar a rota.'; return; }
 
     const paradas = Array.isArray(res.paradas) ? res.paradas : [];
-    const comCoord = paradas.filter(function (p) { return p.lat != null && p.lng != null; });
-    const semCoord = paradas.filter(function (p) { return p.lat == null || p.lng == null; });
+    // Duplicadas (mesmo cliente+endereço = mesmo `numero`) viram UM pino só e contam UMA vez. O CD e a
+    // casa NÃO entram aqui (vêm de res.cd/res.casa, adicionados à parte) — então não são contados.
+    function chaveDedup(p, i) {
+      if (p.numero != null && p.numero !== '') return 'n' + p.numero;
+      const e = String(p.endereco || '').trim().toLowerCase();
+      return e ? 'e' + e + '|' + String(p.cliente || '').trim().toLowerCase() : 'i' + i;
+    }
+    function dedup(arr) {
+      const seen = {}, out = [];
+      arr.forEach(function (p, i) { const k = chaveDedup(p, i); if (!seen[k]) { seen[k] = 1; out.push(p); } });
+      return out;
+    }
+    const comCoord = dedup(paradas.filter(function (p) { return p.lat != null && p.lng != null; }));
+    const semCoord = dedup(paradas.filter(function (p) { return p.lat == null || p.lng == null; }));
     const pts = [], linha = [];
 
     if (res.cd && res.cd.lat != null) { L.marker([res.cd.lat, res.cd.lng], { icon: pinEmoji('🏭') }).bindPopup('CD (saída da rota)').addTo(grupo); pts.push([res.cd.lat, res.cd.lng]); linha.push([res.cd.lat, res.cd.lng]); }
