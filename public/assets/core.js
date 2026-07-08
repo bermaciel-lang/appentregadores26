@@ -54,8 +54,12 @@
   }
 
   
+  // enderecoNav = endereço SEM complemento (apto/bloco) — o complemento atrapalha o Maps/Waze acharem
+  // o ponto certo. Fallback pro endereço completo (app velho / pedido antigo sem o campo).
+  function enderecoNavDe(item) { return String((item && (item.enderecoNav || item.endereco)) || '').trim(); }
+
 function buildMapsUrl(item) {
-    const endereco = String((item && item.endereco) || '').trim();
+    const endereco = enderecoNavDe(item);
     if (!endereco) return '#';
     const isAndroid = /Android/i.test(navigator.userAgent);
     const isIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -65,7 +69,7 @@ function buildMapsUrl(item) {
   }
 
   function buildWazeUrl(item) {
-    const endereco = String((item && item.endereco) || '').trim();
+    const endereco = enderecoNavDe(item);
     if (!endereco) return '#';
     return 'https://www.waze.com/ul?navigate=yes&q=' + encodeURIComponent(endereco);
   }

@@ -246,6 +246,13 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       }
     }
 
+    // Endereço COM complemento (apto/bloco) no cartão, pro motorista ACHAR o lugar. O Maps/Waze usam a
+    // versão SEM complemento (enderecoNav) — só a exibição aqui mostra tudo.
+    const endTxt = String(item.endereco || '').trim();
+    const endHtml = endTxt
+      ? `<div class="delivery-meta">📍 ${api.esc(endTxt)}${item.bairro ? ' — ' + api.esc(item.bairro) : ''}</div>`
+      : '';
+
     return `
       <article class="delivery-card ${key}">
         <div class="delivery-top">
@@ -255,6 +262,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
           <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
         </div>
 
+        ${endHtml}
         ${obsHtml}
         ${statusBanner}
 
