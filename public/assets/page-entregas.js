@@ -256,8 +256,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     return `
       <article class="delivery-card ${key}">
         <div class="delivery-top">
-          <div>
-            <h3 class="delivery-client">${api.esc(item.cliente)}</h3>
+          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+            ${item.numero ? `<span title="Nº da parada (o mesmo do mapa). Pedidos do mesmo cliente/endereço têm o mesmo número." style="display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 6px;border-radius:12px;background:#2563eb;color:#fff;font-weight:700;font-size:13px;flex-shrink:0;">${item.numero}</span>` : ''}
+            <h3 class="delivery-client" style="min-width:0;">${api.esc(item.cliente)}</h3>
           </div>
           <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
         </div>
@@ -928,8 +929,8 @@ async function handleFinalizarRota() {
     if (res.cd && res.cd.lat != null) { L.marker([res.cd.lat, res.cd.lng], { icon: pinEmoji('🏭') }).bindPopup('CD (saída da rota)').addTo(grupo); pts.push([res.cd.lat, res.cd.lng]); linha.push([res.cd.lat, res.cd.lng]); }
     comCoord.forEach(function (p, i) {
       const ll = [p.lat, p.lng];
-      L.marker(ll, { icon: pinNumerado(p.ordem || (i + 1), corDaParada(p.status)) })
-        .bindPopup('<b>' + (p.ordem || (i + 1)) + '. ' + api.esc(p.cliente || '') + '</b><br>' + api.esc(p.endereco || '')).addTo(grupo);
+      L.marker(ll, { icon: pinNumerado(p.numero || p.ordem || (i + 1), corDaParada(p.status)) })
+        .bindPopup('<b>' + (p.numero || p.ordem || (i + 1)) + '. ' + api.esc(p.cliente || '') + '</b><br>' + api.esc(p.endereco || '')).addTo(grupo);
       linha.push(ll); pts.push(ll);
     });
     if (res.casa && res.casa.lat != null) { L.marker([res.casa.lat, res.casa.lng], { icon: pinEmoji('🏠') }).bindPopup('Sua casa (fim da rota)').addTo(grupo); linha.push([res.casa.lat, res.casa.lng]); pts.push([res.casa.lat, res.casa.lng]); }
