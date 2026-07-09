@@ -839,8 +839,8 @@ async function handleFinalizarRota() {
       const b = document.createElement('button');
       b.type = 'button';
       b.id = 'btnTrocarTurno';
-      b.className = 'ghost-btn';
-      b.textContent = '🔄 Trocar turno (' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde') + ')';
+      b.className = 'ghost-sm';
+      b.textContent = '🔄 Turno: ' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde');
       b.addEventListener('click', function () { window.location.href = '/'; });
       btnTrocar.parentNode.insertBefore(b, btnTrocar);
     }

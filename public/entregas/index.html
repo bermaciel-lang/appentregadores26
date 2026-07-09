@@ -21,7 +21,7 @@
       <div class="hero-inner topbar">
         <div class="topbar-left">
           <div>
-            <h1 class="topbar-title">Tela do entregador</h1>
+            <h1 class="topbar-title" id="driverTitle">Entregador</h1>
           </div>
         </div>
         <div class="topbar-right">
@@ -32,22 +32,17 @@
 
     <main class="content">
       <section class="summary-card">
-        <div class="summary-row summary-row-mobile">
-          <div>
-            <div class="summary-title">Entregador</div>
-            <div class="summary-driver" id="driverNameText">-</div>
-          </div>
+        <div class="toolbar-mini" id="toolbarMini">
+          <button type="button" class="ghost-sm" id="btnTrocar">Trocar entregador</button>
+          <button type="button" class="ghost-sm" id="btnMapaRota">🗺️ Mapa geral</button>
         </div>
-
-        <div class="toolbar stack-mobile">
-  <button type="button" class="ghost-btn" id="btnTrocar">Trocar entregador</button>
-  <button type="button" class="ghost-btn" id="btnMapaRota">🗺️ Conferir mapa da rota</button>
-  <button type="button" class="primary-btn" id="btnIniciarRota">Iniciar entregas</button>
-<div id="loadingRota" class="hidden" style="margin-top:12px;text-align:center;color:#3158d3;font-weight:600;font-size:15px;">
-  ⏳ Registrando início da rota, aguarde...
-</div>
-  <button type="button" class="ghost-btn" id="btnFinalizarRota">Finalizar rota</button>
-</div>
+        <div class="toolbar-main">
+          <button type="button" class="primary-btn" id="btnIniciarRota">Iniciar entregas</button>
+          <div id="loadingRota" class="hidden" style="margin-top:4px;text-align:center;color:#3158d3;font-weight:600;font-size:15px;">
+            ⏳ Registrando início da rota, aguarde...
+          </div>
+          <button type="button" class="ghost-btn" id="btnFinalizarRota">Finalizar rota</button>
+        </div>
 
         <div id="infoRota" class="info-rota"></div>
 
