@@ -214,6 +214,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
   function renderEntregaCard(item) {
     const key = api.statusKey(item.status);
+    const resolvida = key === 'done' || key === 'fail' || /cancel/i.test(String(item.status || '')); // entregue/não recebeu/cancelado
     const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
     const obsPedido = String(item.observacaoPedido || '').trim();
 
@@ -280,6 +281,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
           <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}" ${dis}>📍 Maps</button>
           <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}" ${dis}>🗺️ Waze</button>
         </div>
+        ${resolvida ? '' : `<div class="acoes" style="display:block;margin-top:6px;">
+          <button type="button" class="action-btn" data-act="rotamaps" data-row="${item.row}" ${dis} style="width:100%;background:#eef2ff;color:#3730a3;border-color:#c7d2fe;" title="Abre o Google Maps com esta parada e as próximas (até 9 por vez), na ordem da rota">🧭 Abrir no Maps daqui (esta + próximas)</button>
+        </div>`}
       </article>
     `;
   }
@@ -624,6 +628,13 @@ async function handleFinalizarRota() {
 }
 
   async function handleAction(act, row) {
+    // "Maps daqui": abre a rota no Google Maps a partir desta parada (essa + próximas 8). NÃO mexe
+    // em status — é só navegação; por isso passa na frente do trava de envio e do gate de rota iniciada.
+    if (act === 'rotamaps') {
+      const it = state.items.find((x) => Number(x.row) === Number(row));
+      await abrirRotaMaps(it ? it.numero : null);
+      return;
+    }
     if (state.sendingAction) return;
 
     const item = state.items.find((x) => Number(x.row) === Number(row));
@@ -906,6 +917,61 @@ async function handleFinalizarRota() {
   }
   function fecharMapa() { document.getElementById('mapaOverlay').classList.add('hidden'); pararGpsMapa(); }
 
+  // Abre o Google Maps com VÁRIAS paradas de uma vez, na ordem da rota, começando na parada `startNumero`
+  // (null = 1ª pendente) e terminando na CASA do entregador (só quando o bloco alcança a última parada).
+  // O Google Maps só aceita 9 paradas por link → abre em BLOCOS de 9 e a mensagem explica como abrir o
+  // próximo bloco (tocar "Maps daqui" na próxima parada). Waze fica de fora (só aceita 1 destino por link).
+  async function abrirRotaMaps(startNumero) {
+    let res;
+    try { res = await api.apiGet({ action: 'mapaRota', entregador: state.driver, turno: api.getTurno() }); }
+    catch (e) { await AppUI.alerta('Sem internet pra montar a rota agora. Tente de novo.', { titulo: '🧭 Rota no Maps', tom: 'warn' }); return; }
+    if (!res || !res.ok) { await AppUI.alerta('Não consegui carregar a rota.', { titulo: '🧭 Rota no Maps', tom: 'warn' }); return; }
+
+    const paradas = Array.isArray(res.paradas) ? res.paradas : [];
+    // Resolvida = entregue / não recebeu / cancelado (statusKey manda "Cancelado" pra 'pending', então testo o texto).
+    const resolvida = function (st) { const s = String(st || '').toLowerCase(); return s.indexOf('entregue') >= 0 || s.indexOf('não entreg') >= 0 || s.indexOf('nao entreg') >= 0 || s.indexOf('cancel') >= 0; };
+    // Só PENDENTES, na ordem, 1 por local (duplicadas do mesmo número entram uma vez só).
+    const seen = {}, pend = [];
+    paradas.forEach(function (p) {
+      if (resolvida(p.status)) return;
+      const k = (p.numero != null) ? 'n' + p.numero : ('x' + p.lat + ',' + p.lng);
+      if (seen[k]) return; seen[k] = 1; pend.push(p);
+    });
+    if (!pend.length) { await AppUI.alerta('Não há entregas pendentes pra abrir no Maps. 🎉', { titulo: '🧭 Rota no Maps', tom: 'info' }); return; }
+
+    let start = 0;
+    if (startNumero != null) { const idx = pend.findIndex(function (p) { return Number(p.numero) === Number(startNumero); }); if (idx >= 0) start = idx; }
+    const BLOCO = 9; // limite do Google Maps por link
+    const bloco = pend.slice(start, start + BLOCO);
+    const ehUltimo = (start + bloco.length) >= pend.length;
+
+    const ponto = function (p) { return (p.lat != null && p.lng != null) ? (p.lat + ',' + p.lng) : String(p.endereco || '').trim(); };
+    const pontos = bloco.map(ponto).filter(Boolean);
+    const temCasa = ehUltimo && res.casa && res.casa.lat != null && res.casa.lng != null;
+    if (temCasa) pontos.push(res.casa.lat + ',' + res.casa.lng);
+    if (!pontos.length) { await AppUI.alerta('As paradas desse trecho estão sem localização no mapa — avise o responsável.', { titulo: '🧭 Rota no Maps', tom: 'warn' }); return; }
+
+    // origin OMITIDO → o Maps usa a localização atual do celular. destino = último ponto; o resto vira waypoints.
+    const destino = pontos[pontos.length - 1];
+    const waypoints = pontos.slice(0, -1);
+    const url = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(destino)
+      + (waypoints.length ? '&waypoints=' + waypoints.map(encodeURIComponent).join('|') : '')
+      + '&travelmode=driving';
+
+    const primNum = bloco[0].numero != null ? bloco[0].numero : (start + 1);
+    const ultNum = bloco[bloco.length - 1].numero != null ? bloco[bloco.length - 1].numero : (start + bloco.length);
+    let msg;
+    if (ehUltimo) {
+      msg = 'Abrindo no Maps as paradas ' + primNum + ' até ' + ultNum + (temCasa ? ' e terminando na sua casa 🏠' : '') + '.\n\nSão as últimas — depois dessas, acabou. ✅';
+    } else {
+      const prox = pend[start + bloco.length];
+      const proxNum = (prox && prox.numero != null) ? prox.numero : (start + bloco.length + 1);
+      msg = '⚠️ O Google Maps só mostra 9 paradas por vez.\n\nAbrindo as paradas ' + primNum + ' até ' + ultNum + '. Quando terminar essas, VOLTE ao app e toque em "🧭 Abrir no Maps daqui" na parada ' + proxNum + ' pra abrir as próximas 9.';
+    }
+    await AppUI.alerta(msg, { titulo: '🧭 Rota no Maps', tom: 'info' });
+    await openSameTab(url);
+  }
+
   async function abrirMapa() {
     const overlay = document.getElementById('mapaOverlay');
     const info = document.getElementById('mapaInfo');
@@ -967,6 +1033,8 @@ async function handleFinalizarRota() {
 
   const btnMapaRota = document.getElementById('btnMapaRota');
   if (btnMapaRota) btnMapaRota.addEventListener('click', abrirMapa);
+  const btnRotaMaps = document.getElementById('btnRotaMaps');
+  if (btnRotaMaps) btnRotaMaps.addEventListener('click', function () { abrirRotaMaps(null); });
   const btnFecharMapa = document.getElementById('btnFecharMapa');
   if (btnFecharMapa) btnFecharMapa.addEventListener('click', fecharMapa);
 
