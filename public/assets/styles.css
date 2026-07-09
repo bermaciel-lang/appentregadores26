@@ -288,7 +288,9 @@ button, select, input, textarea {
 
 .delivery-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* a coluna NÃO cresce até o conteúdo (comentário nowrap etc.) */
   gap: 14px;
+  overflow-x: hidden; /* rede de segurança: nada estoura a largura do celular */
 }
 
 .delivery-card {
@@ -657,7 +659,7 @@ button, select, input, textarea {
    calma, botões enxutos, e expansão no "Iniciar". Ícones = SVG inline
    (crisp, funcionam OFFLINE, sem webfont). Feito p/ celular + gente + velha.
    ================================================================== */
-.dc { background: #fff; border: 1.5px solid #c3cede; border-radius: 16px; padding: 13px 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.dc { background: #fff; border: 1.5px solid #c3cede; border-radius: 16px; padding: 13px 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); min-width: 0; max-width: 100%; overflow: hidden; }
 .dc.andamento { border-color: #7aa0ee; box-shadow: 0 0 0 1px #7aa0ee inset; }
 .dc.feito { background: #f5f8fc; border-color: #dbe3ef; }
 .dc svg { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
@@ -668,7 +670,8 @@ button, select, input, textarea {
 .dc-restr { font-size: 12.5px; font-weight: 800; padding: 3px 9px; border-radius: 8px; background: #fee2e2; color: #b91c1c; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
 .dc-andlbl { font-size: 12.5px; font-weight: 800; color: #1d4ed8; display: inline-flex; align-items: center; gap: 4px; }
 .dc-name { font-size: 18px; font-weight: 700; margin: 8px 0 0; line-height: 1.2; color: var(--text); }
-.dc-addr { font-size: 14px; color: #475569; margin-top: 5px; line-height: 1.35; display: flex; gap: 5px; }
+.dc-addr { font-size: 13px; color: #64748b; margin-top: 5px; line-height: 1.3; display: flex; gap: 5px; min-width: 0; }
+.dc-addr span { min-width: 0; overflow-wrap: anywhere; }
 .dc-pay { margin-top: 7px; font-size: 14.5px; display: flex; align-items: center; gap: 6px; }
 .dc-pay.cash { font-weight: 800; color: #b45309; }
 .dc-pay.on { color: var(--muted); font-size: 13.5px; }
@@ -692,7 +695,7 @@ button, select, input, textarea {
 .dc-sec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 11px; }
 .dc-prodhead { font-size: 12.5px; color: var(--muted); font-weight: 800; display: flex; justify-content: space-between; align-items: center; margin: 12px 0 5px; }
 .dc-prodlist { max-height: 122px; overflow-y: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 11px; background: #f8fafc; padding: 9px 12px; font-size: 14px; color: #334155; line-height: 1.95; }
-.dc-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+.dc-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .dc-navb { min-height: 56px; border: 1.5px solid #c3cede; border-radius: 12px; background: #fff; color: var(--text); font-size: 12px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; }
 .dc-navb:active { transform: scale(.97); }
 .dc-min { margin-left: auto; font-size: 13px; font-weight: 800; color: #475569; background: #f1f5f9; border: 1.5px solid #c3cede; border-radius: 9px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
