@@ -652,6 +652,52 @@ button, select, input, textarea {
 .acoes .action-btn { min-height: 48px; }
 .acoes.c3 .action-btn { font-size: 12px; padding: 8px 4px; }
 
+/* ==================================================================
+   CARTÃO DE ENTREGA v2 (redesenho 09/07) — balões destacados, tipografia
+   calma, botões enxutos, e expansão no "Iniciar". Ícones = SVG inline
+   (crisp, funcionam OFFLINE, sem webfont). Feito p/ celular + gente + velha.
+   ================================================================== */
+.dc { background: #fff; border: 1.5px solid #c3cede; border-radius: 16px; padding: 13px 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.dc.andamento { border-color: #7aa0ee; box-shadow: 0 0 0 1px #7aa0ee inset; }
+.dc.feito { background: #f5f8fc; border-color: #dbe3ef; }
+.dc svg { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
+.dc-head { display: flex; align-items: center; gap: 8px; }
+.dc-tap { cursor: pointer; }
+.dc-num { min-width: 30px; height: 30px; padding: 0 7px; border-radius: 9px; background: #e7efff; color: #1d4ed8; font-weight: 800; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; }
+.dc-num.ok { background: #dcfce7; color: #15803d; }
+.dc-restr { font-size: 12.5px; font-weight: 800; padding: 3px 9px; border-radius: 8px; background: #fee2e2; color: #b91c1c; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+.dc-andlbl { font-size: 12.5px; font-weight: 800; color: #1d4ed8; display: inline-flex; align-items: center; gap: 4px; }
+.dc-name { font-size: 18px; font-weight: 700; margin: 8px 0 0; line-height: 1.2; color: var(--text); }
+.dc-addr { font-size: 14px; color: #475569; margin-top: 5px; line-height: 1.35; display: flex; gap: 5px; }
+.dc-pay { margin-top: 7px; font-size: 14.5px; display: flex; align-items: center; gap: 6px; }
+.dc-pay.cash { font-weight: 800; color: #b45309; }
+.dc-pay.on { color: var(--muted); font-size: 13.5px; }
+.dc-pay.verif { font-weight: 800; color: #b91c1c; }
+.dc-pay-box { margin-top: 9px; background: #fff7e6; border: 1px solid #fde3a7; border-radius: 10px; padding: 9px 11px; }
+.dc-obs { font-size: 13.5px; color: #475569; margin-top: 7px; line-height: 1.45; }
+.dc-obs.corta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dc-obs b { color: var(--muted); }
+.dc-hint { font-size: 12px; color: #94a3b8; margin-top: 8px; display: flex; align-items: center; gap: 5px; }
+.dc-btns { display: flex; gap: 8px; margin-top: 10px; }
+.dc-b { flex: 1; min-height: 46px; border-radius: 11px; font-size: 14px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1.5px solid #c3cede; background: #fff; color: var(--text); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.dc-b:active { transform: scale(.98); }
+.dc-b.ini { background: #e7efff; color: #1d4ed8; border-color: #7aa0ee; }
+.dc-b.ok { background: var(--green); color: #fff; border-color: var(--green); }
+.dc-b.no { background: var(--red); color: #fff; border-color: var(--red); }
+.dc-b.sm { min-height: 42px; font-size: 13.5px; }
+.dc-b[disabled] { opacity: .5; }
+.dc-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 800; padding: 6px 12px; border-radius: 9px; background: #e0f2fe; color: #075985; }
+.dc-eggs { font-size: 14.5px; color: var(--text); margin-top: 10px; line-height: 1.6; display: flex; gap: 6px; align-items: flex-start; }
+.dc-eggs b { color: var(--muted); font-weight: 800; }
+.dc-sec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 11px; }
+.dc-prodhead { font-size: 12.5px; color: var(--muted); font-weight: 800; display: flex; justify-content: space-between; align-items: center; margin: 12px 0 5px; }
+.dc-prodlist { max-height: 122px; overflow-y: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 11px; background: #f8fafc; padding: 9px 12px; font-size: 14px; color: #334155; line-height: 1.95; }
+.dc-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+.dc-navb { min-height: 56px; border: 1.5px solid #c3cede; border-radius: 12px; background: #fff; color: var(--text); font-size: 12px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; }
+.dc-navb:active { transform: scale(.97); }
+.dc-min { margin-left: auto; font-size: 13px; font-weight: 800; color: #475569; background: #f1f5f9; border: 1.5px solid #c3cede; border-radius: 9px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.dc-envio { font-size: 12.5px; font-weight: 700; color: #92400e; margin-top: 8px; }
+
 /* ===== Painel "o que foi registrado" (KM/foto) embaixo dos botões de rota ===== */
 .info-rota { margin-top: 12px; display: grid; gap: 8px; }
 .info-rota-linha {

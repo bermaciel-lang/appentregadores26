@@ -2,6 +2,29 @@
   const api = window.AppEntrega;
   const savedDriver = api.getSavedDriverName();
 
+  // Ícones SVG inline (crisp em qualquer tela, funcionam OFFLINE — sem webfont). Herdam a cor do
+  // texto (currentColor) e o tamanho vem do 2º parâmetro. Traço grosso pra ficar legível no celular.
+  const ICN = {
+    play: 'M8 5v14l11-7z',
+    pin: 'M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11z M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
+    nav: 'M3 11l18-8-8 18-2-8-8-2z',
+    check: 'M4 12l5 5L20 6',
+    x: 'M6 6l12 12M18 6L6 18',
+    phone: 'M4 4h4l2 5-3 2a12 12 0 0 0 6 6l2-3 5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 2 6a2 2 0 0 1 2-2z',
+    whats: 'M21 12a8 8 0 0 1-11.8 7L4 20l1-5.2A8 8 0 1 1 21 12z',
+    cash: 'M2 6h20v12H2z M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z M6 12h.01 M18 12h.01',
+    clock: 'M12 7v5l3 2 M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+    chevdown: 'M6 9l6 6 6-6',
+    chevup: 'M6 15l6-6 6 6',
+    drag: 'M8 9l4-4 4 4 M8 15l4 4 4-4',
+    map: 'M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z M9 4v14 M15 6v14',
+  };
+  function ic(name, size, color) {
+    const d = ICN[name] || ''; const s = size || 16;
+    const fill = (name === 'play') ? 'currentColor' : 'none';
+    return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="' + fill + '" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"' + (color ? ' style="color:' + color + '"' : '') + '>' + d.split(' M').map(function (seg, i) { return '<path d="' + (i ? 'M' + seg : seg) + '"/>'; }).join('') + '</svg>';
+  }
+
   const state = {
     driver: savedDriver,
     refreshTimer: null,
@@ -9,6 +32,7 @@
     rotaInfo: {}, // { kmInicial, kmFinal, fotoInicio, fotoFim, inicio, fim }
     sendingAction: false,
     enviando: null, // { row, act } -> mostra "Enviando..." no card
+    expandidos: new Set(), // rows com o cartão EXPANDIDO (Iniciar abre; Minimizar/marcar fecha)
     sendingRouteAction: false,
     rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
     rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
@@ -212,76 +236,104 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     });
   }
 
+  const fmtBRL = (n) => 'R$ ' + (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Pagamento igual à folha frontal: na entrega mostra a FORMA + o VALOR a receber (e o troco, se
+  // dinheiro); online mostra "Pago online"; cobrança sem forma = "Verificar pagamento".
+  function pagamentoHtml(item, grande) {
+    const forma = String(item.formaPagamento || '').trim();
+    if (!forma) return ''; // reposição / sem cobrança
+    if (item.naEntrega) {
+      const tipo = forma.replace(/\s*NA ENTREGA\s*/i, '').trim() || 'na entrega';
+      const troco = Number(item.troco) || 0;
+      const trocoTxt = (troco > 0 && /dinheiro/i.test(forma)) ? ' · troco p/ ' + fmtBRL(troco) : '';
+      const linha = ic('cash', grande ? 18 : 16) + '<span>Receber <b>' + fmtBRL(Number(item.valor) || 0) + '</b> · ' + api.esc(tipo) + trocoTxt + '</span>';
+      return grande ? '<div class="dc-pay-box"><div class="dc-pay cash">' + linha + '</div></div>' : '<div class="dc-pay cash">' + linha + '</div>';
+    }
+    if (/verificar/i.test(forma)) return '<div class="dc-pay verif">' + ic('clock', 15) + 'Verificar pagamento</div>';
+    return '<div class="dc-pay on">' + ic('check', 15) + 'Pago online</div>';
+  }
+
+  // Ovos por tipo (mesmo critério da folha frontal), na ordem dúzia → dezena → pentes → econômico.
+  function ovosHtml(ovos) {
+    const o = ovos || {}; const parts = [];
+    if (o.duzia) parts.push(o.duzia + '× DÚZIA');
+    if (o.dezena) parts.push(o.dezena + '× DEZENA');
+    if (o.pente20) parts.push(o.pente20 + '× PENTE 20');
+    if (o.pente30) parts.push(o.pente30 + '× PENTE 30');
+    if (o.eco) parts.push(o.eco + '× ECONÔMICO');
+    return parts.length ? '<div class="dc-eggs">🥚 <span><b>Ovos:</b> ' + parts.join(' · ') + '</span></div>' : '';
+  }
+
+  const navBtn = (act, row, icon, label, dis) => '<button type="button" class="dc-navb" data-act="' + act + '" data-row="' + row + '" ' + dis + '>' + ic(icon, 20) + '<span>' + label + '</span></button>';
+  const miniBtn = (act, row, icon, label, dis) => '<button type="button" class="dc-b" data-act="' + act + '" data-row="' + row + '" ' + dis + '>' + ic(icon, 16) + label + '</button>';
+
   function renderEntregaCard(item) {
+    const row = Number(item.row);
     const key = api.statusKey(item.status);
-    const badgeClass = key === 'done' ? 'ok' : key === 'fail' ? 'fail' : key === 'start' ? 'warn' : '';
-    const obsPedido = String(item.observacaoPedido || '').trim();
-
-    // Feedback visual: esta entrega está sendo enviada? ou aguardando reenvio (offline)?
-    const enviandoEsta = state.enviando && Number(state.enviando.row) === Number(item.row);
-    const pendente = !enviandoEsta && api.filaRowsPendentes && api.filaRowsPendentes().has(Number(item.row));
+    const resolvida = statusResolvido(item);
+    const emAndamento = key === 'start';
+    const expandido = state.expandidos.has(row);
+    const enviandoEsta = state.enviando && Number(state.enviando.row) === row;
+    const pendenteFila = !enviandoEsta && api.filaRowsPendentes && api.filaRowsPendentes().has(row);
     const dis = enviandoEsta ? 'disabled' : '';
-    const statusBanner = enviandoEsta
-      ? '<div class="delivery-meta" style="color:#92400e;font-weight:600;">⏳ Enviando, aguarde…</div>'
-      : (pendente ? '<div class="delivery-meta" style="color:#92400e;font-weight:600;">⏳ Aguardando envio (vai subir sozinho quando a internet voltar)</div>' : '');
+    const envioHtml = enviandoEsta
+      ? '<div class="dc-envio">⏳ Enviando, aguarde…</div>'
+      : (pendenteFila ? '<div class="dc-envio">⏳ Aguardando envio (sobe sozinho quando a internet voltar)</div>' : '');
+    const restr = String(item.restricao || '').trim();
+    const restrHtml = restr ? '<span class="dc-restr">' + ic('clock', 12) + api.esc(restr) + '</span>' : '';
+    const addr = String(item.endereco || '').trim();
+    const addrHtml = addr ? '<div class="dc-addr">' + ic('pin', 15, '#94a3b8') + '<span>' + api.esc(addr) + (item.bairro ? ' — ' + api.esc(item.bairro) : '') + '</span></div>' : '';
+    const obsE = api.esc(String(item.observacaoPedido || '').trim());
+    const nome = api.esc(item.cliente || '');
 
-    let obsHtml = '';
-
-    if (obsPedido) {
-      if (obsPedido.length > 120) {
-        obsHtml = `
-          <div class="delivery-meta">
-            <details>
-              <summary><span class="meta-label">Observação</span></summary>
-              <div class="top-gap">${api.esc(obsPedido)}</div>
-            </details>
-          </div>
-        `;
-      } else {
-        obsHtml = `
-          <div class="delivery-meta">
-            <div><span class="meta-label">Observação:</span> ${api.esc(obsPedido)}</div>
-          </div>
-        `;
-      }
+    // RESOLVIDA e recolhida: discreta, pro olho ir pro que FALTA. Toca pra reabrir (corrigir marcação).
+    if (resolvida && !expandido) {
+      const cls = key === 'done' ? 'ok' : 'fail';
+      return '<article class="dc feito dc-tap" data-act="expand" data-row="' + row + '">'
+        + '<div class="dc-head">'
+        + '<span class="dc-num ' + (key === 'done' ? 'ok' : '') + '">' + (key === 'done' ? ic('check', 16) : (item.numero || '')) + '</span>'
+        + '<span style="font-size:15px;color:var(--muted);font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + nome + '</span>'
+        + '<span class="badge ' + cls + '">' + api.esc(api.statusLabel(item.status)) + '</span>'
+        + '</div></article>';
     }
 
-    // Endereço COM complemento (apto/bloco) no cartão, pro motorista ACHAR o lugar. O Maps/Waze usam a
-    // versão SEM complemento (enderecoNav) — só a exibição aqui mostra tudo.
-    const endTxt = String(item.endereco || '').trim();
-    const endHtml = endTxt
-      ? `<div class="delivery-meta">📍 ${api.esc(endTxt)}${item.bairro ? ' — ' + api.esc(item.bairro) : ''}</div>`
-      : '';
+    const btnEntregue = '<button type="button" class="dc-b ok sm" data-act="done" data-row="' + row + '" ' + dis + '>' + ic('check', 16) + (enviandoEsta && state.enviando.act === 'done' ? '…' : 'Entregue') + '</button>';
+    const btnNao = '<button type="button" class="dc-b no sm" data-act="naoentregue" data-row="' + row + '" ' + dis + '>' + ic('x', 15) + 'Não entregue</button>';
 
-    return `
-      <article class="delivery-card ${key}">
-        <div class="delivery-top">
-          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-            ${item.numero ? `<span title="Nº da parada (o mesmo do mapa). Pedidos do mesmo cliente/endereço têm o mesmo número." style="display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 6px;border-radius:12px;background:#2563eb;color:#fff;font-weight:700;font-size:13px;flex-shrink:0;">${item.numero}</span>` : ''}
-            <h3 class="delivery-client" style="min-width:0;">${api.esc(item.cliente)}</h3>
-          </div>
-          <span class="badge ${badgeClass}">${api.esc(api.statusLabel(item.status))}</span>
-        </div>
+    // EXPANDIDA: tudo do pedido (pagamento → obs → congelado + ovos → produtos que rolam).
+    if (expandido) {
+      const cong = item.temCongelado ? '<div style="margin-top:10px"><span class="dc-flag">❄️ Tem congelado</span></div>' : '';
+      const prods = Array.isArray(item.produtos) ? item.produtos : [];
+      const prodList = prods.map((p) => (p.qtd || 1) + '× ' + api.esc(p.nome || '')).join('<br>');
+      return '<article class="dc andamento">'
+        + '<div class="dc-head"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml
+        + '<button type="button" class="dc-min" data-act="minimize" data-row="' + row + '">' + ic('chevup', 15) + 'Minimizar</button></div>'
+        + '<div class="dc-name" style="font-size:19px">' + nome + '</div>'
+        + addrHtml
+        + '<div class="dc-nav">' + navBtn('ligar', row, 'phone', 'Ligar', dis) + navBtn('maps', row, 'pin', 'Maps', dis) + navBtn('waze', row, 'nav', 'Waze', dis) + navBtn('whats', row, 'whats', 'WhatsApp', dis) + '</div>'
+        + '<div class="dc-sec">' + pagamentoHtml(item, true)
+        + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
+        + cong + ovosHtml(item.ovos) + '</div>'
+        + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist">' + prodList + '</div>' : '')
+        + envioHtml
+        + '<div class="dc-btns" style="margin-top:12px">' + btnEntregue + btnNao + '</div>'
+        + '</article>';
+    }
 
-        ${endHtml}
-        ${obsHtml}
-        ${statusBanner}
-
-        <div class="acoes c2">
-          <button type="button" class="action-btn btn-start" data-act="start" data-row="${item.row}" ${dis}>🚚 Iniciar</button>
-          <button type="button" class="action-btn btn-whats" data-act="whats" data-row="${item.row}" ${dis}>💬 WhatsApp</button>
-        </div>
-        <div class="acoes c3">
-          <button type="button" class="action-btn btn-done" data-act="done" data-row="${item.row}" ${dis}>${enviandoEsta && state.enviando.act === 'done' ? '⏳…' : '✅ Entregue'}</button>
-          <button type="button" class="action-btn btn-cancelado" data-act="cancelado" data-row="${item.row}" ${dis}>✖ Cancelado</button>
-          <button type="button" class="action-btn btn-fail" data-act="fail" data-row="${item.row}" ${dis}>⛔ Não recebeu</button>
-        </div>
-        <div class="acoes c2">
-          <button type="button" class="action-btn btn-maps" data-act="maps" data-row="${item.row}" ${dis}>📍 Maps</button>
-          <button type="button" class="action-btn btn-waze" data-act="waze" data-row="${item.row}" ${dis}>🗺️ Waze</button>
-        </div>
-      </article>
-    `;
+    // RECOLHIDA (a fazer / em andamento): o essencial + botões pequenos. Toca no corpo pra expandir.
+    const chev = '<span style="margin-left:auto;color:#94a3b8;display:inline-flex">' + ic('chevdown', 20) + '</span>';
+    const linhaAndamento = emAndamento ? '<span class="dc-andlbl">' + ic('play', 13) + 'Em andamento</span>' : '';
+    const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + ' style="flex:1.4">' + ic('play', 16) + 'Iniciar</button>';
+    return '<article class="dc ' + (emAndamento ? 'andamento' : '') + '">'
+      + '<div class="dc-head dc-tap" data-act="expand" data-row="' + row + '"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml + linhaAndamento + chev + '</div>'
+      + '<div class="dc-tap" data-act="expand" data-row="' + row + '"><div class="dc-name">' + nome + '</div>' + addrHtml + pagamentoHtml(item, false)
+      + (obsE ? '<div class="dc-obs corta">' + obsE + '</div>' : '')
+      + '<div class="dc-hint">' + ic('chevdown', 13) + 'toque para ver tudo do pedido</div></div>'
+      + envioHtml
+      + '<div class="dc-btns">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + '</div>'
+      + '<div class="dc-btns">' + btnEntregue + btnNao + '</div>'
+      + '</article>';
   }
 
   // Uma entrega está "resolvida" se foi Entregue, Não entregue ou Cancelado.
@@ -360,8 +412,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   }
 
   function renderList() {
-    const resumo = api.gerarResumoEntregas(state.items);
-    refreshInfo.textContent = `Total: ${resumo.total} • Em rota: ${resumo.emRota} • Entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'done').length} • Não entregues: ${state.items.filter((x) => api.statusKey(x.status) === 'fail').length}`;
+    const total = state.items.length;
+    const feitas = state.items.filter(statusResolvido).length;
+    refreshInfo.textContent = total ? `${feitas} de ${total} concluídas · ${total - feitas} a fazer` : 'Sem entregas neste turno.';
 
     atualizarBotoesRota();
     renderInfoRota();
@@ -624,10 +677,38 @@ async function handleFinalizarRota() {
 }
 
   async function handleAction(act, row) {
+    // Expandir/minimizar o cartão — só VISUAL, não mexe em status nem rede; vale a qualquer momento
+    // (inclusive com a entrega em andamento, como o Bernardo pediu).
+    if (act === 'expand' || act === 'minimize') {
+      if (act === 'expand') state.expandidos.add(Number(row)); else state.expandidos.delete(Number(row));
+      renderList();
+      return;
+    }
     if (state.sendingAction) return;
 
     const item = state.items.find((x) => Number(x.row) === Number(row));
     if (!item) return;
+
+    // Ligar pro cliente (abre o discador do celular). Sem telefone → avisa.
+    if (act === 'ligar') {
+      const tel = String(item.telefone || '').replace(/[^\d+]/g, '');
+      if (!tel) { await AppUI.alerta('Este pedido não tem telefone cadastrado.', { tom: 'warn' }); return; }
+      await openSameTab('tel:' + tel);
+      return;
+    }
+
+    // "Não entregue" abre DUAS opções: 🙋 cliente não estava (= antigo "não recebeu") OU 🚫 cancelado/
+    // mudou de rota (= antigo "cancelado"). Cada uma vai pro sistema igual antes; a opção vira a observação.
+    let obsPreset = null;
+    if (act === 'naoentregue') {
+      const esc = await AppUI.escolher('O que aconteceu com esta entrega?', [
+        { valor: 'fail', rotulo: '🙋 Cliente não estava / não recebeu', tom: 'success' },
+        { valor: 'cancel', rotulo: '🚫 Pedido cancelado / mudou de rota', tom: 'danger' },
+      ], { titulo: 'Não entregue' });
+      if (esc === null) return; // fechou sem escolher → não marca nada
+      act = esc === 'fail' ? 'fail' : 'cancelado';
+      obsPreset = esc === 'fail' ? 'Cliente não estava / não recebeu' : 'Pedido cancelado / mudou de rota';
+    }
 
     if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
       await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
@@ -663,9 +744,9 @@ async function handleFinalizarRota() {
       }
       nextStatus = 'Entregue';
     }
-    else if (act === 'fail') { obs = (await AppUI.perguntar('Motivo / observação:', { titulo: '⛔ Não recebeu', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''; nextStatus = 'Não entregue'; }
-    else if (act === 'cancelado') { obs = (await AppUI.perguntar('Motivo do cancelamento:', { titulo: '✖ Cancelado', tom: 'warn', placeholder: 'Ex.: pedido duplicado', textoOk: 'Confirmar cancelamento', textoCancelar: 'Pular' })) || ''; nextStatus = 'Cancelado'; }
-    else if (act === 'start') { nextStatus = 'Indo para entrega'; }
+    else if (act === 'fail') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo / observação:', { titulo: 'Cliente não estava', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
+    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo do cancelamento:', { titulo: 'Cancelado / mudou de rota', tom: 'warn', placeholder: 'Ex.: pedido duplicado', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Cancelado'; }
+    else if (act === 'start') { nextStatus = 'Indo para entrega'; state.expandidos.add(Number(row)); }
 
     state.sendingAction = true;
     state.enviando = { row: Number(row), act };
@@ -706,6 +787,9 @@ async function handleFinalizarRota() {
         : { action: 'marcarCancelado', row: r, obs: obs || '', ts_device: tsDevice };
 
       rowsAlvo.forEach((r) => updateLocalStatus(r, nextStatus, obs)); // já deixa TODAS marcadas na tela
+      // Ao MARCAR (entregue/não entregue/cancelado) o cartão MINIMIZA sozinho (Bernardo). Iniciar NÃO
+      // minimiza — pelo contrário, expande (feito acima). Tocar de novo num concluído reabre pra corrigir.
+      if (act === 'done' || act === 'fail' || act === 'cancelado') rowsAlvo.forEach((r) => state.expandidos.delete(r));
       // Cada uma sobe sozinha; a que falhar vai pra fila offline (as que subiram NÃO reenviam).
       const falhas = [];
       for (const r of rowsAlvo) {
@@ -788,7 +872,9 @@ async function handleFinalizarRota() {
   sectionsRoot.addEventListener('click', function (event) {
     const fin = event.target.closest('button[data-route="finalizar"]');
     if (fin) { handleFinalizarRota(); return; }
-    const btn = event.target.closest('button[data-act]');
+    // [data-act] em QUALQUER elemento (botões + a área "toque para expandir" do cartão). O closest pega
+    // o mais interno, então tocar num botão dentro do corpo dispara a AÇÃO do botão, não o expandir.
+    const btn = event.target.closest('[data-act]');
     if (!btn) return;
     handleAction(btn.getAttribute('data-act'), Number(btn.getAttribute('data-row')));
   });
