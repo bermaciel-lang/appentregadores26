@@ -947,11 +947,19 @@ async function handleFinalizarRota() {
     const pts = [], linha = [];
 
     if (res.cd && res.cd.lat != null) { L.marker([res.cd.lat, res.cd.lng], { icon: pinEmoji('🏭') }).bindPopup('CD (saída da rota)').addTo(grupo); pts.push([res.cd.lat, res.cd.lng]); linha.push([res.cd.lat, res.cd.lng]); }
+    // Pinos no MESMO ponto (mesmo prédio, apartamentos diferentes) se escondem um atrás do outro — foi o
+    // caso da Leia (nº8 e nº9 na mesma coord → a 8 sumia sob a 9). Desloca ~8m em círculo os repetidos
+    // pra TODOS aparecerem; a LINHA da rota continua na coordenada REAL (não distorce o trajeto).
+    const usadosCoord = {};
     comCoord.forEach(function (p, i) {
-      const ll = [p.lat, p.lng];
-      L.marker(ll, { icon: pinNumerado(p.numero || p.ordem || (i + 1), corDaParada(p.status)) })
-        .bindPopup('<b>' + (p.numero || p.ordem || (i + 1)) + '. ' + api.esc(p.cliente || '') + '</b><br>' + api.esc(p.endereco || '')).addTo(grupo);
-      linha.push(ll); pts.push(ll);
+      const num = p.numero || p.ordem || (i + 1);
+      let mlat = p.lat, mlng = p.lng;
+      const ck = Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5);
+      const n = usadosCoord[ck] || 0; usadosCoord[ck] = n + 1;
+      if (n > 0) { const ang = n * 1.25; mlat += 0.00009 * Math.cos(ang); mlng += 0.00009 * Math.sin(ang); }
+      L.marker([mlat, mlng], { icon: pinNumerado(num, corDaParada(p.status)) })
+        .bindPopup('<b>' + num + '. ' + api.esc(p.cliente || '') + '</b><br>' + api.esc(p.endereco || '')).addTo(grupo);
+      linha.push([p.lat, p.lng]); pts.push([mlat, mlng]);
     });
     if (res.casa && res.casa.lat != null) { L.marker([res.casa.lat, res.casa.lng], { icon: pinEmoji('🏠') }).bindPopup('Sua casa (fim da rota)').addTo(grupo); linha.push([res.casa.lat, res.casa.lng]); pts.push([res.casa.lat, res.casa.lng]); }
     if (linha.length >= 2) L.polyline(linha, { color: '#2563eb', weight: 3, opacity: 0.6, dashArray: '6,6' }).addTo(grupo);
