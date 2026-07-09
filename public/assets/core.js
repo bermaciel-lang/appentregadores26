@@ -443,6 +443,8 @@ async function apiMarcarCancelado(row, obs) {
           else break; // ainda falhando -> tenta depois
         } catch (e) { break; } // sem conexão -> tenta depois
       }
+      // Reenvia também o INICIAR/FINALIZAR rota que ficou pendente (KM+foto salvos no aparelho).
+      try { await reenviarRotaPendente(); } catch (e) {}
     } finally { _processandoFila = false; }
   }
 
@@ -473,46 +475,70 @@ async function apiMarcarCancelado(row, obs) {
   return res;
 }
 
-async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  // Espelha pro nosso sistema (além da planilha) — KM inicial + foto de início.
-  espelharNoPainel({ action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
-  // Com foto: tenta o POST 2x antes de desistir da foto.
-  if (fotoBase64) {
+// ===== INICIAR/FINALIZAR ROTA — À PROVA DE QUEDA DE CONEXÃO =====
+// O KM + foto são PERSISTIDOS no localStorage ANTES de tentar enviar. Se a internet cair, NADA se
+// perde: fica salvo e reenvia sozinho (reenviarRotaPendente roda dentro do processarFila = poll +
+// online + abrir o app). Nunca lança erro nem finge sucesso. Chave por fase ('inicio'|'fim').
+function rotaPendKey(fase) { return C.STORAGE_CACHE_PREFIX + 'rota_pend_' + fase; }
+function salvarRotaPend(fase, payload) {
+  try { localStorage.setItem(rotaPendKey(fase), JSON.stringify(payload)); return true; }
+  catch (e) {
+    // localStorage cheio (foto grande) → guarda SEM a foto, pra ao menos o KM não se perder.
+    try { localStorage.setItem(rotaPendKey(fase), JSON.stringify(Object.assign({}, payload, { fotoBase64: '' }))); } catch (e2) {}
+    return false;
+  }
+}
+function lerRotaPend(fase) { try { return JSON.parse(localStorage.getItem(rotaPendKey(fase)) || 'null'); } catch (e) { return null; } }
+function limparRotaPend(fase) { try { localStorage.removeItem(rotaPendKey(fase)); } catch (e) {} }
+function temRotaPendente() { return !!(lerRotaPend('inicio') || lerRotaPend('fim')); }
+
+// Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok) ou null (não subiu).
+// Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
+async function enviarRotaPayload(payload) {
+  if (payload && payload.fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
-      try {
-        const res = await postJson({ action: 'iniciarRota', entregador, kmInicial, turno: getTurno(), fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
-        if (res && res.ok) return res;
-      } catch (e) { /* tenta de novo */ }
+      try { const res = await postJson(payload); if (res && res.ok) return res; } catch (e) { /* tenta de novo */ }
       await sleep(800 * (i + 1));
     }
-    // Não subiu com foto: salva o KM e AVISA que a foto não foi (sem fingir sucesso).
-    const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial, turno: getTurno() }, { retries: 1 });
-    if (res && res.ok) return Object.assign({}, res, { semFoto: true });
-    throw new Error((res && res.error) || 'Falha ao iniciar rota');
+    const semF = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
+    if (payload.kmInicial != null) semF.kmInicial = payload.kmInicial;
+    if (payload.kmFinal != null) semF.kmFinal = payload.kmFinal;
+    try { const res = await apiGet(semF, { retries: 1 }); if (res && res.ok) return Object.assign({}, res, { semFoto: true }); } catch (e) {}
+    return null;
   }
-  const res = await apiGet({ action: 'iniciarRota', entregador, kmInicial }, { retries: 1 });
-  if (res && res.ok) return res;
-  throw new Error((res && res.error) || 'Falha ao iniciar rota');
+  const semF2 = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
+  if (payload.kmInicial != null) semF2.kmInicial = payload.kmInicial;
+  if (payload.kmFinal != null) semF2.kmFinal = payload.kmFinal;
+  try { const res = await apiGet(semF2, { retries: 1 }); if (res && res.ok) return res; } catch (e) {}
+  return null;
+}
+
+// Reenvia o que ficou pendente de iniciar/finalizar (chamado dentro do processarFila).
+async function reenviarRotaPendente() {
+  for (const fase of ['inicio', 'fim']) {
+    const p = lerRotaPend(fase);
+    if (!p) continue;
+    const res = await enviarRotaPayload(p);
+    if (res && res.ok) limparRotaPend(fase);
+  }
+}
+
+async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+  const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' };
+  const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
+  espelharNoPainel(payload);
+  const res = await enviarRotaPayload(payload);
+  if (res && res.ok) { limparRotaPend('inicio'); return res; }
+  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto }; // fica salvo, reenvia sozinho
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  // Espelha pro nosso sistema (além da planilha) — KM final + foto de fim.
-  espelharNoPainel({ action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' });
-  if (fotoBase64) {
-    for (let i = 0; i < 2; i += 1) {
-      try {
-        const res = await postJson({ action: 'finalizarRota', entregador, kmFinal, turno: getTurno(), fotoBase64: fotoBase64, fotoMimeType: fotoMimeType || 'image/jpeg' });
-        if (res && res.ok) return res;
-      } catch (e) { /* tenta de novo */ }
-      await sleep(800 * (i + 1));
-    }
-    const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal, turno: getTurno() }, { retries: 1 });
-    if (res && res.ok) return Object.assign({}, res, { semFoto: true });
-    throw new Error((res && res.error) || 'Falha ao finalizar rota');
-  }
-  const res = await apiGet({ action: 'finalizarRota', entregador, kmFinal }, { retries: 1 });
-  if (res && res.ok) return res;
-  throw new Error((res && res.error) || 'Falha ao finalizar rota');
+  const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' };
+  const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
+  espelharNoPainel(payload);
+  const res = await enviarRotaPayload(payload);
+  if (res && res.ok) { limparRotaPend('fim'); return res; }
+  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto }; // fica salvo, reenvia sozinho
 }
 
 
@@ -591,6 +617,8 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     enfileirar,
     processarFila,
     filaRowsPendentes,
+    reenviarRotaPendente,
+    temRotaPendente,
     apiEditarKm,
     getTurno,
     setTurno,

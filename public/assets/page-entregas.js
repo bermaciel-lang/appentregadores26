@@ -383,7 +383,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   // Painel "o que foi registrado" embaixo dos botões: KM + foto + editar/reenviar.
   function renderInfoRota() {
     const el = document.getElementById('infoRota');
-    if (el) el.innerHTML = ''; // KM/foto agora se editam tocando na LINHA "Rota iniciada"/"Rota finalizada" (✏️)
+    // KM/foto se editam tocando na LINHA de status (✏️). Aqui só o aviso de "salvo, falta subir" quando
+    // o iniciar/finalizar ficou pendente de envio (sem internet) — pra tranquilizar que NADA se perdeu.
+    if (el) el.innerHTML = (api.temRotaPendente && api.temRotaPendente())
+      ? '<div class="info-rota-linha" style="justify-content:center;color:#92400e;font-weight:700;">⏳ KM/foto salvos no aparelho — sobem sozinhos quando a internet voltar</div>'
+      : '';
     return;
     // eslint-disable-next-line no-unreachable
     const ri = state.rotaInfo || {};
@@ -611,8 +615,13 @@ btnIniciarRota.disabled = true;
       sessionStorage.removeItem('rota_finalizada_' + state.driver);
 
       await carregarTudo(false);
-      if (res.semFoto) await AppUI.alerta('Rota iniciada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, inicie a rota de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
-      else await AppUI.alerta('Rota iniciada com sucesso. ✓', { tom: 'success' });
+      if (res.pendenteEnvio) {
+        await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto sobem sozinhos quando a conexão voltar. Pode fazer as entregas normalmente.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
+      } else if (res.semFoto) {
+        await AppUI.alerta('Rota iniciada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, inicie a rota de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
+      } else {
+        await AppUI.alerta('Rota iniciada com sucesso. ✓', { tom: 'success' });
+      }
     } catch (error) {
       console.error(error);
       state.rotaIniciada = true;
@@ -694,8 +703,15 @@ async function handleFinalizarRota() {
     try { if (window.Rastreio) window.Rastreio.parar(); } catch (e) {}
 
     await carregarTudo(false);
-    if (res.semFoto) await AppUI.alerta('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
-    else await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+    if (res.pendenteEnvio) {
+      // Sem internet AGORA: o KM e a foto FICARAM SALVOS no aparelho e sobem sozinhos quando a conexão
+      // voltar (o app tenta de novo a cada atualização/quando reconecta/ao reabrir). NADA se perde.
+      await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto vão subir sozinhos assim que a conexão voltar. Pode fechar o app tranquilo.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
+    } else if (res.semFoto) {
+      await AppUI.alerta('Rota finalizada e KM salvo ✅ — MAS a foto não subiu. Quando tiver sinal melhor, finalize de novo só pra enviar a foto, ou avise o supervisor.', { tom: 'warn' });
+    } else {
+      await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+    }
   } catch (error) {
     console.error(error);
     await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
