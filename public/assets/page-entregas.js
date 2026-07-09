@@ -289,12 +289,13 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     // RESOLVIDA e recolhida: discreta, pro olho ir pro que FALTA. Toca pra reabrir (corrigir marcação).
     if (resolvida && !expandido) {
-      const cls = key === 'done' ? 'ok' : 'fail';
-      return '<article class="dc feito dc-tap" data-act="expand" data-row="' + row + '">'
+      const ok = key === 'done';
+      // Balão INTEIRO verde claro (entregue) ou vermelho claro (não entregue/cancelado), baixinho.
+      return '<article class="dc feito ' + (ok ? 'ok' : 'no') + ' dc-tap" data-act="expand" data-row="' + row + '">'
         + '<div class="dc-head">'
-        + '<span class="dc-num ' + (key === 'done' ? 'ok' : '') + '">' + (key === 'done' ? ic('check', 16) : (item.numero || '')) + '</span>'
-        + '<span style="font-size:15px;color:var(--muted);font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + nome + '</span>'
-        + '<span class="badge ' + cls + '">' + api.esc(api.statusLabel(item.status)) + '</span>'
+        + '<span class="dc-num ' + (ok ? 'ok' : 'nofeito') + '">' + (ok ? ic('check', 15) : (item.numero || '')) + '</span>'
+        + '<span style="font-size:15px;color:' + (ok ? '#15803d' : '#b91c1c') + ';font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + nome + '</span>'
+        + '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + api.esc(api.statusLabel(item.status)) + '</span>'
         + '</div></article>';
     }
 
@@ -358,8 +359,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const meta = (km, foto) => '<span class="rmeta">KM ' + (km ? api.esc(String(km)) : '—') + ' · Foto ' + (foto ? '✅' : '❌') + '</span>';
     if (bi) {
       if (state.rotaIniciada || state.rotaFinalizada) {
-        bi.innerHTML = box(true) + '<span class="rlbl">Rota iniciada</span>' + meta(ri.kmInicial, ri.fotoInicio);
-        bi.className = 'route-row route-done'; bi.disabled = true;
+        bi.innerHTML = box(true) + '<span class="rlbl">Rota iniciada</span>' + meta(ri.kmInicial, ri.fotoInicio) + '<span class="redit">✏️</span>';
+        bi.className = 'route-row route-done'; bi.disabled = false; // tocar edita KM/foto
       } else {
         bi.innerHTML = box(false) + '<span class="rlbl">Iniciar entregas</span>';
         bi.className = 'route-row route-cta'; bi.disabled = false;
@@ -367,8 +368,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     }
     if (bf) {
       if (state.rotaFinalizada) {
-        bf.innerHTML = box(true) + '<span class="rlbl">Rota finalizada</span>' + meta(ri.kmFinal, ri.fotoFim);
-        bf.className = 'route-row route-done'; bf.disabled = true;
+        bf.innerHTML = box(true) + '<span class="rlbl">Rota finalizada</span>' + meta(ri.kmFinal, ri.fotoFim) + '<span class="redit">✏️</span>';
+        bf.className = 'route-row route-done'; bf.disabled = false; // tocar edita KM/foto
       } else if (state.rotaIniciada) {
         bf.innerHTML = box(false) + '<span class="rlbl">Finalizar rota</span>';
         bf.className = 'route-row route-cta go'; bf.disabled = false;
@@ -382,7 +383,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   // Painel "o que foi registrado" embaixo dos botões: KM + foto + editar/reenviar.
   function renderInfoRota() {
     const el = document.getElementById('infoRota');
-    if (!el) return;
+    if (el) el.innerHTML = ''; // KM/foto agora se editam tocando na LINHA "Rota iniciada"/"Rota finalizada" (✏️)
+    return;
+    // eslint-disable-next-line no-unreachable
     const ri = state.rotaInfo || {};
     const temInicio = !!(ri.inicio || ri.kmInicial || state.rotaIniciada || state.rotaFinalizada);
     const temFim = !!(ri.fim || ri.kmFinal || state.rotaFinalizada);
@@ -548,12 +551,20 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     window.location.assign(url);
   }
 
+  // Menu de correção do KM/foto — abre ao tocar na LINHA de "Rota iniciada"/"Rota finalizada" (o ✏️).
+  async function menuEditarRota(fase) { // 'inicio' | 'fim'
+    const opt = await AppUI.escolher('O que você quer corrigir?', [
+      { valor: 'km', rotulo: '✏️ Editar o KM' },
+      { valor: 'foto', rotulo: '📷 Trocar a foto' },
+    ], { titulo: fase === 'inicio' ? 'Rota iniciada' : 'Rota finalizada' });
+    if (opt === null) return;
+    if (opt === 'km') await editarKm(fase === 'inicio' ? 'inicial' : 'final');
+    else await reenviarFoto(fase);
+  }
+
   async function handleIniciarRota() {
     if (state.sendingRouteAction) return;
-    if (state.rotaIniciada) {
-      await AppUI.alerta('A rota já foi iniciada.', { tom: 'warn' });
-      return;
-    }
+    if (state.rotaIniciada) { await menuEditarRota('inicio'); return; } // já iniciada → tocar edita KM/foto
 
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // cancelou o KM -> aborta
@@ -623,6 +634,7 @@ btnIniciarRota.disabled = false;
 
 async function handleFinalizarRota() {
   if (state.sendingRouteAction) return;
+  if (state.rotaFinalizada) { await menuEditarRota('fim'); return; } // já finalizada → tocar edita KM/foto
 
   if (!state.rotaIniciada) {
     await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });

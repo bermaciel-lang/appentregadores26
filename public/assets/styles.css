@@ -680,7 +680,12 @@ button, select, input, textarea {
 .dc.aberto { border-color: #94a3b8; box-shadow: 0 0 0 1px #94a3b8 inset; } /* expandido = em foco */
 .dc.indo { background: #fff7ed; border-color: #fdba74; } /* "Indo para entrega" = LARANJA (como era antes) */
 .dc.indo.aberto { border-color: #fb923c; box-shadow: 0 0 0 1px #fb923c inset; }
-.dc.feito { background: #f5f8fc; border-color: #dbe3ef; }
+.dc.feito { padding: 7px 12px; border-width: 1px; } /* resolvido = baixinho, ocupa menos (menos rolagem) */
+.dc.feito .dc-head { align-items: center; }
+.dc.feito.ok { background: #dcfce7; border-color: #86efac; } /* Entregue = verde claro no balão inteiro */
+.dc.feito.no { background: #fee2e2; border-color: #fca5a5; } /* Não entregue/Cancelado = vermelho claro */
+.dc-num.nofeito { background: #fecaca; color: #b91c1c; }
+.route-row .redit { margin-left: 8px; font-size: 15px; opacity: .75; flex: 0 0 auto; }
 .dc-desf { font-size: 12.5px; font-weight: 700; color: #64748b; background: #f1f5f9; border: 1px solid var(--line); border-radius: 9px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .dc-desf:active { transform: scale(.98); }
 .dc svg { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
