@@ -191,12 +191,17 @@ function buildMapsUrl(item) {
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
-    // Fase 2: anexa o token do aparelho em TODA request (menos o próprio login, que ainda não tem).
-    // O servidor descobre quem é o entregador pelo token e ignora o nome mandado.
+    // Fase 2: anexa o token do aparelho (login nunca leva token). O servidor resolve o entregador PELO
+    // TOKEN e IGNORA o nome mandado. Por isso só mandamos o token quando ele é do entregador ATIVO (o
+    // nome salvo bate). Senão, o token de um entregador anterior (ex.: Leia) sobreporia o entregador
+    // escolhido agora (ex.: Entregas CD) e a rota do OUTRO apareceria — bug real do "trocar entregador".
     try {
       if (!params || params.action !== 'login') {
         var ti = getDriverTokenInfo();
-        if (ti && ti.token && !url.searchParams.has('token')) url.searchParams.set('token', ti.token);
+        var ativo = getSavedDriverName();
+        if (ti && ti.token && ativo && String(ti.nome || '').trim() === ativo && !url.searchParams.has('token')) {
+          url.searchParams.set('token', ti.token);
+        }
       }
     } catch (e) { /* sem token → segue sem (modo observa no servidor deixa passar) */ }
     return url.toString();
