@@ -300,13 +300,15 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     const btnEntregue = '<button type="button" class="dc-b ok sm" data-act="done" data-row="' + row + '" ' + dis + '>' + ic('check', 16) + (enviandoEsta && state.enviando.act === 'done' ? '…' : 'Entregue') + '</button>';
     const btnNao = '<button type="button" class="dc-b no sm" data-act="naoentregue" data-row="' + row + '" ' + dis + '>' + ic('x', 15) + 'Não entregue</button>';
+    // Desfazer (apertou errado): só aparece se já foi INICIADA ou marcada — volta pra pendente.
+    const btnDesfazer = (emAndamento || resolvida) ? '<button type="button" class="dc-b desf sm" data-act="desfazer" data-row="' + row + '" ' + dis + '>↩ Desfazer</button>' : '';
 
     // EXPANDIDA: tudo do pedido (pagamento → obs → congelado + ovos → produtos que rolam).
     if (expandido) {
       const cong = item.temCongelado ? '<div style="margin-top:10px"><span class="dc-flag">❄️ Tem congelado</span></div>' : '';
       const prods = Array.isArray(item.produtos) ? item.produtos : [];
       const prodList = prods.map((p) => (p.qtd || 1) + '× ' + api.esc(p.nome || '')).join('<br>');
-      return '<article class="dc andamento">'
+      return '<article class="dc aberto' + (emAndamento ? ' indo' : '') + '">'
         + '<div class="dc-head"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml
         + '<button type="button" class="dc-min" data-act="minimize" data-row="' + row + '">' + ic('chevup', 15) + 'Minimizar</button></div>'
         + '<div class="dc-name" style="font-size:19px">' + nome + '</div>'
@@ -318,6 +320,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist">' + prodList + '</div>' : '')
         + envioHtml
         + '<div class="dc-btns" style="margin-top:12px">' + btnEntregue + btnNao + '</div>'
+        + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
         + '</article>';
     }
 
@@ -325,7 +328,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const chev = '<span style="margin-left:auto;color:#94a3b8;display:inline-flex">' + ic('chevdown', 20) + '</span>';
     const linhaAndamento = emAndamento ? '<span class="dc-andlbl">' + ic('play', 13) + 'Em andamento</span>' : '';
     const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + ' style="flex:1.4">' + ic('play', 16) + 'Iniciar</button>';
-    return '<article class="dc ' + (emAndamento ? 'andamento' : '') + '">'
+    return '<article class="dc ' + (emAndamento ? 'indo' : '') + '">'
       + '<div class="dc-head dc-tap" data-act="expand" data-row="' + row + '"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml + linhaAndamento + chev + '</div>'
       + '<div class="dc-tap" data-act="expand" data-row="' + row + '"><div class="dc-name">' + nome + '</div>' + addrHtml + pagamentoHtml(item, false)
       + (obsE ? '<div class="dc-obs corta">' + obsE + '</div>' : '')
@@ -333,6 +336,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       + envioHtml
       + '<div class="dc-btns">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + '</div>'
       + '<div class="dc-btns">' + btnEntregue + btnNao + '</div>'
+      + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
       + '</article>';
   }
 
@@ -347,15 +351,31 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   function atualizarBotoesRota() {
     const bi = document.getElementById('btnIniciarRota');
     const bf = document.getElementById('btnFinalizarRota');
+    const ri = state.rotaInfo || {};
+    // Linha de status: quadradinho (☑ feito / ☐ a fazer) + rótulo + KM/foto na MESMA linha.
+    // FEITO = neutro e travado (não precisa apertar). A FAZER = chamativo (Finalizar = verde).
+    const box = (on) => '<span class="rbox' + (on ? ' on' : '') + '">' + (on ? '✓' : '') + '</span>';
+    const meta = (km, foto) => '<span class="rmeta">KM ' + (km ? api.esc(String(km)) : '—') + ' · Foto ' + (foto ? '✅' : '❌') + '</span>';
     if (bi) {
-      if (state.rotaIniciada || state.rotaFinalizada) { bi.textContent = '✓ Rota iniciada'; bi.classList.add('route-success'); bi.disabled = true; }
-      else { bi.textContent = 'Iniciar entregas'; bi.classList.remove('route-success'); bi.disabled = false; }
+      if (state.rotaIniciada || state.rotaFinalizada) {
+        bi.innerHTML = box(true) + '<span class="rlbl">Rota iniciada</span>' + meta(ri.kmInicial, ri.fotoInicio);
+        bi.className = 'route-row route-done'; bi.disabled = true;
+      } else {
+        bi.innerHTML = box(false) + '<span class="rlbl">Iniciar entregas</span>';
+        bi.className = 'route-row route-cta'; bi.disabled = false;
+      }
     }
     if (bf) {
-      bf.classList.remove('route-ready', 'route-success');
-      if (state.rotaFinalizada) { bf.textContent = '✓ Rota finalizada'; bf.classList.add('route-success'); bf.disabled = true; }
-      else if (state.rotaIniciada) { bf.textContent = 'Finalizar rota'; bf.classList.add('route-ready'); bf.disabled = false; }
-      else { bf.textContent = 'Finalizar rota'; bf.disabled = false; }
+      if (state.rotaFinalizada) {
+        bf.innerHTML = box(true) + '<span class="rlbl">Rota finalizada</span>' + meta(ri.kmFinal, ri.fotoFim);
+        bf.className = 'route-row route-done'; bf.disabled = true;
+      } else if (state.rotaIniciada) {
+        bf.innerHTML = box(false) + '<span class="rlbl">Finalizar rota</span>';
+        bf.className = 'route-row route-cta go'; bf.disabled = false;
+      } else {
+        bf.innerHTML = box(false) + '<span class="rlbl">Finalizar rota</span>';
+        bf.className = 'route-row route-esperando'; bf.disabled = true; // só habilita depois de iniciar
+      }
     }
   }
 
@@ -369,11 +389,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     if (!temInicio && !temFim) { el.innerHTML = ''; return; }
 
     function linha(titulo, km, fotoOk, tipoKm, tipoFoto) {
+      // KM/foto já aparecem no botão de status (acima). Aqui só as ações de corrigir, compactas.
+      const qual = tipoKm === 'inicial' ? 'início' : 'fim';
       return `<div class="info-rota-linha">
-        <span><b>${titulo}:</b> KM ${km ? api.esc(km) : '—'} · Foto ${fotoOk ? '✅ enviada' : '❌ não enviada'}</span>
         <span class="acoes-mini">
-          <button type="button" class="mini-btn" data-info="km-${tipoKm}">✏️ Editar KM</button>
-          <button type="button" class="mini-btn" data-info="foto-${tipoFoto}">📷 ${fotoOk ? 'Reenviar' : 'Enviar'} foto</button>
+          <button type="button" class="mini-btn" data-info="km-${tipoKm}">✏️ KM do ${qual}</button>
+          <button type="button" class="mini-btn" data-info="foto-${tipoFoto}">📷 ${fotoOk ? 'Trocar' : 'Enviar'} foto do ${qual}</button>
         </span>
       </div>`;
     }
@@ -439,11 +460,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     sectionsRoot.innerHTML = `
       ${lembrete}
-      <section class="section-card">
-        <div class="delivery-list">
-          ${state.items.map(renderEntregaCard).join('')}
-        </div>
-      </section>
+      <div class="delivery-list">
+        ${state.items.map(renderEntregaCard).join('')}
+      </div>
       ${botaoFim}
     `;
 
@@ -697,6 +716,27 @@ async function handleFinalizarRota() {
       return;
     }
 
+    // DESFAZER (apertou errado): volta a entrega pra PENDENTE. Vale pra Iniciar/Entregue/Não entregue.
+    // Agrupa as duplicadas (mesmo número). Best-effort: a que falhar vai pra fila offline.
+    if (act === 'desfazer') {
+      const esc = await AppUI.escolher('Desfazer a marcação desta entrega? Ela volta a ficar PENDENTE (como se nada tivesse sido tocado).', [
+        { valor: 'sim', rotulo: '↩ Sim, desfazer', tom: 'danger' },
+      ], { titulo: 'Desfazer' });
+      if (esc === null) return;
+      const alvo = (item.numero != null ? state.items.filter((x) => Number(x.numero) === Number(item.numero)) : [item]).map((x) => Number(x.row));
+      state.sendingAction = true; state.enviando = { row: Number(row), act: 'desfazer' };
+      alvo.forEach((r) => { updateLocalStatus(r, '', ''); state.expandidos.delete(r); });
+      renderList();
+      try {
+        for (const r of alvo) {
+          try { const res = await api.apiGet({ action: 'desfazer', row: r }, { retries: 3 }); if (!res || !res.ok) throw new Error('x'); }
+          catch (e) { api.enfileirar({ action: 'desfazer', row: r }, { row: Number(r) }); }
+        }
+        window.setTimeout(function () { carregarTudo(false); }, 700);
+      } finally { state.sendingAction = false; state.enviando = null; renderList(); }
+      return;
+    }
+
     // "Não entregue" abre DUAS opções: 🙋 cliente não estava (= antigo "não recebeu") OU 🚫 cancelado/
     // mudou de rota (= antigo "cancelado"). Cada uma vai pro sistema igual antes; a opção vira a observação.
     let obsPreset = null;
@@ -713,6 +753,35 @@ async function handleFinalizarRota() {
     if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
       await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
       return;
+    }
+
+    // START: se JÁ existe OUTRA entrega "Indo para entrega", EXIGE resolver ela primeiro (Entregue /
+    // Não entregue / voltar pra pendente) — pra não sumir com o status por esquecimento. Só então inicia
+    // esta. (Substitui o reset silencioso por uma decisão consciente, como o Bernardo pediu.)
+    if (act === 'start') {
+      const outras = [...new Map(
+        state.items.filter((x) => api.statusKey(x.status) === 'start' && Number(x.numero) !== Number(item.numero)).map((x) => [Number(x.numero), x])
+      ).values()];
+      for (const ant of outras) {
+        const esc = await AppUI.escolher('Você ainda está indo para "' + (ant.cliente || 'outro cliente') + '". Antes de iniciar a próxima, o que aconteceu com essa entrega?', [
+          { valor: 'done', rotulo: '✅ Entregue', tom: 'success' },
+          { valor: 'nao', rotulo: '⛔ Não entregue', tom: 'danger' },
+          { valor: 'pend', rotulo: '↩ Ainda não fui — voltar pra pendente' },
+        ], { titulo: 'Você tem uma entrega em andamento' });
+        if (esc === null) return; // fechou → NÃO inicia a nova
+        const irmasA = ant.numero != null ? state.items.filter((x) => Number(x.numero) === Number(ant.numero)) : [ant];
+        const tsA = new Date().toISOString();
+        for (const x of irmasA) {
+          const r = Number(x.row);
+          const params = esc === 'done' ? { action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }
+            : esc === 'nao' ? { action: 'marcarNaoEntregue', row: r, obs: 'Não entregue', ts_device: tsA }
+            : { action: 'desfazer', row: r };
+          updateLocalStatus(r, esc === 'done' ? 'Entregue' : esc === 'nao' ? 'Não entregue' : '', params.obs || '');
+          state.expandidos.delete(r);
+          try { const res = await api.apiGet(params, { retries: 3 }); if (!res || !res.ok) throw new Error('x'); }
+          catch (e) { api.enfileirar(params, { row: r }); }
+        }
+      }
     }
 
     // Pergunta a observação ANTES de mostrar "Enviando…". A observação é OPCIONAL: tocar
@@ -840,7 +909,7 @@ async function handleFinalizarRota() {
       b.type = 'button';
       b.id = 'btnTrocarTurno';
       b.className = 'ghost-sm';
-      b.textContent = '🔄 Turno: ' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde');
+      b.textContent = '🔄 Trocar turno';
       b.addEventListener('click', function () { window.location.href = '/'; });
       btnTrocar.parentNode.insertBefore(b, btnTrocar);
     }
@@ -1066,8 +1135,8 @@ async function handleFinalizarRota() {
 
   (async function init() {
     if (redirectIfNoDriver()) return;
-    if (driverTitle) driverTitle.textContent = state.driver; // título virou fixo "Tela do entregador"
-    if (driverNameText) driverNameText.textContent = state.driver; // nome único, no cartão
+    if (driverTitle) driverTitle.textContent = state.driver + ' - ' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde'); // nome + turno na faixa azul
+    if (driverNameText) driverNameText.textContent = state.driver; // (elemento antigo removido do HTML; no-op)
     await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
     reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off
     api.processarFila(); // sobe o que ficou pendente de envios anteriores

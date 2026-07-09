@@ -1,5 +1,5 @@
 :root {
-  --bg: #f3f5fb;
+  --bg: #e7ebf3;
   --card: #ffffff;
   --text: #0f172a;
   --muted: #64748b;
@@ -267,6 +267,17 @@ button, select, input, textarea {
 .ghost-sm { min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 700; background: #eef2f7; color: #475569; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
 .ghost-sm:active { transform: scale(.98); }
 .toolbar-main { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+/* Linhas de status da rota (Iniciar/Finalizar) — quadradinho + rótulo + KM/foto na mesma linha */
+.route-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 0 14px; border-radius: 14px; font-weight: 700; font-size: 15px; border: 1px solid var(--line); cursor: pointer; text-align: left; }
+.route-row[disabled] { cursor: default; }
+.route-row .rbox { width: 22px; height: 22px; border-radius: 6px; border: 2px solid currentColor; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800; flex: 0 0 auto; }
+.route-row .rbox.on { background: #16a34a; border-color: #16a34a; color: #fff; }
+.route-row .rlbl { flex: 0 0 auto; }
+.route-row .rmeta { margin-left: auto; font-size: 13px; font-weight: 600; opacity: .85; white-space: nowrap; }
+.route-cta { background: var(--primary); color: #fff; border-color: var(--primary); }
+.route-cta.go { background: var(--green); border-color: var(--green); }
+.route-done { background: #eef2f7; color: #64748b; border-color: #e2e8f0; }
+.route-esperando { background: #f8fafc; color: #94a3b8; border-color: var(--line); }
 
 .section-stack {
   display: grid;
@@ -666,8 +677,12 @@ button, select, input, textarea {
    (crisp, funcionam OFFLINE, sem webfont). Feito p/ celular + gente + velha.
    ================================================================== */
 .dc { background: #fff; border: 1.5px solid #c3cede; border-radius: 16px; padding: 13px 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); min-width: 0; max-width: 100%; overflow: hidden; }
-.dc.andamento { border-color: #7aa0ee; box-shadow: 0 0 0 1px #7aa0ee inset; }
+.dc.aberto { border-color: #94a3b8; box-shadow: 0 0 0 1px #94a3b8 inset; } /* expandido = em foco */
+.dc.indo { background: #fff7ed; border-color: #fdba74; } /* "Indo para entrega" = LARANJA (como era antes) */
+.dc.indo.aberto { border-color: #fb923c; box-shadow: 0 0 0 1px #fb923c inset; }
 .dc.feito { background: #f5f8fc; border-color: #dbe3ef; }
+.dc-desf { font-size: 12.5px; font-weight: 700; color: #64748b; background: #f1f5f9; border: 1px solid var(--line); border-radius: 9px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.dc-desf:active { transform: scale(.98); }
 .dc svg { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
 .dc-head { display: flex; align-items: center; gap: 8px; }
 .dc-tap { cursor: pointer; }
@@ -693,6 +708,7 @@ button, select, input, textarea {
 .dc-b.ini { background: #e7efff; color: #1d4ed8; border-color: #7aa0ee; }
 .dc-b.ok { background: var(--green); color: #fff; border-color: var(--green); }
 .dc-b.no { background: var(--red); color: #fff; border-color: var(--red); }
+.dc-b.desf { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
 .dc-b.sm { min-height: 42px; font-size: 13.5px; }
 .dc-b[disabled] { opacity: .5; }
 .dc-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 800; padding: 6px 12px; border-radius: 9px; background: #e0f2fe; color: #075985; }
