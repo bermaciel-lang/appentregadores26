@@ -1,0 +1,63 @@
+name: 2) Gerar o app assinado (.aab) para a Play Store
+
+# Monta o arquivo .aab ASSINADO que sobe na Play Store (Capacitor embrulha o site + plugins).
+# PRÉ-REQUISITOS (secrets em Settings > Secrets and variables > Actions):
+#   KEYSTORE_PASSWORD  a senha que você criou no passo 1
+#   KEYSTORE_BASE64    o conteúdo de keystore.base64.txt gerado no passo 1
+# Rode manualmente (Actions > este workflow > Run). No fim, baixe o artefato "entregas-odc-aab"
+# e suba o app-release.aab na Play Console. O versionCode sobe sozinho a cada execução.
+on:
+  workflow_dispatch:
+
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Adicionar a plataforma Android
+        run: npx cap add android
+
+      - name: Permissões de localização no Manifest
+        run: node scripts/android-manifest-patch.mjs
+
+      - name: Recuperar a chave de assinatura
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+      - name: Assinatura + versão no Gradle
+        run: node scripts/android-signing-patch.mjs
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+
+      - name: Build do .aab (release assinado)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew bundleRelease --no-daemon
+        env:
+          ODC_KEYSTORE_FILE: release.keystore
+          ODC_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          ODC_KEY_ALIAS: upload
+          ODC_KEY_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+
+      - name: Publicar o .aab
+        uses: actions/upload-artifact@v4
+        with:
+          name: entregas-odc-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
