@@ -12,7 +12,11 @@ window.APP_CONFIG = {
   STORAGE_DRIVER_KEY: 'app_entregas_driver_name',
   STORAGE_TOKEN_KEY: 'app_entregas_driver_token',
   STORAGE_ADMIN_AUTH_KEY: 'app_entregas_admin_auth',
-  STORAGE_CACHE_PREFIX: 'app_entregas_cache_v3_'
+  STORAGE_CACHE_PREFIX: 'app_entregas_cache_v3_',
+  // Porteiro de permissões (gate.js): só abre o app (no .apk Android) se LOCALIZAÇÃO e
+  // NOTIFICAÇÕES estiverem ativadas. Kill-switch: pôr false desliga o porteiro na hora
+  // (deploy de 1 linha). No navegador/iPhone o porteiro nunca roda, independente disto.
+  EXIGIR_PERMISSOES: true
 };
 
 // ====================================================================
