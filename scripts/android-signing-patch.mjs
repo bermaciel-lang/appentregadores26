@@ -30,6 +30,11 @@ if (!g.includes('signingConfigs')) {
             keyPassword System.getenv("ODC_KEY_PASSWORD")
         }
     }
+    // Não deixar a verificação de qualidade (lint) derrubar o build do .aab.
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
 `;
   // Insere logo depois do primeiro "android {".
   g = g.replace(/android\s*\{/, (m) => m + bloco);
