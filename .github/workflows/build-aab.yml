@@ -38,10 +38,15 @@ jobs:
       - name: Recuperar a chave de assinatura
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
 
+      # versionCode SEMPRE cresce, mesmo num "Re-run" (nº da execução × 100 + nº da tentativa).
+      # A Play Store rejeita repetir um versionCode já enviado — foi o erro "código de versão 1 já usado".
+      - name: Calcular o código de versão
+        run: echo "VC=$(( ${{ github.run_number }} * 100 + ${{ github.run_attempt }} ))" >> $GITHUB_ENV
+
       - name: Assinatura + versão no Gradle
         run: node scripts/android-signing-patch.mjs
         env:
-          VERSION_CODE: ${{ github.run_number }}
+          VERSION_CODE: ${{ env.VC }}
           VERSION_NAME: 1.0.${{ github.run_number }}
 
       - name: Build do .aab (release assinado)
