@@ -83,11 +83,23 @@
     badgeEl.textContent = n > 99 ? '99+' : String(n);
     badgeEl.style.display = n > 0 ? 'block' : 'none';
   }
+  // O Android às vezes manda o áudio SEM o "tipo" (MIME vazio) — aí o arquivo viraria um anexo
+  // pra baixar em vez de um player. Pra não perder áudio nunca, a gente também reconhece pela
+  // ponta do nome (extensão). Mapa ext -> MIME certo (usado no envio e na exibição).
+  var EXT_AUDIO = {
+    m4a: 'audio/mp4', mp4a: 'audio/mp4', aac: 'audio/aac', mp3: 'audio/mpeg', mpga: 'audio/mpeg',
+    ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', weba: 'audio/webm',
+    amr: 'audio/amr', '3gp': 'audio/3gpp', '3gpp': 'audio/3gpp', caf: 'audio/x-caf'
+  };
+  function extDe(nome) { var m = /\.([a-z0-9]+)\s*$/i.exec(String(nome || '')); return m ? m[1].toLowerCase() : ''; }
+  function mimeAudioPorNome(nome) { return EXT_AUDIO[extDe(nome)] || ''; }
+  function ehAudio(tipo, nome) { return String(tipo || '').indexOf('audio/') === 0 || !!mimeAudioPorNome(nome); }
+
   function renderAnexo(m) {
     var a = m && m.anexo; if (!a || !a.url) return '';
     var t = String(a.tipo || ''), u = esc(a.url);
     if (t.indexOf('image/') === 0) return '<a href="' + u + '" target="_blank" rel="noopener"><img src="' + u + '" style="max-width:200px;max-height:230px;border-radius:8px;display:block;margin-top:4px;" /></a>';
-    if (t.indexOf('audio/') === 0) return '<audio controls src="' + u + '" style="max-width:230px;margin-top:4px;"></audio>';
+    if (ehAudio(t, a.nome)) return '<audio controls preload="metadata" src="' + u + '" style="max-width:230px;margin-top:4px;"></audio>';
     return '<a href="' + u + '" target="_blank" rel="noopener" style="display:inline-block;margin-top:4px;color:#2d7a3e;font-weight:700;">📎 ' + esc(a.nome || 'arquivo') + '</a>';
   }
   function render() {
@@ -157,7 +169,12 @@
     try {
       var base64 = await new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = rej; fr.readAsDataURL(file); });
       var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
-      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: file.name || 'arquivo', tipo: file.type || 'application/octet-stream' };
+      // Tipo do arquivo: usa o que o celular deu; se veio vazio/genérico (comum em áudio gravado no
+      // Android), deduz pela extensão do nome — assim o áudio sobe tocável (Content-Type certo).
+      var tipoBruto = String(file.type || '');
+      var tipo = (tipoBruto && tipoBruto !== 'application/octet-stream') ? tipoBruto
+        : (mimeAudioPorNome(file.name) || tipoBruto || 'application/octet-stream');
+      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: file.name || 'arquivo', tipo: tipo };
       if (ti && ti.token) body.token = ti.token;
       var r = await fetch('/api/painel/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }).then(function (x) { return x.json(); });
       if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); render(); }
