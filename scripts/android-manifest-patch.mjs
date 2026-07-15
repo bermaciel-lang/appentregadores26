@@ -33,6 +33,8 @@ const PERMS = [
   'FOREGROUND_SERVICE_LOCATION',
   'WAKE_LOCK',
   'POST_NOTIFICATIONS', // notificações no Android 13+ (chat/avisos no app)
+  'RECORD_AUDIO',       // gravar áudio no chat (segurar o 🎤 pra mandar recado de voz)
+  'MODIFY_AUDIO_SETTINGS', // acompanha o RECORD_AUDIO (ajuste de captura)
 ];
 const faltando = PERMS.filter((p) => !m.includes(`android.permission.${p}`));
 if (!faltando.length) { console.log('Permissões já presentes.'); process.exit(0); }

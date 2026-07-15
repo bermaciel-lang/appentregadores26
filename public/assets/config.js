@@ -16,7 +16,11 @@ window.APP_CONFIG = {
   // Porteiro de permissões (gate.js): só abre o app (no .apk Android) se LOCALIZAÇÃO e
   // NOTIFICAÇÕES estiverem ativadas. Kill-switch: pôr false desliga o porteiro na hora
   // (deploy de 1 linha). No navegador/iPhone o porteiro nunca roda, independente disto.
-  EXIGIR_PERMISSOES: true
+  EXIGIR_PERMISSOES: true,
+  // Gravar áudio no chat (segurar o 🎤). No NAVEGADOR funciona sempre. No .apk precisa da
+  // permissão RECORD_AUDIO (só existe a partir do .apk novo) — por isso o 🎤 fica ESCONDIDO
+  // no app até LIGAR esta flag (deploy de 1 linha), depois que o .apk novo estiver circulando.
+  GRAVAR_AUDIO_ATIVO: false
 };
 
 // ====================================================================

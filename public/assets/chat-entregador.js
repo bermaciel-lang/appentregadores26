@@ -69,6 +69,7 @@
         '<button type="button" id="chatEntAnexo" title="Enviar foto/áudio/arquivo" style="background:#eee;border:0;border-radius:10px;width:44px;height:44px;font-size:19px;cursor:pointer;flex-shrink:0;">📎</button>' +
         '<input type="file" id="chatEntFile" accept="image/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" style="display:none;" />' +
         '<button type="button" id="chatEntNudge" title="Chamar a atenção" style="background:#ffb300;border:0;border-radius:10px;width:46px;height:44px;font-size:20px;cursor:pointer;flex-shrink:0;">👋</button>' +
+        '<button type="button" id="chatEntMic" title="Segure para gravar áudio" style="background:#eef7f0;border:0;border-radius:10px;width:46px;height:44px;font-size:20px;cursor:pointer;flex-shrink:0;touch-action:none;-webkit-user-select:none;user-select:none;">🎤</button>' +
         '<input id="chatEntInput" type="text" placeholder="Escreva uma mensagem..." autocomplete="off" style="flex:1;min-width:0;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:15px;" />' +
         '<button type="button" id="chatEntEnviar" style="background:#2d7a3e;color:#fff;border:0;border-radius:10px;padding:0 16px;height:44px;font-size:15px;font-weight:700;cursor:pointer;flex-shrink:0;">Enviar</button>' +
       '</div>' +
@@ -162,10 +163,11 @@
   var fileEl = overlay.querySelector('#chatEntFile'), anexoEl = overlay.querySelector('#chatEntAnexo');
   anexoEl.addEventListener('click', function () { fileEl.click(); });
   fileEl.addEventListener('change', function () { var f = fileEl.files && fileEl.files[0]; fileEl.value = ''; if (f) enviarArquivo(f); });
-  async function enviarArquivo(file) {
+  async function enviarArquivo(file, btnFb) {
     if (!file) return;
     if (file.size > 8 * 1024 * 1024) { await AppUI.alerta('Arquivo muito grande (máximo 8 MB).'); return; }
-    anexoEl.textContent = '⏳';
+    var fb = btnFb || anexoEl, fbOrig = fb.textContent; // ⏳ no botão que originou (📎 ou 🎤)
+    fb.textContent = '⏳';
     try {
       var base64 = await new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = rej; fr.readAsDataURL(file); });
       var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
@@ -180,8 +182,116 @@
       if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); render(); }
       else await AppUI.alerta('Não consegui enviar o arquivo. Tente de novo.');
     } catch (e) { await AppUI.alerta('Sem conexão pra enviar o arquivo agora.'); }
-    anexoEl.textContent = '📎';
+    fb.textContent = fbOrig;
   }
+
+  // ====== GRAVAR ÁUDIO estilo WhatsApp: SEGURE o 🎤 pra gravar, SOLTE pra enviar, ARRASTE ◀ pra cancelar. ======
+  // Usa o microfone do aparelho (getUserMedia + MediaRecorder). No navegador do celular funciona
+  // direto; no .apk precisa da permissão RECORD_AUDIO no manifesto (senão o SO nega o microfone).
+  (function () {
+    var micBtn = overlay.querySelector('#chatEntMic');
+    if (!micBtn) return;
+    var temGravador = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+    if (!temGravador) { micBtn.style.display = 'none'; return; } // navegador velho: some o 🎤, fica o 📎
+    // No app (.apk): só mostra o 🎤 quando a flag estiver ligada — senão o .apk ANTIGO (sem a
+    // permissão RECORD_AUDIO) mostraria um microfone que o SO nega. No navegador, sempre disponível.
+    var cfgAudio = window.APP_CONFIG || {};
+    var nativoApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    if (nativoApp && cfgAudio.GRAVAR_AUDIO_ATIVO !== true) { micBtn.style.display = 'none'; return; }
+
+    var MIN_MS = 600;          // toque rápido sem querer → descarta
+    var MAX_MS = 2 * 60000;    // teto de 2 min (não estourar o limite de 8 MB)
+    var CANCEL_DX = -70;       // arrastar 70px pra esquerda = cancelar
+
+    var stream = null, rec = null, chunks = [], t0 = 0, timer = null;
+    var gravando = false, segurando = false, cancelar = false, ocupado = false, x0 = 0;
+    var barra = null;
+
+    function ehNativo() { try { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch (e) { return false; } }
+    function escolherMime() {
+      var cands = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg'];
+      for (var i = 0; i < cands.length; i++) { try { if (MediaRecorder.isTypeSupported(cands[i])) return cands[i]; } catch (e) {} }
+      return '';
+    }
+    function extDoMime(m) { m = m || ''; return m.indexOf('webm') >= 0 ? 'webm' : (m.indexOf('mp4') >= 0 || m.indexOf('aac') >= 0) ? 'm4a' : m.indexOf('ogg') >= 0 ? 'ogg' : 'webm'; }
+    function pararStream() { try { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} stream = null; }
+
+    function mostrarBarra() {
+      if (barra) return;
+      var modal = overlay.querySelector('#chatEntModal'); if (modal && !modal.style.position) modal.style.position = 'relative';
+      barra = document.createElement('div');
+      barra.style.cssText = 'position:absolute;left:8px;right:8px;bottom:8px;height:60px;z-index:20;display:flex;align-items:center;gap:10px;padding:0 14px;background:#2d7a3e;color:#fff;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-weight:700;';
+      barra.innerHTML =
+        '<span style="width:14px;height:14px;border-radius:50%;background:#ff5252;animation:micPulse 1s infinite;flex-shrink:0;"></span>' +
+        '<span id="micTempo" style="font-variant-numeric:tabular-nums;min-width:42px;">0:00</span>' +
+        '<span id="micDica" style="flex:1;font-weight:600;opacity:.95;font-size:14px;">◀ arraste para cancelar</span>' +
+        '<span style="font-weight:800;font-size:14px;white-space:nowrap;">solte p/ enviar</span>';
+      (modal || overlay).appendChild(barra);
+    }
+    function tirarBarra() { if (barra) { try { barra.remove(); } catch (e) {} barra = null; } }
+    function pintarCancelar(on) {
+      if (!barra) return;
+      barra.style.background = on ? '#c62828' : '#2d7a3e';
+      var d = barra.querySelector('#micDica'); if (d) d.textContent = on ? '🗑️ solte para CANCELAR' : '◀ arraste para cancelar';
+    }
+    function tick() {
+      if (!barra) return;
+      var s = Math.floor((Date.now() - t0) / 1000), el = barra.querySelector('#micTempo');
+      if (el) el.textContent = Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+      if (Date.now() - t0 >= MAX_MS) parar(); // teto → envia o que já gravou
+    }
+    function iniciarTick() { pararTick(); tick(); timer = setInterval(tick, 250); }
+    function pararTick() { if (timer) { clearInterval(timer); timer = null; } }
+
+    async function comecar(ev) {
+      if (ocupado) return;
+      ocupado = true; segurando = true; cancelar = false;
+      x0 = ev.clientX || 0;
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) {
+        ocupado = false; segurando = false;
+        AppUI.alerta('Não consegui usar o microfone. ' + (ehNativo() ? 'Talvez precise atualizar o app (nova versão).' : 'Libere o microfone pro site nas permissões do navegador.'));
+        return;
+      }
+      if (!segurando) { pararStream(); ocupado = false; return; } // soltou antes do microfone liberar
+      var mime = escolherMime();
+      try { rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+      catch (e) { try { rec = new MediaRecorder(stream); } catch (e2) { pararStream(); ocupado = false; segurando = false; AppUI.alerta('Este aparelho não deixa gravar áudio por aqui.'); return; } }
+      chunks = [];
+      rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = function () {
+        var mimeReal = (rec && rec.mimeType) || mime || 'audio/webm';
+        var blob = new Blob(chunks, { type: mimeReal });
+        var durou = Date.now() - t0;
+        pararStream(); tirarBarra(); pararTick();
+        gravando = false; ocupado = false;
+        if (cancelar || durou < MIN_MS || !blob.size) {
+          if (!cancelar && durou < MIN_MS) AppUI.alerta('Segure o botão do microfone pra gravar o áudio.');
+          return; // descarta
+        }
+        var ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+        enviarArquivo(new File([blob], 'voz_' + ts + '.' + extDoMime(mimeReal), { type: mimeReal }), micBtn);
+      };
+      gravando = true; t0 = Date.now();
+      mostrarBarra(); iniciarTick();
+      try { if (navigator.vibrate) navigator.vibrate(20); } catch (e) {}
+      try { rec.start(); } catch (e) { rec.onstop = null; pararStream(); tirarBarra(); pararTick(); gravando = false; ocupado = false; AppUI.alerta('Não consegui iniciar a gravação.'); }
+    }
+    function mover(ev) { if (!gravando) return; cancelar = ((ev.clientX || 0) - x0) <= CANCEL_DX; pintarCancelar(cancelar); }
+    function parar() {
+      segurando = false;
+      if (!gravando) return; // ainda esperando o microfone → comecar() vai abortar sozinho
+      try { if (rec && rec.state !== 'inactive') rec.stop(); } catch (e) { pararStream(); tirarBarra(); pararTick(); gravando = false; ocupado = false; }
+    }
+
+    micBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); try { micBtn.setPointerCapture(e.pointerId); } catch (er) {} comecar(e); });
+    micBtn.addEventListener('pointermove', mover);
+    micBtn.addEventListener('pointerup', function (e) { e.preventDefault(); parar(); });
+    micBtn.addEventListener('pointercancel', function () { parar(); });
+    micBtn.addEventListener('lostpointercapture', function () { if (gravando || segurando) parar(); });
+    micBtn.addEventListener('contextmenu', function (e) { e.preventDefault(); }); // segurar não abre menu do sistema
+  })();
+
   // Áudio destravado no 1º toque do usuário (iOS/Safari só tocam som depois de um gesto).
   var _ac = null;
   function destravarAudio() { try { var Ctx = window.AudioContext || window.webkitAudioContext; if (!_ac && Ctx) _ac = new Ctx(); if (_ac && _ac.state === 'suspended') _ac.resume(); } catch (e) {} }
@@ -212,7 +322,7 @@
   }
   (function () {
     var st = document.createElement('style');
-    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0) rotate(0)}8%{transform:translate(-16px,6px) rotate(-1deg)}16%{transform:translate(16px,-6px) rotate(1deg)}24%{transform:translate(-16px,-6px) rotate(-1deg)}32%{transform:translate(16px,6px) rotate(1deg)}40%{transform:translate(-13px,5px)}50%{transform:translate(13px,-5px)}60%{transform:translate(-10px,-4px)}70%{transform:translate(10px,4px)}80%{transform:translate(-6px,2px)}90%{transform:translate(4px,-1px)}}.chat-treme{animation:chatTreme .7s cubic-bezier(.36,.07,.19,.97) 2;}@keyframes nudgeFlash{0%{opacity:0}12%{opacity:.95}26%{opacity:.15}40%{opacity:.95}54%{opacity:.15}68%{opacity:.9}100%{opacity:0}}.nudge-flash{animation:nudgeFlash 2.8s ease-in-out;}@keyframes nudgePulseA{0%{transform:translate(-50%,-50%) scale(.7);opacity:0}15%{transform:translate(-50%,-50%) scale(1.06);opacity:1}25%{transform:translate(-50%,-50%) scale(1)}85%{opacity:1}100%{opacity:0}}.nudge-banner-app{animation:nudgePulseA 4s ease-in-out}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}.nudge-flash{animation:none;opacity:.5}.nudge-banner-app{animation:none}}';
+    st.textContent = '@keyframes chatTreme{0%,100%{transform:translate(0,0) rotate(0)}8%{transform:translate(-16px,6px) rotate(-1deg)}16%{transform:translate(16px,-6px) rotate(1deg)}24%{transform:translate(-16px,-6px) rotate(-1deg)}32%{transform:translate(16px,6px) rotate(1deg)}40%{transform:translate(-13px,5px)}50%{transform:translate(13px,-5px)}60%{transform:translate(-10px,-4px)}70%{transform:translate(10px,4px)}80%{transform:translate(-6px,2px)}90%{transform:translate(4px,-1px)}}.chat-treme{animation:chatTreme .7s cubic-bezier(.36,.07,.19,.97) 2;}@keyframes nudgeFlash{0%{opacity:0}12%{opacity:.95}26%{opacity:.15}40%{opacity:.95}54%{opacity:.15}68%{opacity:.9}100%{opacity:0}}.nudge-flash{animation:nudgeFlash 2.8s ease-in-out;}@keyframes nudgePulseA{0%{transform:translate(-50%,-50%) scale(.7);opacity:0}15%{transform:translate(-50%,-50%) scale(1.06);opacity:1}25%{transform:translate(-50%,-50%) scale(1)}85%{opacity:1}100%{opacity:0}}.nudge-banner-app{animation:nudgePulseA 4s ease-in-out}@keyframes micPulse{0%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}100%{opacity:1;transform:scale(1)}}@media(prefers-reduced-motion:reduce){.chat-treme{animation:none}.nudge-flash{animation:none;opacity:.5}.nudge-banner-app{animation:none}}';
     document.head.appendChild(st);
   })();
 
