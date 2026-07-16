@@ -451,8 +451,17 @@ async function apiMarcarCancelado(row, obs) {
   async function abrirWhatsapp(row) {
   const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
 
+  // O painel RECUSOU e escreveu um texto PRA O ENTREGADOR (ex.: telefone do cliente fora do padrão →
+  // não abre, pra não mandar mensagem pra um estranho). Só mostramos a mensagem quando ela vem com
+  // `aoEntregador` — o catch de topo da rota devolve `error` com a mensagem TÉCNICA da exceção, e isso
+  // não pode aparecer na tela de quem está na rua. Sem a marca, cai no genérico "tente de novo".
+  if (res && res.ok === false && res.aoEntregador && res.error) {
+    const err = new Error(String(res.error));
+    err.doServidor = true;
+    throw err;
+  }
   if (!res || !res.ok || !res.url) {
-    throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
+    throw new Error('Não foi possível abrir o WhatsApp');
   }
 
   let url = String(res.url || '');

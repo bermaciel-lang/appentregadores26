@@ -861,7 +861,18 @@ async function handleFinalizarRota() {
         return;
       }
 
-      if (act === 'whats') { await api.abrirWhatsapp(row); return; }
+      // WhatsApp: erro tratado AQUI, não no catch lá embaixo — o catch geral diz "tente de novo", e
+      // quando o painel recusa por telefone errado tentar de novo não resolve nada (o cadastro é que
+      // está errado). Com a marca `doServidor`, mostra o motivo de verdade; falha de internet segue
+      // caindo no texto genérico.
+      if (act === 'whats') {
+        try { await api.abrirWhatsapp(row); }
+        catch (e) {
+          var motivo = (e && e.doServidor) ? e.message : 'Não foi possível abrir o WhatsApp. Tente de novo.';
+          await AppUI.alerta(motivo, { titulo: 'WhatsApp', tom: 'warn' });
+        }
+        return;
+      }
 
       // Hora do APARELHO no instante do toque (ISO). Vai junto no envio; e SE cair na FILA offline,
       // é reenviada COM ESTE horário quando a internet voltar. Assim o servidor carimba o entregue_em
