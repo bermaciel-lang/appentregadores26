@@ -451,8 +451,17 @@ async function apiMarcarCancelado(row, obs) {
   async function abrirWhatsapp(row) {
   const res = await apiGet({ action: 'whatsapp', row }, { retries: 0 });
 
+  // O painel RECUSOU e explicou o porquê (ex.: telefone do cliente fora do padrão → não abre, pra não
+  // mandar mensagem pra um estranho). Marca como `doServidor` pra tela mostrar ESTE texto ao
+  // entregador, em vez do "tente de novo" genérico — não adianta tentar de novo, o cadastro é que
+  // está errado. Sem a marca, quem chama não consegue separar isto de uma falha de internet.
+  if (res && res.ok === false && res.error) {
+    const err = new Error(String(res.error));
+    err.doServidor = true;
+    throw err;
+  }
   if (!res || !res.ok || !res.url) {
-    throw new Error((res && res.error) || 'Não foi possível abrir o WhatsApp');
+    throw new Error('Não foi possível abrir o WhatsApp');
   }
 
   let url = String(res.url || '');
