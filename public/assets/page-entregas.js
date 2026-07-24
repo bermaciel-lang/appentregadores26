@@ -506,6 +506,22 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         sessionStorage.removeItem('rota_assinatura_' + state.driver);
       }
 
+      // MESMO cuidado acima, agora pra "finalizada" — ESTE bloco não existia (causa raiz do bug
+      // "finalizei e depois de um tempo aparece em aberto de novo"): a sessão local (sessionStorage)
+      // some quando o Android mata o app em segundo plano, e sem isto o app esquecia que já tinha
+      // finalizado mesmo com o servidor já tendo o KM e a foto certinhos.
+      if (result.rotaFinalizada && !state.rotaFinalizada) {
+        state.rotaFinalizada = true;
+        sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
+      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada) {
+        // Servidor diz EXPLICITAMENTE que não está finalizada (ex.: supervisor reabriu a rota) —
+        // libera de novo. `=== false` (não `!result.rotaFinalizada`) de propósito: se o app novo for
+        // ao ar ANTES do servidor novo, a resposta ainda viria SEM este campo (undefined) — tratar
+        // undefined igual a false desfaria rotas recém-finalizadas na mesma sessão por engano.
+        state.rotaFinalizada = false;
+        sessionStorage.removeItem('rota_finalizada_' + state.driver);
+      }
+
       renderList();
 
       if (result.stale) {
@@ -569,6 +585,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   async function handleIniciarRota() {
     if (state.sendingRouteAction) return;
     if (state.rotaIniciada) { await menuEditarRota('inicio'); return; } // já iniciada → tocar edita KM/foto
+    // Já tem um "iniciar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
+    // novo do zero — senão a segunda tentativa SOBRESCREVE a primeira, que ainda nem tentou subir.
+    if (api.temRotaPendenteFase && api.temRotaPendenteFase('inicio')) {
+      await AppUI.alerta('Você já iniciou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
+      return;
+    }
 
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // cancelou o KM -> aborta
@@ -647,6 +669,13 @@ async function handleFinalizarRota() {
 
   if (!state.rotaIniciada) {
     await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
+    return;
+  }
+  // Já tem um "finalizar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
+  // novo do zero — é a causa do "mandei foto e ele pede outra": a sessão local esquece o que já foi
+  // feito, mas o que estava salvo (esperando subir) ainda não confirmou, e uma 2ª tentativa SOBRESCREVE.
+  if (api.temRotaPendenteFase && api.temRotaPendenteFase('fim')) {
+    await AppUI.alerta('Você já finalizou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
     return;
   }
 

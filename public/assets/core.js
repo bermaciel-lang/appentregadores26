@@ -500,6 +500,10 @@ function salvarRotaPend(fase, payload) {
 function lerRotaPend(fase) { try { return JSON.parse(localStorage.getItem(rotaPendKey(fase)) || 'null'); } catch (e) { return null; } }
 function limparRotaPend(fase) { try { localStorage.removeItem(rotaPendKey(fase)); } catch (e) {} }
 function temRotaPendente() { return !!(lerRotaPend('inicio') || lerRotaPend('fim')); }
+// Já existe um iniciar/finalizar SALVO nesta fase específica, esperando subir? Usado pra NÃO pedir
+// KM/foto de novo (e não sobrescrever o que já está na fila) quando a tela reabre "como se" nada
+// tivesse sido feito — a causa raiz de pedir foto 2x.
+function temRotaPendenteFase(fase) { return !!lerRotaPend(fase); }
 
 // Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok) ou null (não subiu).
 // Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
@@ -512,12 +516,14 @@ async function enviarRotaPayload(payload) {
     const semF = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
     if (payload.kmInicial != null) semF.kmInicial = payload.kmInicial;
     if (payload.kmFinal != null) semF.kmFinal = payload.kmFinal;
+    if (payload.ts_device) semF.ts_device = payload.ts_device; // preserva a hora do CLIQUE mesmo no fallback sem foto
     try { const res = await apiGet(semF, { retries: 1 }); if (res && res.ok) return Object.assign({}, res, { semFoto: true }); } catch (e) {}
     return null;
   }
   const semF2 = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
   if (payload.kmInicial != null) semF2.kmInicial = payload.kmInicial;
   if (payload.kmFinal != null) semF2.kmFinal = payload.kmFinal;
+  if (payload.ts_device) semF2.ts_device = payload.ts_device;
   try { const res = await apiGet(semF2, { retries: 1 }); if (res && res.ok) return res; } catch (e) {}
   return null;
 }
@@ -533,7 +539,9 @@ async function reenviarRotaPendente() {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' };
+  // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
+  // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
+  const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
   const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
@@ -542,7 +550,7 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg' };
+  const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
@@ -628,6 +636,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     filaRowsPendentes,
     reenviarRotaPendente,
     temRotaPendente,
+    temRotaPendenteFase,
     apiEditarKm,
     getTurno,
     setTurno,
