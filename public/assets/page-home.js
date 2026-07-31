@@ -19,28 +19,34 @@
   async function goToEntregas(nome) {
     nome = String(nome || '').trim();
     if (!nome) return;
-    // CD e Lalamove/Lala NÃO são pessoas com telefone → não pedem PIN (mesma regra do painel:
-    // isExcluido = nome contém "lala" ou "cd", sem ligar pra maiúsculas). Ex.: "ENTREGAS CD",
-    // "LALAMOVE", "LALA 1", "LALA 2".
-    var semPin = /lala|\bcd\b/i.test(nome);
+    // TODO MUNDO pede PIN — inclusive "Entregas CD" e "Lala N". Antes esses nomes pulavam o PIN
+    // (não são pessoas, não têm telefone no cadastro). Isso funcionava enquanto o porteiro do painel
+    // estava em `observa`; quando virou `enforce` eles ficaram TRANCADOS: sem PIN não sai token, e
+    // sem token o servidor recusa tudo. O PIN deles é o OPERACIONAL, guardado no cofre do painel —
+    // o escritório passa. (Pessoa de verdade continua usando os últimos 4 do telefone dela.)
     // Device-bind: se este aparelho já logou com ESTE entregador, entra direto (sem PIN).
     var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
-    if (!semPin && !(ti && ti.nome === nome)) {
-      // 1º acesso deste entregador neste aparelho → pede o PIN (os últimos 4 do telefone dele).
+    while (!(ti && ti.nome === nome)) {
+      // 1º acesso deste entregador neste aparelho → pede o PIN.
       var pin = await AppUI.perguntar('Digite seu PIN\n(os últimos 4 números do seu telefone)', {
         titulo: 'Entrar — ' + nome, inputmode: 'numeric', textoOk: 'Entrar'
       });
-      // MODO OBSERVA (fase de testes): ninguém fica travado. Guarda o token de quem acerta o PIN
-      // (device-bind: da próxima entra direto); quem cancela ou erra, entra assim mesmo por enquanto.
-      if (pin != null) {
-        var r = null;
-        try { r = await api.apiLogin(nome, String(pin).replace(/\D/g, '')); } catch (e) { r = null; }
-        if (r && r.ok && r.token) {
-          api.saveDriverToken(r.token, nome);
-        } else {
-          await AppUI.alerta('Não consegui confirmar seu PIN agora — você entrou assim mesmo. Se pedir de novo, confirme com o escritório o telefone do seu cadastro.');
-        }
-      }
+      if (pin == null) return; // cancelou → volta pra lista de nomes (NÃO entra sem acesso)
+
+      var r = null, semResposta = false;
+      try { r = await api.apiLogin(nome, String(pin).replace(/\D/g, '')); } catch (e) { semResposta = true; }
+      if (r && r.ok && r.token) { api.saveDriverToken(r.token, nome); break; } // entrou
+
+      // O texto antigo ("você entrou assim mesmo") era da fase de TESTES, quando o porteiro deixava
+      // passar sem token. Hoje ele NÃO deixa: entrar sem token = app quebrado com erro genérico em
+      // toda tela. Então uma recusa EXPLÍCITA do servidor barra e pergunta de novo...
+      if (!semResposta && r) { await AppUI.alerta(r.erro || 'PIN incorreto. São os últimos 4 números do seu telefone.', { titulo: 'Não deu pra entrar', tom: 'warn' }); continue; }
+
+      // ...mas se o sistema não respondeu (sem sinal), não dá pra saber se o PIN estava certo —
+      // e ficar sem internet não pode virar porta trancada. Deixa entrar; as telas seguintes avisam
+      // se faltar acesso.
+      await AppUI.alerta('Não consegui falar com o sistema agora — você entrou assim mesmo. Se as telas pedirem acesso, confira a internet e entre de novo.', { tom: 'warn' });
+      break;
     }
     api.saveDriverName(nome);
     window.location.href = '/entregas/';
