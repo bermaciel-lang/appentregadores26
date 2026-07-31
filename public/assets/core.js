@@ -224,6 +224,25 @@ function buildMapsUrl(item) {
     }
   }
 
+// O TOKEN do aparelho no CORPO do POST. O buildApiUrl (GET) já anexava o token; o POST não — e o
+// POST é justamente por onde a FOTO sobe (base64 não cabe em querystring). Enquanto o porteiro do
+// painel esteve em modo `observa` isso passou batido; quando virou `enforce` (31/07) TODO POST sem
+// token passou a ser recusado com `precisaLogin` → a foto parava de subir enquanto o KM (que vai
+// pelo GET, com token) subia normalmente. O entregador via "a foto não subiu, tente com sinal
+// melhor" estando com sinal ótimo. Mesma regra do GET: só manda o token quando ele é do entregador
+// ATIVO (senão o token de um entregador anterior agiria em nome do atual) e nunca no login.
+function corpoComToken(body) {
+  const b = Object.assign({}, body || {});
+  try {
+    if (b.action !== 'login' && b.action !== 'loginAdmin' && !b.token) {
+      var ti = getDriverTokenInfo();
+      var ativo = getSavedDriverName();
+      if (ti && ti.token && ativo && String(ti.nome || '').trim() === ativo) b.token = ti.token;
+    }
+  } catch (e) { /* sem token → segue sem (o servidor decide) */ }
+  return b;
+}
+
 async function postJson(body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
@@ -237,7 +256,7 @@ async function postJson(body) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(corpoComToken(body)),
       signal: controller.signal,
       cache: 'no-store'
     });
@@ -264,7 +283,7 @@ function espelharNoPainel(body) {
     fetch('/api/painel/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(corpoComToken(body)),
       cache: 'no-store'
     }).catch(function () {});
   } catch (e) {}
@@ -500,41 +519,76 @@ function salvarRotaPend(fase, payload) {
 function lerRotaPend(fase) { try { return JSON.parse(localStorage.getItem(rotaPendKey(fase)) || 'null'); } catch (e) { return null; } }
 function limparRotaPend(fase) { try { localStorage.removeItem(rotaPendKey(fase)); } catch (e) {} }
 function temRotaPendente() { return !!(lerRotaPend('inicio') || lerRotaPend('fim')); }
+// `pendente` = tem algo salvo esperando subir. `desistiu` = já tentou sozinho MAX_TENTATIVAS_FOTO
+// vezes e parou — a tela NÃO pode mais dizer "sobe sozinho", tem que pedir ação de gente.
+function statusRotaPendente() {
+  const i = lerRotaPend('inicio');
+  const f = lerRotaPend('fim');
+  return { pendente: !!(i || f), desistiu: !!((i && i.desistiu) || (f && f.desistiu)) };
+}
 // Já existe um iniciar/finalizar SALVO nesta fase específica, esperando subir? Usado pra NÃO pedir
 // KM/foto de novo (e não sobrescrever o que já está na fila) quando a tela reabre "como se" nada
 // tivesse sido feito — a causa raiz de pedir foto 2x.
-function temRotaPendenteFase(fase) { return !!lerRotaPend(fase); }
+// Só bloqueia enquanto ainda há esperança de subir sozinho. Se já desistiu, o entregador PODE
+// refazer (tirar a foto de novo) — o KM dessa tentativa já subiu, então não se perde nada.
+function temRotaPendenteFase(fase) { const p = lerRotaPend(fase); return !!(p && !p.desistiu); }
 
-// Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok) ou null (não subiu).
+// Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok), `{ok:false,
+// precisaLogin:true}` quando o porteiro recusou, ou null (não subiu).
 // Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
 async function enviarRotaPayload(payload) {
+  let recusadoPorLogin = false;
   if (payload && payload.fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
-      try { const res = await postJson(payload); if (res && res.ok) return res; } catch (e) { /* tenta de novo */ }
+      try {
+        const res = await postJson(payload);
+        if (res && res.ok) return res;
+        // Recusa do PORTEIRO não é falta de sinal: repetir o upload da foto não muda nada
+        // (só gasta dados e tempo do entregador). Para na hora e avisa quem chamou.
+        if (res && res.precisaLogin) { recusadoPorLogin = true; break; }
+      } catch (e) { /* tenta de novo */ }
       await sleep(800 * (i + 1));
     }
     const semF = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
     if (payload.kmInicial != null) semF.kmInicial = payload.kmInicial;
     if (payload.kmFinal != null) semF.kmFinal = payload.kmFinal;
     if (payload.ts_device) semF.ts_device = payload.ts_device; // preserva a hora do CLIQUE mesmo no fallback sem foto
-    try { const res = await apiGet(semF, { retries: 1 }); if (res && res.ok) return Object.assign({}, res, { semFoto: true }); } catch (e) {}
-    return null;
+    try {
+      const res = await apiGet(semF, { retries: 1 });
+      if (res && res.ok) return Object.assign({}, res, { semFoto: true });
+      if (res && res.precisaLogin) recusadoPorLogin = true;
+    } catch (e) {}
+    return recusadoPorLogin ? { ok: false, precisaLogin: true } : null;
   }
   const semF2 = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
   if (payload.kmInicial != null) semF2.kmInicial = payload.kmInicial;
   if (payload.kmFinal != null) semF2.kmFinal = payload.kmFinal;
   if (payload.ts_device) semF2.ts_device = payload.ts_device;
-  try { const res = await apiGet(semF2, { retries: 1 }); if (res && res.ok) return res; } catch (e) {}
-  return null;
+  try {
+    const res = await apiGet(semF2, { retries: 1 });
+    if (res && res.ok) return res;
+    if (res && res.precisaLogin) recusadoPorLogin = true;
+  } catch (e) {}
+  return recusadoPorLogin ? { ok: false, precisaLogin: true } : null;
 }
+
+// Quantas vezes o app tenta subir SOZINHO uma foto que ficou pra trás (o poll roda a cada 60s,
+// então ~20 tentativas ≈ 20 min). Depois disso ele PARA de tentar sozinho — mas NÃO joga a foto
+// fora: ela continua salva e a tela mostra o aviso pra reenviar na mão / avisar o supervisor.
+const MAX_TENTATIVAS_FOTO = 20;
 
 // Reenvia o que ficou pendente de iniciar/finalizar (chamado dentro do processarFila).
 async function reenviarRotaPendente() {
   for (const fase of ['inicio', 'fim']) {
     const p = lerRotaPend(fase);
-    if (!p) continue;
+    if (!p || p.desistiu) continue;
     const res = await enviarRotaPayload(p);
-    if (res && res.ok) limparRotaPend(fase);
+    if (!res || !res.ok) continue;                                       // nem o KM subiu → tenta de novo depois
+    if (!res.semFoto || !p.fotoBase64) { limparRotaPend(fase); continue; } // subiu inteiro → limpa
+    // O KM subiu e a FOTO não. Antes isto era tratado como sucesso e a foto era APAGADA do
+    // aparelho (perdida de vez). Agora ela fica salva e continua tentando sozinha.
+    const n = Number(p.tentativas || 0) + 1;
+    salvarRotaPend(fase, Object.assign({}, p, { tentativas: n, desistiu: n >= MAX_TENTATIVAS_FOTO }));
   }
 }
 
@@ -545,8 +599,9 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
-  if (res && res.ok) { limparRotaPend('inicio'); return res; }
-  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto }; // fica salvo, reenvia sozinho
+  if (res && res.ok && !res.semFoto) { limparRotaPend('inicio'); return res; }
+  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
 async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
@@ -554,8 +609,9 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
-  if (res && res.ok) { limparRotaPend('fim'); return res; }
-  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto }; // fica salvo, reenvia sozinho
+  if (res && res.ok && !res.semFoto) { limparRotaPend('fim'); return res; }
+  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
 
@@ -637,6 +693,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
+    statusRotaPendente,
     apiEditarKm,
     getTurno,
     setTurno,
