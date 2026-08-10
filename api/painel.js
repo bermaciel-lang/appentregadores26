@@ -1,12 +1,12 @@
-// Proxy do Vercel -> PAINEL (Etapa C). O painel hoje roda em HTTP por IP; o app é HTTPS,
-// e o navegador bloqueia HTTP a partir de HTTPS (mixed content). Então o navegador fala
-// HTTPS com este proxy (mesma origem) e o Vercel repassa pro painel server-to-server (HTTP
-// servidor->servidor é permitido). Encaminha GET e POST pra /api/entregador-app, repassando
-// a query (action, entregador, row, ...) e o corpo JSON, e devolve o JSON de volta.
+// Proxy do Vercel -> PAINEL (Etapa C). O app fala HTTPS com este proxy (mesma origem) e o
+// Vercel repassa pro painel server-to-server. Encaminha GET e POST pra /api/entregador-app,
+// repassando a query (action, entregador, row, ...) e o corpo JSON, e devolve o JSON de volta.
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
-// Base do painel. Fixo (IP de infra, não é segredo); pode sobrescrever por env na Vercel.
-const PAINEL = process.env.PAINEL_URL || 'http://76.13.166.58:8080';
+// Base do painel: DOMÍNIO PÚBLICO HTTPS (Caddy/Let's Encrypt), nunca o IP:8080.
+// A 8080 foi fechada pra internet em 08/08/2026 (passou a escutar só em 127.0.0.1) e derrubou
+// este app por 2 dias — o proxy batia num IP que não responde mais. Pode sobrescrever por env.
+const PAINEL = process.env.PAINEL_URL || 'https://srv1755272.hstgr.cloud';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
