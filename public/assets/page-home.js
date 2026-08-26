@@ -22,18 +22,31 @@
     // MODO TOLERANTE (03/08): enquanto arrumamos os telefones/PINs do cadastro, NINGUÉM fica
     // trancado. Ainda pedimos o PIN (best-effort: acertou → guarda o token do aparelho e da próxima
     // entra direto), mas ERRAR / CANCELAR / ficar sem sinal NÃO barra mais — entra assim mesmo.
-    // Isso casa com o porteiro do painel em `observa` (deixa passar sem token). Quando os PINs
-    // estiverem certos, volta o porteiro pra `enforce` e reativa a barreira.
-    // CD/Lala não são pessoas (sem telefone) → nem pedem PIN. Device-bind: quem já logou entra direto.
-    var semPin = /lala|\bcd\b/i.test(nome);
+    // Device-bind: quem já logou nesse aparelho entra direto, sem repetir o PIN.
+    //
+    // ⚠️ LALA / CD TAMBÉM PEDEM PIN (26/08). Elas não são pessoas e não têm telefone, então o PIN
+    // delas é o PIN OPERACIONAL que o escritório define (cofre ENTREGADOR_PIN_OPERACIONAL, no
+    // painel). Antes o app PULAVA o PIN pra esses nomes — e, com o porteiro do painel em `enforce`,
+    // isso virou porta trancada: sem PIN não sai token, sem token o servidor recusa a rota
+    // ("Faça login com o PIN pra abrir a rota") e não havia lugar NENHUM pra digitar o PIN.
+    var ehOperacional = /lala|\bcd\b/i.test(nome);
     var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
-    if (!semPin && !(ti && ti.nome === nome)) {
-      var pin = await AppUI.perguntar('Digite seu PIN\n(os últimos 4 números do seu telefone)', {
-        titulo: 'Entrar — ' + nome, inputmode: 'numeric', textoOk: 'Entrar'
-      });
+    if (!(ti && ti.nome === nome)) {
+      var pin = await AppUI.perguntar(
+        ehOperacional
+          ? 'Digite o PIN da operação\n(o PIN das rotas de Lalamove / CD — o escritório informa)'
+          : 'Digite seu PIN\n(os últimos 4 números do seu telefone)',
+        { titulo: 'Entrar — ' + nome, inputmode: 'numeric', textoOk: 'Entrar' }
+      );
       if (pin != null) {
         // best-effort: só pra GANHAR o token quando o PIN estiver certo. Errou/sem sinal → segue e entra.
-        try { var r = await api.apiLogin(nome, String(pin).replace(/\D/g, '')); if (r && r.ok && r.token) api.saveDriverToken(r.token, nome); } catch (e) { /* sem sinal → entra assim mesmo */ }
+        // Mas se o servidor RECUSOU com um motivo, mostra o motivo — antes a pessoa entrava e via só
+        // uma tela vazia, sem saber que o PIN é que estava errado.
+        try {
+          var r = await api.apiLogin(nome, String(pin).replace(/\D/g, ''));
+          if (r && r.ok && r.token) api.saveDriverToken(r.token, nome);
+          else if (r && r.erro) await AppUI.alerta(String(r.erro) + '\n\nVou abrir mesmo assim, mas se a lista vier vazia é isto: volte e digite o PIN certo.', { titulo: 'PIN não aceito', tom: 'warn' });
+        } catch (e) { /* sem sinal → entra assim mesmo */ }
       }
     }
     api.saveDriverName(nome);
