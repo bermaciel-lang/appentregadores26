@@ -35,8 +35,18 @@
     expandidos: new Set(), // rows com o cartão EXPANDIDO (Iniciar abre; Minimizar/marcar fecha)
     sendingRouteAction: false,
     rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
-    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
+    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1',
+    // Pagamento na porta (05/09): { perguntar, formas } vem do servidor a cada `entregas` fresco;
+    // guardado no aparelho para o modal funcionar SEM SINAL (a resposta sobe pela fila offline).
+    pgCfg: lerPgCfg(),
+    pgRespondido: {} // row -> última resposta dada nesta sessão (pra "manter ou corrigir" ao remarcar)
   };
+
+  function lerPgCfg() {
+    try { const c = JSON.parse(localStorage.getItem('pg_cfg_v1') || 'null'); if (c && typeof c === 'object') return { perguntar: c.perguntar === true, formas: Array.isArray(c.formas) ? c.formas : [] }; } catch (e) {}
+    return { perguntar: false, formas: [] };
+  }
+  function salvarPgCfg(cfg) { try { localStorage.setItem('pg_cfg_v1', JSON.stringify(cfg)); } catch (e) {} }
 
   const driverTitle = document.getElementById('driverTitle');
   const driverNameText = document.getElementById('driverNameText');
@@ -299,6 +309,14 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '</div></article>';
     }
 
+    // Pagamento na porta: o que o entregador RESPONDEU (pra ele ver e corrigir tocando). Só em
+    // pedido Entregue pago na porta, e só quando o servidor mandou perguntar.
+    let pgHtml = '', btnPgCorrigir = '';
+    if (key === 'done' && item.naEntrega && window.PgPorta && window.PgPorta.devePerguntar(state.pgCfg, item)) {
+      const ant = pgRespostaAnterior(row, item);
+      pgHtml = '<div class="dc-obs">' + api.esc(ant ? window.PgPorta.fraseResposta(ant, state.pgCfg.formas) : '💳 Pagamento na entrega: sem resposta') + '</div>';
+      btnPgCorrigir = '<button type="button" class="dc-b desf sm" data-act="pgcorrigir" data-row="' + row + '" ' + dis + '>💳 ' + (ant ? 'Corrigir pagamento' : 'Informar pagamento') + '</button>';
+    }
     const btnEntregue = '<button type="button" class="dc-b ok sm" data-act="done" data-row="' + row + '" ' + dis + '>' + ic('check', 16) + (enviandoEsta && state.enviando.act === 'done' ? '…' : 'Entregue') + '</button>';
     const btnNao = '<button type="button" class="dc-b no sm" data-act="naoentregue" data-row="' + row + '" ' + dis + '>' + ic('x', 15) + 'Não entregue</button>';
     // Desfazer (apertou errado): só aparece se já foi INICIADA ou marcada — volta pra pendente.
@@ -315,13 +333,13 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-name" style="font-size:19px">' + nome + '</div>'
         + addrHtml
         + '<div class="dc-nav">' + navBtn('ligar', row, 'phone', 'Ligar', dis) + navBtn('maps', row, 'pin', 'Maps', dis) + navBtn('waze', row, 'nav', 'Waze', dis) + navBtn('whats', row, 'whats', 'WhatsApp', dis) + '</div>'
-        + '<div class="dc-sec">' + pagamentoHtml(item, true)
+        + '<div class="dc-sec">' + pagamentoHtml(item, true) + pgHtml
         + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
         + cong + ovosHtml(item.ovos) + '</div>'
         + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist">' + prodList + '</div>' : '')
         + envioHtml
         + '<div class="dc-btns" style="margin-top:12px">' + btnEntregue + btnNao + '</div>'
-        + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
+        + ((btnDesfazer || btnPgCorrigir) ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + btnPgCorrigir + '</div>' : '')
         + '</article>';
     }
 
@@ -492,6 +510,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
       if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
+      // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
+      // modal some do aparelho no próximo poll (rollback sem deploy). No cache (stale) fica a última.
+      if (result.pgConfig) { state.pgCfg = result.pgConfig; salvarPgCfg(result.pgConfig); }
 
       const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
       const assinaturaSalva = sessionStorage.getItem('rota_assinatura_' + state.driver);
@@ -764,6 +785,61 @@ async function handleFinalizarRota() {
   }
 }
 
+  // ===== PAGAMENTO NA PORTA (05/09/2026) — o entregador confirma FORMA e VALOR ao marcar Entregue =====
+  // O modal em si mora em pagamento-porta.js (PgPorta). Aqui: quando abre, com o que, e como a
+  // resposta SOBE — como ação própria `confirmarPagamento`, logo DEPOIS do `marcarEntregue` da
+  // mesma row e com o MESMO ts_device (a hora do toque é a hora que a Cielo vai procurar; e
+  // `parada_id:ts_device` é a chave de idempotência do servidor: a fila pode reenviar sem duplicar).
+  //
+  // ⛔ As DUAS portas do marcarEntregue passam por aqui (o botão Entregue e o menu "você tem uma
+  //    entrega em andamento"). Uma porta sem modal = dado pela metade.
+  // ⛔ Nunca bloqueia o Entregue: PgPorta.perguntar nunca lança e sempre devolve uma resposta.
+  // ⛔ Nunca depende de rede: se o envio falhar, vai pra fila offline que já existe (core.js).
+
+  // A resposta que já existe para esta row: dada nesta sessão, esperando na fila, ou a que o
+  // servidor mandou (`pgConfirmado`, quando a API tiver o leitor). Serve para a tela 4 (manter/corrigir).
+  function pgRespostaAnterior(row, item) {
+    const r = Number(row);
+    if (state.pgRespondido[r]) return state.pgRespondido[r];
+    const q = api.filaParamsPendentes && api.filaParamsPendentes(r, 'confirmarPagamento');
+    if (q) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1 };
+    const c = item && item.pgConfirmado;
+    if (c && typeof c === 'object' && c.forma) return { forma: c.forma, operadora: c.operadora || null, valor: c.valor == null ? null : Number(c.valor), digitado: !!c.digitado, naoSei: c.desfecho === 'nao-sei' };
+    return null;
+  }
+
+  // Abre o modal para o pedido tocado e as irmãs pagas na porta. Devolve { porRow } ou null quando
+  // não há o que perguntar (cofre 0 / pago online / PgPorta não carregou).
+  async function coletarPagamento(item, irmas, tsDevice, anterior) {
+    const Pg = window.PgPorta;
+    if (!Pg || !Pg.devePerguntar(state.pgCfg, item)) return null;
+    const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+    if (!grupo.length) return null;
+    return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
+  }
+
+  // Sobe UMA confirmação. `marcacaoNaFila` = o marcarEntregue desta row NÃO subiu (foi pra fila):
+  // então a confirmação vai DIRETO pra fila, atrás dele — a fila é FIFO e a entrega chega antes.
+  // Resposta null = "manter" (já tinha respondido, não mudou): não envia nada.
+  async function enviarConfirmacao(row, resposta, tsDevice, marcacaoNaFila) {
+    const Pg = window.PgPorta;
+    if (!Pg || !resposta) return;
+    const r = Number(row);
+    state.pgRespondido[r] = resposta;
+    const params = Pg.montarParams(r, tsDevice, resposta, false);
+    if (marcacaoNaFila) { params.pg_fila = 1; api.enfileirar(params, { row: r }); return; }
+    try {
+      const res = await api.apiGet(params, { retries: 3 });
+      // Regra do desenho (§B.5): recusa de NEGÓCIO (cofre 0, parada de outro) vem `ok:true,
+      // gravado:false` e NÃO se mostra nada — a decisão é do cofre, não do entregador. Só `ok:false`
+      // (transitório: banco fora, cofre ilegível) ou falha de rede vão pra fila.
+      if (!res || !res.ok) throw new Error('confirmarPagamento falhou');
+    } catch (e) {
+      params.pg_fila = 1;
+      api.enfileirar(params, { row: r });
+    }
+  }
+
   async function handleAction(act, row) {
     // Expandir/minimizar o cartão — só VISUAL, não mexe em status nem rede; vale a qualquer momento
     // (inclusive com a entrega em andamento, como o Bernardo pediu).
@@ -776,6 +852,18 @@ async function handleFinalizarRota() {
 
     const item = state.items.find((x) => Number(x.row) === Number(row));
     if (!item) return;
+
+    // Corrigir a resposta de pagamento de uma entrega JÁ marcada (tela 4 do desenho). Não mexe em
+    // status; sobe uma confirmação nova com ts próprio — no servidor vira ato 'corrigiu'.
+    if (act === 'pgcorrigir') {
+      const tsC = new Date().toISOString();
+      const resC = await coletarPagamento(item, [item], tsC, pgRespostaAnterior(row, item));
+      if (!resC || resC.manteve) return;
+      state.sendingAction = true; state.enviando = { row: Number(row), act: 'pgcorrigir' }; renderList();
+      try { await enviarConfirmacao(row, resC.porRow[Number(row)], tsC, false); }
+      finally { state.sendingAction = false; state.enviando = null; renderList(); }
+      return;
+    }
 
     // Ligar pro cliente (abre o discador do celular). Sem telefone → avisa.
     if (act === 'ligar') {
@@ -840,6 +928,9 @@ async function handleFinalizarRota() {
         if (esc === null) return; // fechou → NÃO inicia a nova
         const irmasA = ant.numero != null ? state.items.filter((x) => Number(x.numero) === Number(ant.numero)) : [ant];
         const tsA = new Date().toISOString();
+        // ⛔ PORTA 2 do marcarEntregue: sem isto, marcar "Entregue" por aqui pularia a confirmação
+        // de pagamento e viraria porta dos fundos. Mesma função, mesmo ts_device.
+        const pgA = esc === 'done' ? await coletarPagamento(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant)) : null;
         for (const x of irmasA) {
           const r = Number(x.row);
           const params = esc === 'done' ? { action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }
@@ -847,8 +938,10 @@ async function handleFinalizarRota() {
             : { action: 'desfazer', row: r };
           updateLocalStatus(r, esc === 'done' ? 'Entregue' : esc === 'nao' ? 'Não entregue' : '', params.obs || '');
           state.expandidos.delete(r);
+          let naFila = false;
           try { const res = await api.apiGet(params, { retries: 3 }); if (!res || !res.ok) throw new Error('x'); }
-          catch (e) { api.enfileirar(params, { row: r }); }
+          catch (e) { api.enfileirar(params, { row: r }); naFila = true; }
+          if (pgA && pgA.porRow && pgA.porRow[r]) await enviarConfirmacao(r, pgA.porRow[r], tsA, naFila);
         }
       }
     }
@@ -856,6 +949,9 @@ async function handleFinalizarRota() {
     // Pergunta a observação ANTES de mostrar "Enviando…". A observação é OPCIONAL: tocar
     // "Pular" segue sem ela (mesmo comportamento de antes, só que com nome claro no botão).
     let nextStatus = null, obs;
+    // Hora do APARELHO no toque. Para o Entregue ela nasce ANTES do modal de pagamento, porque a
+    // confirmação viaja com o MESMO ts_device do marcarEntregue (chave de idempotência no servidor).
+    let tsDevice = null, pgPorRow = null;
     if (act === 'done') {
       // 3 opções rápidas pra registrar COMO foi a entrega. Cancelar aqui ABORTA (não marca).
       const tipo = await AppUI.escolher('Como foi a entrega?', [
@@ -881,6 +977,12 @@ async function handleFinalizarRota() {
         obs = (nome && nome.trim()) ? (base + ' (recebido por: ' + nome.trim() + ')') : base;
       }
       nextStatus = 'Entregue';
+      // ⛔ PORTA 1: "💳 Como o cliente pagou?" — só para pedido pago NA PORTA e só quando o servidor
+      // mandou perguntar. 1 toque no caso comum. Nunca aborta o Entregue (nem fechando o modal).
+      tsDevice = new Date().toISOString();
+      const irmasPg = item.numero != null ? state.items.filter((x) => Number(x.numero) === Number(item.numero)) : [item];
+      const pgRes = await coletarPagamento(item, irmasPg, tsDevice, pgRespostaAnterior(row, item));
+      pgPorRow = pgRes && !pgRes.manteve ? pgRes.porRow : null;
     }
     else if (act === 'fail') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo / observação:', { titulo: 'Cliente não estava', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
     else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo do cancelamento:', { titulo: 'Cancelado / mudou de rota', tom: 'warn', placeholder: 'Ex.: pedido duplicado', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Cancelado'; }
@@ -919,7 +1021,7 @@ async function handleFinalizarRota() {
       // é reenviada COM ESTE horário quando a internet voltar. Assim o servidor carimba o entregue_em
       // pela hora do CLIQUE (horaEntregaValida usa ts_device) — e não pela hora em que a conexão
       // voltou. Sem isso, marcar várias entregues offline e reconectar subia TODAS com o mesmo horário.
-      const tsDevice = new Date().toISOString();
+      if (!tsDevice) tsDevice = new Date().toISOString();
       // DUPLICADAS vão JUNTAS ao INICIAR / ENTREGAR: pedidos do mesmo cliente+endereço têm o MESMO
       // `numero` (o painel já colapsa e manda). O entregador vai a UM lugar só, então tocar Iniciar/
       // Entregue numa marca TODAS as do mesmo número de uma vez. (Não-entregue/Cancelado seguem 1 a 1.)
@@ -944,6 +1046,15 @@ async function handleFinalizarRota() {
       for (const r of rowsAlvo) {
         try { const res = await api.apiGet(paramsDe(r), { retries: 3 }); if (!res || !res.ok) throw new Error('falhou'); }
         catch (e2) { api.enfileirar(paramsDe(r), { row: Number(r) }); falhas.push(r); }
+      }
+      // A confirmação de pagamento sobe DEPOIS do marcarEntregue de cada row (ou vai pra fila atrás
+      // dele). Cobre também a irmã que já estava Entregue e não entrou em rowsAlvo — se ele disse
+      // "pagou tudo junto", a resposta é do grupo inteiro.
+      if (pgPorRow) {
+        for (const rk of Object.keys(pgPorRow)) {
+          const r = Number(rk);
+          if (pgPorRow[r]) await enviarConfirmacao(r, pgPorRow[r], tsDevice, falhas.indexOf(r) >= 0);
+        }
       }
       if (falhas.length) await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
       window.setTimeout(function () { carregarTudo(false); }, 800);

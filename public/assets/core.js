@@ -358,7 +358,11 @@ async function carregarEntregasPorEntregador(entregador) {
       data: items,
       stale: false,
       rotaIniciada: res.rotaIniciada || false,
-      rotaInfo: res.rotaInfo || null
+      rotaInfo: res.rotaInfo || null,
+      // Pagamento na porta (05/09): o servidor diz se PERGUNTA (cofre ENTREGADOR_CONFIRMA_PAGAMENTO
+      // ≥ 1) e manda a lista de formas do banco — o app não tem lista escrita nele. Só vem na
+      // resposta FRESCA; no cache (stale) a tela mantém a última configuração que viu.
+      pgConfig: { perguntar: res.perguntarPagamento === true, formas: Array.isArray(res.formasNaPorta) ? res.formasNaPorta : [] }
     };
   } catch (error) {
     const cached = getFreshCache(cacheName) || readCache(cacheName);
@@ -448,6 +452,13 @@ async function apiMarcarCancelado(row, obs) {
     filaLer().forEach((x) => { const r = Number(x.meta && x.meta.row); if (r) set.add(r); });
     return set;
   }
+  // Os params da ÚLTIMA ação `action` enfileirada para esta row (ou null). Serve para a tela saber
+  // que uma confirmação de pagamento ainda está esperando subir (e perguntar "manter ou corrigir").
+  function filaParamsPendentes(row, action) {
+    let achado = null;
+    filaLer().forEach((x) => { if (x && x.params && x.params.action === action && Number(x.params.row) === Number(row)) achado = x.params; });
+    return achado;
+  }
   let _processandoFila = false;
   async function processarFila() {
     if (_processandoFila) return;
@@ -459,6 +470,17 @@ async function apiMarcarCancelado(row, obs) {
           const res = await apiGet(item.params, { retries: 1 });
           if (res && res.ok) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); }
           else if (res && res.naoEncontrado) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); } // parada não existe mais (rota refeita) -> descarta, não adianta repetir
+          // ⛔ A CONFIRMAÇÃO DE PAGAMENTO NUNCA SEGURA A ENTREGA ATRÁS DELA (revisão 05/09/2026).
+          // O servidor responde ok:false "tente depois" quando o cofre está ILEGÍVEL ou o banco
+          // falhou — e um cofre com valor errado ("abc") fica assim por HORAS. Com o `break` de
+          // baixo, um confirmarPagamento preso na frente deixava TODAS as marcações de entrega
+          // seguintes sem subir. A entrega vale mais que a confirmação: ela fica na fila e é
+          // pulada; depois de 7 dias sem conseguir subir, é descartada (a trilha do servidor
+          // já registrou cada tentativa).
+          else if (item.params && item.params.action === 'confirmarPagamento') {
+            if (Date.now() - Number(item.ts || 0) > 7 * 24 * 60 * 60 * 1000) filaSalvar(filaLer().filter((x) => x.id !== item.id));
+            continue;
+          }
           else break; // ainda falhando -> tenta depois
         } catch (e) { break; } // sem conexão -> tenta depois
       }
@@ -690,6 +712,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     enfileirar,
     processarFila,
     filaRowsPendentes,
+    filaParamsPendentes,
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,

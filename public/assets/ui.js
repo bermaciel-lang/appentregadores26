@@ -103,7 +103,13 @@
         resolve(valor);
       }
       function confirmar() { fechar(temInput ? input.value : true); }
-      function cancelar() { fechar(temInput ? null : false); }
+      // Cancelar / toque fora / Esc. `escolher` resolve com NULL (é o que o cabeçalho deste arquivo
+      // promete e o que TODOS os chamadores testam: `if (esc === null) return`). Até 05/09/2026
+      // devolvia `false` aqui — e `false !== null` fazia o Cancelar cair no ramo de baixo de cada
+      // chamador: "Não entregue" → Cancelar marcava CANCELADO; "Desfazer" → Cancelar desfazia;
+      // "Como foi a entrega?" → Cancelar seguia como "para terceiros". Achado pela régua do
+      // modal de pagamento (scripts/_t-pagamento-porta.mjs) rodando sobre o ui.js real.
+      function cancelar() { fechar((temInput || temEscolha) ? null : false); }
 
       // Clique nos botões.
       card.addEventListener('click', function (e) {
