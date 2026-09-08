@@ -372,6 +372,24 @@ function espelharNoPainel(body) {
     }
   }
 
+// Uma consulta sob demanda na Instabuy pode ser mais nova que o espelho usado no poll.
+// Preserve só o valor dessa mesma parada até a captura do espelho alcançá-la; edição ERP sempre vence.
+function manterValorMaisRecente(item, anteriores) {
+  const anterior = anteriores.find(x => Number(x.row) === Number(item.row) && x.pedido === item.pedido);
+  if (!anterior || item.valorConferido !== true) return item;
+  const consulta = Date.parse(anterior.valorConsultadoEm || '');
+  const novaConsulta = Date.parse(item.valorConsultadoEm || '');
+  const captura = Date.parse(item.valorFonteEm || '');
+  const respostaAtrasada = Number.isFinite(consulta) && Number.isFinite(novaConsulta) && consulta > novaConsulta;
+  const espelhoAtrasado = anterior.valorFonte === 'instabuy' && item.valorFonte === 'espelho' &&
+    Number.isFinite(consulta) && (!Number.isFinite(captura) || captura < consulta);
+  if (!respostaAtrasada && !espelhoAtrasado) return item;
+  const novo = { ...item };
+  for (const k of ['valor','valorConferido','valorFonte','valorFonteEm','valorConsultadoEm','valorAlterado','valorAnterior','itensRemovidos','produtos'])
+    if (Object.hasOwn(anterior,k)) novo[k] = anterior[k];
+  return novo;
+}
+
 async function carregarEntregasPorEntregador(entregador) {
   const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase();
 
@@ -389,7 +407,9 @@ async function carregarEntregasPorEntregador(entregador) {
     if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregas');
     guardarInicioConfirmado(entregador, !!res.rotaIniciada);
 
-    const items = Array.isArray(res.items) ? res.items : [];
+    const ultimoCache = readCache(cacheName);
+    const anteriores = ultimoCache && Array.isArray(ultimoCache.value) ? ultimoCache.value : [];
+    const items = (Array.isArray(res.items) ? res.items : []).map(item => manterValorMaisRecente(item, anteriores));
     saveEntregasCache(entregador, items);
 
     return {
@@ -411,7 +431,7 @@ async function carregarEntregasPorEntregador(entregador) {
       const value = cached.value !== undefined ? cached.value : cached;
       if (Array.isArray(value)) {
         return {
-          data: value,
+          data: value.map(item => ({ ...item, valorConferido: false })),
           stale: true
         };
       }
@@ -752,6 +772,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     apiGet,
     carregarEntregadores,
     verificarMontagem,
+    manterValorMaisRecente,
     carregarEntregasPorEntregador,
     apiIniciarEntrega,
     apiMarcarEntregue,

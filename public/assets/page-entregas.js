@@ -257,7 +257,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       const tipo = forma.replace(/\s*NA ENTREGA\s*/i, '').trim() || 'na entrega';
       const troco = Number(item.troco) || 0;
       const trocoTxt = (troco > 0 && /dinheiro/i.test(forma)) ? ' · troco p/ ' + fmtBRL(troco) : '';
-      const linha = ic('cash', grande ? 18 : 16) + '<span>Receber <b>' + fmtBRL(Number(item.valor) || 0) + '</b> · ' + api.esc(tipo) + trocoTxt + '</span>';
+      const temValor = item.valor != null && item.valor !== '' && Number.isFinite(Number(item.valor));
+      const prefixo = item.valorConferido === false ? 'Último valor salvo' : 'Receber';
+      const valorTexto = temValor ? fmtBRL(item.valor) : 'Valor indisponível';
+      const aviso = item.valorConferido === false ? '<br><small>Confira o valor antes de cobrar.</small>' : '';
+      const linha = ic('cash', grande ? 18 : 16) + '<span>' + prefixo + ' <b>' + valorTexto + '</b> · ' + api.esc(tipo) + trocoTxt + aviso + '</span>';
       return grande ? '<div class="dc-pay-box"><div class="dc-pay cash">' + linha + '</div></div>' : '<div class="dc-pay cash">' + linha + '</div>';
     }
     if (/verificar/i.test(forma)) return '<div class="dc-pay verif">' + ic('clock', 15) + 'Verificar pagamento</div>';
@@ -556,7 +560,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       if (result.stale) {
         setWarning('As entregas foram abertas pelo último cache salvo. A internet ou a API podem ter falhado agora.');
       } else {
-        setWarning('');
+        setWarning(state.items.some(x => x.naEntrega && x.valorConferido === false) ? 'Alguns valores não puderam ser conferidos. Confira antes de cobrar.' : '');
       }
     } catch (error) {
       console.error(error);
@@ -804,7 +808,8 @@ async function handleFinalizarRota() {
   // ⛔ As DUAS portas do marcarEntregue passam por aqui (o botão Entregue e o menu "você tem uma
   //    entrega em andamento"). Uma porta sem modal = dado pela metade.
   // ⛔ Nunca bloqueia o Entregue: PgPorta.perguntar nunca lança e sempre devolve uma resposta.
-  // ⛔ Nunca depende de rede: se o envio falhar, vai pra fila offline que já existe (core.js).
+  // Confere o valor quando há conexão. Sem confirmação, pede o valor recebido sem presumir o cache.
+  // A entrega e a declaração continuam funcionando offline pela fila existente.
 
   // A resposta que já existe para esta row: dada nesta sessão, esperando na fila, ou a que o
   // servidor mandou (`pgConfirmado`, quando a API tiver o leitor). Serve para a tela 4 (manter/corrigir).
@@ -818,13 +823,43 @@ async function handleFinalizarRota() {
     return null;
   }
 
+  // Consulta apenas os pedidos pagos na entrega que a pessoa está abrindo/conferindo.
+  // A consulta regular da rota continua sem chamadas adicionais à Instabuy.
+  async function conferirGrupoValores(grupo) {
+    if (!api.usandoPainel()) return grupo;
+    let atuais = [];
+    try {
+      if (navigator.onLine !== false) {
+        const r = await api.apiGet({ action: 'conferirValores', rows: grupo.map(x => x.row).join(','),
+          entregador: state.driver, turno: api.getTurno() }, { retries: 0 });
+        if (r && r.ok && Array.isArray(r.items)) atuais = r.items;
+      }
+    } catch (e) { /* a declaração continua; o valor será informado pelo entregador */ }
+    const conferidos = grupo.map(x => {
+      const a = atuais.find(y => Number(y.row) === Number(x.row) && String(y.pedido) === String(x.pedido));
+      const indice = state.items.findIndex(y => Number(y.row) === Number(x.row));
+      const base = indice >= 0 ? state.items[indice] : x;
+      // Preserva o status atual e rejeita uma resposta de valor anterior à já mostrada.
+      const novo = api.manterValorMaisRecente({ ...base, ...(a || {}), valorConferido: !!a && a.valorConferido === true }, [base]);
+      if (indice >= 0) state.items[indice] = novo;
+      return novo;
+    });
+    api.saveEntregasCache(state.driver, state.items);
+    renderList();
+    return conferidos;
+  }
+
   // Abre o modal para o pedido tocado e as irmãs pagas na porta. Devolve { porRow } ou null quando
   // não há o que perguntar (cofre 0 / pago online / PgPorta não carregou).
   async function coletarPagamento(item, irmas, tsDevice, anterior) {
     const Pg = window.PgPorta;
     if (!Pg || !Pg.devePerguntar(state.pgCfg, item)) return null;
-    const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+    let grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
     if (!grupo.length) return null;
+    if (api.usandoPainel()) {
+      grupo = await conferirGrupoValores(grupo);
+      item = grupo.find(x => Number(x.row) === Number(item.row)) || item;
+    }
     return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
   }
 
@@ -860,6 +895,10 @@ async function handleFinalizarRota() {
     if (act === 'expand' || act === 'minimize') {
       if (act === 'expand') state.expandidos.add(Number(row)); else state.expandidos.delete(Number(row));
       renderList();
+      if (act === 'expand') {
+        const alvo = state.items.find(x => Number(x.row) === Number(row));
+        if (alvo && alvo.naEntrega) await conferirGrupoValores([alvo]);
+      }
       return;
     }
     if (state.sendingAction) return;
@@ -959,6 +998,8 @@ async function handleFinalizarRota() {
         }
       }
     }
+
+    if (act === 'start' && item.naEntrega) await conferirGrupoValores([item]);
 
     // Pergunta a observação ANTES de mostrar "Enviando…". A observação é OPCIONAL: tocar
     // "Pular" segue sem ela (mesmo comportamento de antes, só que com nome claro no botão).
