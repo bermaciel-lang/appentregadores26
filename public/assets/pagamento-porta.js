@@ -112,6 +112,11 @@
     return out;
   }
 
+  function valorConfirmado(item) {
+    return item && item.valorConferido !== false && item.valor != null && item.valor !== '' &&
+      isFinite(Number(item.valor)) && Number(item.valor) >= 0;
+  }
+
   // ---- As telas (o que cada uma MONTA, sem tocar em DOM: são dados para AppUI.escolher) ----
 
   // Tela 1 — o caso comum. Cancelar (ou fechar o overlay) = "Não sei / não vi".
@@ -119,11 +124,11 @@
     var forma = item.pgFormaChave || null;
     var rot = rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
     var ops = [];
-    if (grupo && grupo.length > 1 && forma) {
+    if (grupo && grupo.length > 1 && forma && grupo.every(valorConfirmado)) {
       ops.push({ valor: 'tudo', rotulo: '✓ Pagou tudo junto: ' + fmtBRL(grupo.soma) + ' no ' + rot.toUpperCase() + ' (' + grupo.length + ' pedidos)', tom: 'success' });
     }
     // O 1º botão é o caso comum e ganha o tom verde (e o foco automático do ui.js).
-    if (forma) ops.push({ valor: 'igual', rotulo: '✓ Pagou ' + fmtBRL(item.valor) + ' no ' + rot.toUpperCase(), tom: ops.length ? undefined : 'success' });
+    if (forma && valorConfirmado(item)) ops.push({ valor: 'igual', rotulo: '✓ Pagou ' + fmtBRL(item.valor) + ' no ' + rot.toUpperCase(), tom: ops.length ? undefined : 'success' });
     ops.push({ valor: 'diferente', rotulo: forma ? '✏️ Foi diferente (outra forma ou outro valor)' : '✏️ Informar como pagou' });
     return ops;
   }
@@ -132,7 +137,9 @@
     var forma = item.pgFormaChave || null;
     var rot = rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
     var troco = Number(item.troco) || 0;
-    var linha = 'Pedido ' + fmtBRL(item.valor) + (forma ? ' · ' + rot.toUpperCase() : ' · forma não informada');
+    var linha = valorConfirmado(item)
+      ? 'Pedido ' + fmtBRL(item.valor) + (forma ? ' · ' + rot.toUpperCase() : ' · forma não informada')
+      : 'O valor atual do pedido não foi confirmado. Informe o valor realmente recebido, igual no comprovante.';
     if (troco > 0 && ehDinheiro(forma || item.formaPagamento)) linha += '\ntroco p/ ' + fmtBRL(troco);
     return linha;
   }
@@ -248,7 +255,7 @@
         });
         if (cancelou(escolha)) return naoSei;
         if (escolha === 'tudo') return { tudo: true, forma: declarada.forma, operadora: declarada.operadora };
-        if (escolha === 'igual') return { forma: declarada.forma, operadora: declarada.operadora, valor: Number(item.valor) || 0, digitado: false };
+        if (escolha === 'igual' && valorConfirmado(item)) return { forma: declarada.forma, operadora: declarada.operadora, valor: Number(item.valor) || 0, digitado: false };
       } else {
         escolha = 'diferente'; // sem forma declarada → direto na tela 2
       }
@@ -285,17 +292,19 @@
   // "É esse mesmo" aceita o pré-preenchido (digitado=false → NÃO é fonte independente de valor).
   // OK com número = digitado=true. Vazio = valor null ("não sei o valor", a forma continua valendo).
   async function telaValor(item, ui, formaChave, formas) {
-    var pre = Number(item.valor) || 0;
+    var confirmado = valorConfirmado(item);
+    var pre = confirmado ? Number(item.valor) : null;
     var dinheiro = ehDinheiro(formaChave);
     var msg = dinheiro
       ? 'Quanto você RECEBEU em dinheiro? (o valor do pedido é ' + fmtBRL(pre) + ')'
       : 'Digite exatamente o valor que aparece no comprovante.\n(o valor do pedido é ' + fmtBRL(pre) + ')';
-    var atual = pre.toFixed(2).replace('.', ',');
+    if (!confirmado) msg = dinheiro ? 'Quanto você RECEBEU em dinheiro?' : 'Digite exatamente o valor que aparece no comprovante.';
+    var atual = confirmado ? pre.toFixed(2).replace('.', ',') : '';
     for (var tent = 0; tent < 3; tent++) {
       var raw = await ui.perguntar(msg, {
         titulo: dinheiro ? '💵 Valor pago — quanto recebeu em dinheiro' : '🧾 Valor pago — igual no comprovante',
         valor: atual, placeholder: 'Ex.: 189,50', inputmode: 'decimal',
-        textoOk: 'Confirmar', textoCancelar: 'É esse mesmo',
+        textoOk: 'Confirmar', textoCancelar: confirmado ? 'É esse mesmo' : 'Não sei o valor',
       });
       if (cancelou(raw)) return { valor: pre, digitado: false }; // "É esse mesmo" / fechou = aceita o pré-preenchido
       var s = String(raw).trim();
@@ -308,7 +317,7 @@
       }
       // Igual ao pré-preenchido (ao centavo) = ele "aceitou", não "digitou": a coluna
       // valor_digitado é o que faz a fonte ser ou não independente (desenho §A.3).
-      return { valor: n, digitado: Math.abs(n - pre) > 0.004 };
+      return { valor: n, digitado: !confirmado || Math.abs(n - pre) > 0.004 };
     }
     return { valor: null, digitado: false };
   }
