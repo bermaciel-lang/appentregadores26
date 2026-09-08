@@ -844,6 +844,10 @@ async function handleFinalizarRota() {
       // gravado:false` e NÃO se mostra nada — a decisão é do cofre, não do entregador. Só `ok:false`
       // (transitório: banco fora, cofre ilegível) ou falha de rede vão pra fila.
       if (!res || !res.ok) throw new Error('confirmarPagamento falhou');
+      if (res.pagamento && res.pagamento.gravado === false) {
+        delete state.pgRespondido[r];
+        await AppUI.alerta('Pagamento não registrado: ' + (res.pagamento.porque || 'Confira com a equipe e tente novamente.'), { titulo: 'Conferir pagamento', tom: 'warn' });
+      }
     } catch (e) {
       params.pg_fila = 1;
       api.enfileirar(params, { row: r });
