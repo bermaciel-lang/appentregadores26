@@ -177,6 +177,7 @@
   function fraseResposta(resposta, formas) {
     var r = resposta || {};
     if (r.naoSei) return '💳 Pagamento: não soube dizer';
+    if (r.forma === 'nao-pagou') return '⚠️ NÃO PAGOU';
     var rot = rotuloForma(r.forma, r.operadora, formas, r.forma);
     var v = (r.valor === null || r.valor === undefined) ? 'valor não informado' : fmtBRL(r.valor);
     return '💳 ' + rot + ' · ' + v + (r.digitado ? ' (digitado)' : ' ✓');
@@ -264,6 +265,14 @@
       var f2 = await ui.escolher('Qual foi a forma de pagamento?', ops2, { titulo: '💳 ' + posicao + 'Forma de pagamento', textoCancelar: declarada.forma ? 'Voltar' : 'Não sei / não vi' });
       if (cancelou(f2) || !f2.forma) { if (!declarada.forma) return naoSei; continue; } // volta à tela 1
 
+      if (f2.forma === 'nao-pagou') {
+        var confirmar = await ui.escolher('Confirma que entregou o pedido e o cliente NÃO PAGOU?', [
+          { valor: 'sim', rotulo: 'Confirmar NÃO PAGOU', tom: 'danger' }
+        ], { titulo: 'NÃO PAGOU', textoCancelar: 'Voltar' });
+        if (confirmar !== 'sim') continue;
+        return { forma: 'nao-pagou', operadora: null, valor: null, digitado: false,
+          obs: 'O entregador declarou no aplicativo: NÃO PAGOU. Pedido entregue sem receber.' };
+      }
       // Tela 3 — o valor EXATO do comprovante.
       var v3 = await telaValor(item, ui, f2.forma, formas);
       if (v3 === 'voltar') continue;
@@ -280,11 +289,11 @@
     var dinheiro = ehDinheiro(formaChave);
     var msg = dinheiro
       ? 'Quanto você RECEBEU em dinheiro? (o valor do pedido é ' + fmtBRL(pre) + ')'
-      : 'Digite EXATAMENTE o valor que está no COMPROVANTE da maquininha.\n(o valor do pedido é ' + fmtBRL(pre) + ')';
+      : 'Digite exatamente o valor que aparece no comprovante.\n(o valor do pedido é ' + fmtBRL(pre) + ')';
     var atual = pre.toFixed(2).replace('.', ',');
     for (var tent = 0; tent < 3; tent++) {
       var raw = await ui.perguntar(msg, {
-        titulo: dinheiro ? '💵 Quanto recebeu?' : '🧾 Valor do comprovante',
+        titulo: dinheiro ? '💵 Valor pago — quanto recebeu em dinheiro' : '🧾 Valor pago — igual no comprovante',
         valor: atual, placeholder: 'Ex.: 189,50', inputmode: 'decimal',
         textoOk: 'Confirmar', textoCancelar: 'É esse mesmo',
       });

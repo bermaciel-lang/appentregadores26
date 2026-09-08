@@ -120,6 +120,13 @@ console.log('\n── payload (montarParams)');
 
 console.log('\n── o fluxo (AppUI de mentira)');
 async function fluxo() {
+  { const ui=uiFake(['diferente',{forma:'nao-pagou'},'sim']);
+    const r=await Pg.perguntar({item,irmas:[item],cfg,ui,tsDevice:TS});
+    t('NÃO PAGOU confirma declaração sem pedir valor de comprovante',r.porRow[4321].forma==='nao-pagou' && !ui.chamadas.some(c=>c.tipo==='perguntar'));
+    t('NÃO PAGOU usa o mesmo cadastro, sem valor fictício e sem não-sei',r.porRow[4321].valor===null&&!r.porRow[4321].naoSei&&Pg.montarParams(4321,TS,r.porRow[4321],true).pg_forma==='nao-pagou');
+    t('cartão da entrega mostra NÃO PAGOU',Pg.fraseResposta(r.porRow[4321],formas).includes('NÃO PAGOU'));
+  }
+
   // a) caso comum = 1 toque
   { const ui = uiFake(['igual']); const r = await Pg.perguntar({ item, irmas: [item], cfg, ui, tsDevice: TS });
     t('caso comum: 1 chamada ao modal', ui.chamadas.length === 1, ui.chamadas.length);
@@ -137,7 +144,7 @@ async function fluxo() {
   { const ui = uiFake(['diferente', { forma: 'debito-entrega', operadora: null }, '185,00']); const r = await Pg.perguntar({ item, irmas: [item], cfg, ui, tsDevice: TS });
     t('diferente: 3 telas (escolher, escolher, perguntar)', ui.chamadas.map((c) => c.tipo).join(',') === 'escolher,escolher,perguntar', ui.chamadas.map((c) => c.tipo));
     t('diferente: débito · 185 · digitado=true', eq(r.porRow[4321], { forma: 'debito-entrega', operadora: null, valor: 185, digitado: true }), r.porRow[4321]);
-    t('tela 3 pede o valor EXATO do comprovante', /EXATAMENTE/.test(ui.chamadas[2].args.msg) && /COMPROVANTE/.test(ui.chamadas[2].args.msg));
+    t('tela 3 pede o valor EXATO do comprovante', /exatamente/i.test(ui.chamadas[2].args.msg) && /comprovante/i.test(ui.chamadas[2].args.msg) && /igual no comprovante/.test(ui.chamadas[2].args.opc.titulo));
     t('tela 3 pré-preenche 189,50 com teclado decimal', ui.chamadas[2].args.opc.valor === '189,50' && ui.chamadas[2].args.opc.inputmode === 'decimal');
     t('tela 3 Cancelar = "É esse mesmo"', ui.chamadas[2].args.opc.textoCancelar === 'É esse mesmo'); }
   // d) "É esse mesmo" aceita o pré-preenchido, digitado=false
