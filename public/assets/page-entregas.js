@@ -837,10 +837,11 @@ async function handleFinalizarRota() {
     } catch (e) { /* a declaração continua; o valor será informado pelo entregador */ }
     const conferidos = grupo.map(x => {
       const a = atuais.find(y => Number(y.row) === Number(x.row) && String(y.pedido) === String(x.pedido));
-      const novo = { ...x, ...(a || {}), valorConferido: !!a && a.valorConferido === true };
       const indice = state.items.findIndex(y => Number(y.row) === Number(x.row));
-      // Só modifica os campos de valor; um poll/ação concorrente pode já ter mudado o status.
-      if (indice >= 0) state.items[indice] = { ...state.items[indice], ...(a || {}), valorConferido: novo.valorConferido };
+      const base = indice >= 0 ? state.items[indice] : x;
+      // Preserva o status atual e rejeita uma resposta de valor anterior à já mostrada.
+      const novo = api.manterValorMaisRecente({ ...base, ...(a || {}), valorConferido: !!a && a.valorConferido === true }, [base]);
+      if (indice >= 0) state.items[indice] = novo;
       return novo;
     });
     api.saveEntregasCache(state.driver, state.items);
@@ -855,7 +856,7 @@ async function handleFinalizarRota() {
     if (!Pg || !Pg.devePerguntar(state.pgCfg, item)) return null;
     let grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
     if (!grupo.length) return null;
-    if (api.usandoPainel() && !anterior) {
+    if (api.usandoPainel()) {
       grupo = await conferirGrupoValores(grupo);
       item = grupo.find(x => Number(x.row) === Number(item.row)) || item;
     }

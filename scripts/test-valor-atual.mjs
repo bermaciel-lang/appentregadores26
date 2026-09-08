@@ -32,3 +32,23 @@ assert.equal(manter({...espelho,valor:60,valorFonteEm:"2026-09-08T21:01:00Z"},[r
 assert.equal(manter({...espelho,pedido:"OUTRO"},[recente]).valor,100,"não cruza pedidos");
 assert.equal(manter({...espelho,valorConferido:false},[recente]).valorConferido,false,"erro não promove cache a confirmado");
 console.log("OK: poll preserva consulta Instabuy mais recente, mas aceita edição ERP e nova sincronização.");
+
+for (const fonte of ["loja","erp"]) {
+ const anterior={...recente,valorFonte:fonte,produtos:[{nome:"Alface",qtd:1}]};
+ const atrasado={...espelho,valorFonte:fonte,valorConsultadoEm:"2026-09-08T20:59:00Z",produtos:[{nome:"Alface",qtd:2}]};
+ assert.equal(manter(atrasado,[anterior]).valor,80,fonte+": resposta atrasada não regride");
+ assert.equal(manter(atrasado,[anterior]).produtos[0].qtd,1,fonte+": produtos acompanham snapshot novo");
+ assert.equal(manter({...atrasado,valor:60,valorConsultadoEm:"2026-09-08T21:01:00Z"},[anterior]).valor,60,fonte+": edição mais nova entra");
+}
+{
+ const passos=["corrigir",{forma:"credito-entrega",operadora:null},null],campos=[];
+ const ui={escolher:async()=>passos.shift(),perguntar:async(m,o)=>{campos.push(o);return passos.shift();},alerta:async()=>true};
+ const r=await Pg.perguntar({item,irmas:[item],cfg,ui,tsDevice:"2026-09-08T23:00:00Z",anterior:{forma:"credito-entrega",valor:80,digitado:true}});
+ assert.equal(campos[0].valor,"");assert.equal(r.porRow[1].valor,null,"corrigir offline não substitui80 por cache100");
+}
+console.log("OK: respostas fora de ordem em loja/ERP e correção offline da declaração anterior.");
+
+const invalido=manter(espelho,[{...recente,valorConferido:false}]);
+assert.equal(invalido.valor,80);
+assert.equal(invalido.valorConferido,false,"poll de espelho atrasado não revalida consulta invalidada");
+console.log("OK: valor preservado sempre carrega a mesma evidência, inclusive conferência inválida.");
