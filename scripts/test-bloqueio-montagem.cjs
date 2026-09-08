@@ -18,6 +18,8 @@ const api=ctx.window.AppEntrega;api.saveDriverName('Camila');localStorage.setIte
  await assert.rejects(()=>api.carregarEntregasPorEntregador('Camila'),/FINALIZE/);
  await assert.rejects(()=>api.apiIniciarRota('Camila',10,'foto'),/FINALIZE/);assert.equal(posts,0);
  response={ok:true,montagemVerificada:true,rotaIniciada:false};assert.equal((await api.verificarMontagem('Camila')).ok,true);
+ await api.apiIniciarRota('Camila',10,'');
+ offline=true;assert.equal((await api.verificarMontagem('Camila')).rotaIniciada,true);offline=false;
  response={ok:true,items:[{row:1}],rotaIniciada:true};await api.carregarEntregasPorEntregador('Camila');
  offline=true;assert.equal((await api.carregarEntregasPorEntregador('Camila')).stale,true);
  assert.equal((await api.verificarMontagem('Camila')).rotaIniciada,true);

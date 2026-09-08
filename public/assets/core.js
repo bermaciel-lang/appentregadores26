@@ -669,6 +669,7 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
     salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
     throw erroMontagem(res);
   }
+  if (res && res.ok) guardarInicioConfirmado(entregador, true); // o servidor confirmou o início, mesmo se a foto ficou pendente
   if (res && res.ok && !res.semFoto) { limparRotaPend('inicio'); return res; }
   if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
