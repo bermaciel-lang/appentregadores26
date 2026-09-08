@@ -337,6 +337,41 @@ function espelharNoPainel(body) {
     return result;
   }
 
+  function chaveInicioConfirmado(entregador) {
+    const dia = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    return 'montagem_inicio_confirmado_v1_' + dia + '_' + getTurno() + '_' + String(entregador).trim();
+  }
+  function inicioConfirmado(entregador) {
+    try { return localStorage.getItem(chaveInicioConfirmado(entregador)) === '1'; } catch { return false; }
+  }
+  function guardarInicioConfirmado(entregador, iniciado) {
+    try {
+      if (iniciado) localStorage.setItem(chaveInicioConfirmado(entregador), '1');
+      else localStorage.removeItem(chaveInicioConfirmado(entregador));
+    } catch {}
+  }
+  function erroMontagem(res) {
+    const e = new Error(res && res.error || 'Não foi possível verificar a montagem. Confira a internet e tente novamente.');
+    e.bloqueioMontagem = true;
+    e.pendentes = res && res.pendentes || [];
+    return e;
+  }
+  async function verificarMontagem(entregador, permitirEmAndamento = true) {
+    try {
+      const res = await apiGet({ action: 'verificarMontagem', entregador, turno: getTurno() }, { retries: 0 });
+      if (res && res.montagemBloqueada) {
+        guardarInicioConfirmado(entregador, false);
+        throw erroMontagem(res);
+      }
+      if (!res || !res.ok || (!res.montagemVerificada && !res.demo)) throw erroMontagem(res);
+      if (res.rotaIniciada !== undefined) guardarInicioConfirmado(entregador, res.rotaIniciada);
+      return res;
+    } catch (error) {
+      if (permitirEmAndamento && inicioConfirmado(entregador)) return { ok: true, rotaIniciada: true, offline: true };
+      throw error.bloqueioMontagem ? error : erroMontagem();
+    }
+  }
+
 async function carregarEntregasPorEntregador(entregador) {
   const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase();
 
@@ -347,9 +382,12 @@ async function carregarEntregasPorEntregador(entregador) {
       turno: getTurno()
     });
 
-    if (!res || !res.ok) {
-      throw new Error((res && res.error) || 'Erro ao carregar entregas');
+    if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
+      if (res.montagemBloqueada) guardarInicioConfirmado(entregador, false);
+      throw erroMontagem(res);
     }
+    if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregas');
+    guardarInicioConfirmado(entregador, !!res.rotaIniciada);
 
     const items = Array.isArray(res.items) ? res.items : [];
     saveEntregasCache(entregador, items);
@@ -365,6 +403,8 @@ async function carregarEntregasPorEntregador(entregador) {
       pgConfig: { perguntar: res.perguntarPagamento === true, formas: Array.isArray(res.formasNaPorta) ? res.formasNaPorta : [] }
     };
   } catch (error) {
+    // Só uma rota cujo INÍCIO foi confirmado pelo servidor hoje pode abrir offline.
+    if (!inicioConfirmado(entregador)) throw error.bloqueioMontagem ? error : erroMontagem();
     const cached = getFreshCache(cacheName) || readCache(cacheName);
 
     if (cached) {
@@ -564,6 +604,7 @@ async function enviarRotaPayload(payload) {
     for (let i = 0; i < 2; i += 1) {
       try {
         const res = await postJson(payload);
+        if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
         if (res && res.ok) return res;
         // Recusa do PORTEIRO não é falta de sinal: repetir o upload da foto não muda nada
         // (só gasta dados e tempo do entregador). Para na hora e avisa quem chamou.
@@ -577,6 +618,7 @@ async function enviarRotaPayload(payload) {
     if (payload.ts_device) semF.ts_device = payload.ts_device; // preserva a hora do CLIQUE mesmo no fallback sem foto
     try {
       const res = await apiGet(semF, { retries: 1 });
+      if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
       if (res && res.ok) return Object.assign({}, res, { semFoto: true });
       if (res && res.precisaLogin) recusadoPorLogin = true;
     } catch (e) {}
@@ -588,6 +630,7 @@ async function enviarRotaPayload(payload) {
   if (payload.ts_device) semF2.ts_device = payload.ts_device;
   try {
     const res = await apiGet(semF2, { retries: 1 });
+    if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
     if (res && res.ok) return res;
     if (res && res.precisaLogin) recusadoPorLogin = true;
   } catch (e) {}
@@ -615,12 +658,17 @@ async function reenviarRotaPendente() {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+  await verificarMontagem(entregador, false);
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
   const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
+  if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
+    salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
+    throw erroMontagem(res);
+  }
   if (res && res.ok && !res.semFoto) { limparRotaPend('inicio'); return res; }
   if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
@@ -631,6 +679,10 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
+  if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
+    salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
+    throw erroMontagem(res);
+  }
   if (res && res.ok && !res.semFoto) { limparRotaPend('fim'); return res; }
   if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
@@ -698,6 +750,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     getAdminAuth,
     apiGet,
     carregarEntregadores,
+    verificarMontagem,
     carregarEntregasPorEntregador,
     apiIniciarEntrega,
     apiMarcarEntregue,

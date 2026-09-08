@@ -50,7 +50,13 @@
       }
     }
     api.saveDriverName(nome);
-    window.location.href = '/entregas/';
+    try {
+      await api.verificarMontagem(nome);
+      window.location.href = '/entregas/';
+    } catch (e) {
+      const detalhes = (e.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
+      await AppUI.alerta(e.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: 'Montagem da rota', tom: 'warn' });
+    }
   }
 
   // Seletor de turno (MANHÃ/TARDE) — só no backend do painel (Supabase), onde os dois

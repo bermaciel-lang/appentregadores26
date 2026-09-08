@@ -561,7 +561,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     } catch (error) {
       console.error(error);
       errorBox.classList.remove('hidden');
-      errorBox.textContent = 'Não foi possível carregar as entregas deste entregador.';
+      state.items = [];
+      sectionsRoot.innerHTML = '';
+      const detalhes = (error.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
+      errorBox.style.whiteSpace = 'pre-line';
+      errorBox.textContent = (error.bloqueioMontagem ? error.message : 'Não foi possível carregar as entregas deste entregador.') +
+        (detalhes ? '\n\nPendentes:\n' + detalhes : '') + '\n\nApós finalizar no app de montagem, toque em Atualizar.';
     } finally {
       setLoading(false);
     }
@@ -677,6 +682,11 @@ btnIniciarRota.disabled = true;
       }
     } catch (error) {
       console.error(error);
+      if (error.bloqueioMontagem) {
+        await carregarTudo(false);
+        await AppUI.alerta(error.message, { titulo: 'Montagem da rota', tom: 'warn' });
+        return;
+      }
       state.rotaIniciada = true;
       state.rotaFinalizada = false;
       sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
