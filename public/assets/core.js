@@ -519,8 +519,14 @@ async function apiMarcarCancelado(row, obs) {
     filaLer().forEach((x) => { if (x && x.params && x.params.action === action && Number(x.params.row) === Number(row)) achado = { ...x.params, pg_recusado: !!x.precisaCorrigir, pg_recusa: x.erro || null }; });
     return achado;
   }
-  function removerConfirmacoesRecusadas(row) {
-    filaSalvar(filaLer().filter(x => !(x.precisaCorrigir && x.params && x.params.action === 'confirmarPagamento' && Number(x.params.row) === Number(row))));
+  function removerConfirmacoesRecusadas(row, tsDevice) {
+    const aceitoEm = Date.parse(tsDevice || '');
+    if (!Number.isFinite(aceitoEm)) return;
+    filaSalvar(filaLer().filter(x => {
+      const p = x.params || {}, anteriorEm = Date.parse(p.ts_device || '');
+      return !(x.precisaCorrigir && p.action === 'confirmarPagamento' &&
+        Number(p.row) === Number(row) && Number.isFinite(anteriorEm) && anteriorEm <= aceitoEm);
+    }));
   }
   let _processandoFila = false;
   async function processarFila() {
@@ -535,7 +541,14 @@ async function apiMarcarCancelado(row, obs) {
           if (res && res.ok && res.pagamento && res.pagamento.gravado === false && item.params.action === 'confirmarPagamento') {
             filaSalvar(filaLer().map(x => x.id === item.id ? { ...x, precisaCorrigir: true, erro: res.pagamento.porque || 'Pagamento precisa de correção.' } : x));
           }
-          else if (res && res.ok) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); }
+          else if (res && res.ok) {
+            // HTTP/ok sem confirmação explícita não comprova que o pagamento foi gravado.
+            if (item.params.action === 'confirmarPagamento') {
+              if (!res.pagamento || res.pagamento.gravado !== true) continue;
+              removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
+            }
+            filaSalvar(filaLer().filter((x) => x.id !== item.id));
+          }
           else if (res && res.naoEncontrado && item.params.action === 'confirmarPagamento') {
             filaSalvar(filaLer().map(x => x.id === item.id ? { ...x, precisaCorrigir: true, erro: 'Entrega não encontrada. A equipe precisa conferir este pagamento.' } : x));
           }
@@ -545,8 +558,8 @@ async function apiMarcarCancelado(row, obs) {
           // falhou — e um cofre com valor errado ("abc") fica assim por HORAS. Com o `break` de
           // baixo, um confirmarPagamento preso na frente deixava TODAS as marcações de entrega
           // seguintes sem subir. A entrega vale mais que a confirmação: ela fica na fila e é
-          // pulada; depois de 7 dias sem conseguir subir, é descartada (a trilha do servidor
-          // já registrou cada tentativa).
+          // pulada; fica preservada no aparelho até confirmação explícita ou correção.
+          // Uma trilha de tentativa no servidor não substitui a declaração original.
           else if (item.params && item.params.action === 'confirmarPagamento') {
             // Pagamento não expira: o comprovante informado precisa sobreviver até confirmação/correção.
             continue;

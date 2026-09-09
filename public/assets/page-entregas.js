@@ -819,9 +819,13 @@ async function handleFinalizarRota() {
       const c = item.pgConfirmado;
       return { forma: c.forma, operadora: c.operadora || null, valor: c.valor, digitado: c.digitado, aprovacao: 'rejeitado' };
     }
-    if (state.pgRespondido[r]) return state.pgRespondido[r];
+    const mem = state.pgRespondido[r];
     const q = api.filaParamsPendentes && api.filaParamsPendentes(r, 'confirmarPagamento');
-    if (q) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1, valeNome: q.pg_vale_nome || null, cartaoAgrupado: q.pg_cartao_agrupado === 1, rejeitada: q.pg_recusado === true, erro: q.pg_recusa || null };
+    const memEm = Date.parse(mem && mem.tsDevice || ''), filaEm = Date.parse(q && q.ts_device || '');
+    // A fila conhece a recusa recebida depois do envio offline. Memória antiga não pode escondê-la.
+    const filaAtual = q && (!mem || !Number.isFinite(memEm) || !Number.isFinite(filaEm) || filaEm >= memEm);
+    if (filaAtual) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1, valeNome: q.pg_vale_nome || null, cartaoAgrupado: q.pg_cartao_agrupado === 1, rejeitada: q.pg_recusado === true, erro: q.pg_recusa || null };
+    if (mem) return mem;
     const c = item && item.pgConfirmado;
     if (c && typeof c === 'object' && c.forma) return { forma: c.forma, operadora: c.operadora || null, valor: c.valor == null ? null : Number(c.valor), digitado: !!c.digitado, naoSei: c.desfecho === 'nao-sei', valeNome: c.valeNome || null, aprovacao: c.aprovacaoValor || null };
     return null;
@@ -881,18 +885,16 @@ async function handleFinalizarRota() {
     const Pg = window.PgPorta;
     if (!Pg || !resposta) return;
     const r = Number(row);
-    state.pgRespondido[r] = resposta;
+    state.pgRespondido[r] = { ...resposta, tsDevice };
     const params = Pg.montarParams(r, tsDevice, resposta, false);
     if (marcacaoNaFila) { params.pg_fila = 1; api.enfileirar(params, { row: r }); return; }
     try {
       const res = await api.apiGet(params, { retries: 3 });
-      // Regra do desenho (§B.5): recusa de NEGÓCIO (cofre 0, parada de outro) vem `ok:true,
-      // gravado:false` e NÃO se mostra nada — a decisão é do cofre, não do entregador. Só `ok:false`
-      // (transitório: banco fora, cofre ilegível) ou falha de rede vão pra fila.
-      if (!res || !res.ok) throw new Error('confirmarPagamento falhou');
-      if (res.pagamento && res.pagamento.gravado === true && api.removerConfirmacoesRecusadas) api.removerConfirmacoesRecusadas(r);
+      // Recusa explícita exige correção e fica visível. Resultado sem confirmação fica na fila.
+      if (!res || !res.ok || !res.pagamento || typeof res.pagamento.gravado !== 'boolean') throw new Error('confirmarPagamento sem confirmação');
+      if (res.pagamento && res.pagamento.gravado === true && api.removerConfirmacoesRecusadas) api.removerConfirmacoesRecusadas(r, tsDevice);
       if (res.pagamento && res.pagamento.gravado === false) {
-        delete state.pgRespondido[r];
+        if (state.pgRespondido[r] && state.pgRespondido[r].tsDevice === tsDevice) delete state.pgRespondido[r];
         api.enfileirar(params, { row: r, erroPagamento: res.pagamento.porque || 'Pagamento precisa de correção.' });
         await AppUI.alerta('Pagamento não registrado: ' + (res.pagamento.porque || 'Confira com a equipe e tente novamente.'), { titulo: 'Conferir pagamento', tom: 'warn' });
       }
