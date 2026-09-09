@@ -284,7 +284,7 @@
   }
 
   async function telaValor(item, ui, forma) {
-    var msg = ehDinheiro(forma) ? 'Informe quanto recebeu em dinheiro (desconte o troco devolvido).' : 'Informe o valor cobrado, igual no comprovante.';
+    var msg = ehDinheiro(forma) ? 'Informe o total recebido em dinheiro, antes de devolver o troco. A diferença por troco não altera o valor do pedido.' : 'Informe o valor cobrado, igual no comprovante.';
     if (valorConfirmado(item)) msg += '\nValor do pedido: ' + fmtBRL(item.valor);
     var atual = '';
     for (var i = 0; i < MAX_VOLTAS; i++) {
