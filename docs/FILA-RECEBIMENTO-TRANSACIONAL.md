@@ -29,3 +29,12 @@ Cenários incluem fechamento com fetch pendente, grupo de 20 pedidos/40 registro
 A revisão independente também executou 9 cenários com IndexedDB nativo no Edge, duas páginas no mesmo BrowserContext e origem fictícia: concorrência de append/ACK, retomada após fechar a aba, rollback integral, migração interrompida e tombstones, 40 inclusões concorrentes, reenvios sem ACK, recusas, exclusividade com alteração do relógio e bloqueio de sincronização sem Web Locks.
 
 O teste scripts/test-fila-durabilidade-browser.mjs usa Playwright e o Edge instalado, com origem fictícia e transporte bloqueado. Confere as transações IndexedDB nativas: escritas solicitam e expõem strict; o lote só retorna após complete, e ACK e fila permanecem corretos após reload. Pode receber PLAYWRIGHT_MODULE e PLAYWRIGHT_CHANNEL para usar uma instalação existente.
+
+
+## Correções vinculadas por identidade — 09/09/2026
+
+A refutação independente reproduziu perda de uma recusa nova quando o relógio do aparelho atrasava: o ACK anterior limpava registros por timestamp. O staging agora congela os IDs das declarações anteriores do mesmo pedido presentes no snapshot da fila, pendentes ou recusadas. Esse vetor entra na assinatura imutável do ato. Inclusões posteriores não entram nele.
+
+O ACK da correção e a resolução dos alvos ainda recusados ocorrem no mesmo commit IndexedDB. Alvos ainda pendentes, outros pedidos e marcações de status permanecem. O tombstone resolvido indica resolvidaPor. Entradas legadas sem vetor só reconhecem a própria entrada. A renderização prioriza a pendência durável sobre memória visual, independentemente do relógio.
+
+Régua de fila ampliada para 24 cenários: inclui duas abas com relógio regressivo e reload, legado sem vínculo e interrupção após escrever o ACK próprio ou o alvo, com rollback de ambos. Nenhuma consulta a serviço operacional nesses testes.

@@ -31,7 +31,7 @@ function pageFunction(name){
 }
 async function harness({store=new Map(),handler=async()=>accepted}={}){
   const calls=[],alerts=[],timeouts=[],storageWrites=[],statusUpdates=[],state={pgRespondido:{},expandidos:new Set(),items:[],rotaIniciada:true};
-  let storageFailure=false,readHook=null;
+  let storageFailure=false,readHook=null,abortAckPut=null;
   let transport=handler,queueStore;
   if(!store.idb)store.idb=new idb.IDBFactory();
   if(!store.locks)store.locks=new Map();
@@ -39,7 +39,13 @@ async function harness({store=new Map(),handler=async()=>accepted}={}){
     const req=store.idb.open(...args);req.addEventListener('success',()=>{
       const db=req.result,transaction=db.transaction.bind(db);
       db.transaction=(stores,mode,...opts)=>{const tx=transaction(stores,mode,...opts);
-        if(storageFailure&&mode==='readwrite')queueMicrotask(()=>tx.abort());return tx;};
+        if(storageFailure&&mode==='readwrite')queueMicrotask(()=>tx.abort());
+        if(mode==='readwrite' && abortAckPut){
+          const objectStore=tx.objectStore.bind(tx);
+          tx.objectStore=name=>{const st=objectStore(name),put=st.put.bind(st);
+            st.put=value=>{const request=put(value);if(abortAckPut(value))queueMicrotask(()=>tx.abort());return request;};return st;};
+        }
+        return tx;};
     });return req;
   }};
   const window={APP_CONFIG:{API_URL:'https://app.ficticio.invalid/api',API_MODE:'json',API_RETRY_COUNT:0,
@@ -88,7 +94,7 @@ async function harness({store=new Map(),handler=async()=>accepted}={}){
   return {api,Pg:window.PgPorta,state,calls,alerts,store,storageWrites,statusUpdates,
     timeouts,send:page.enviarConfirmacao,previous:page.pgRespostaAnterior,
     stage:async(...args)=>copy(await page.guardarRecebimento(...args)),flush:page.enviarRecebimentoGuardado,action:page.handleAction,
-    setStorageFailure:yes=>{storageFailure=yes;},withoutLocks:()=>{delete ctx.navigator.locks;},setReadHook:hook=>{readHook=hook;},
+    setStorageFailure:yes=>{storageFailure=yes;},abortAckOn:predicate=>{abortAckPut=predicate;},withoutLocks:()=>{delete ctx.navigator.locks;},setReadHook:hook=>{readHook=hook;},
     setAnswer:answer=>{ctx.paymentAnswer=answer;},setChoice:choice=>{ctx.choice=choice;},
     setHandler:h=>{transport=h;},queue:()=>copy(queueStore.snapshot()||[]),refresh:()=>queueStore.ler(),
     close:()=>{queueStore.fechar();store.locks.clear();},
@@ -113,13 +119,13 @@ test('recusa no reenvio prevalece sobre pgRespondido e sobrevive ao reload',asyn
   const before=copy(reloaded.queue());await reloaded.api.processarFila();
   assert.deepEqual(reloaded.queue(),before);assert.equal(reloaded.calls.length,0,'recusa aguarda correção, não fica tentando sozinha');
 });
-test('correção direta aceita limpa somente recusas até seu timestamp e do mesmo pedido',async()=>{
+test('correção direta aceita resolve somente declarações do pedido vistas no staging, sem comparar relógio',async()=>{
   const h=await harness();await h.enqueue(1,T0,{refused:true});await h.enqueue(1,T2,{refused:true});
   await h.enqueue(1,T3,{refused:true,reason:'Recusa posterior'});await h.enqueue(2,T0,{refused:true});
   await h.enqueue(1,T1,{action:'marcarEntregue'});
   await h.send(1,{...paid,valor:100},T2,false);
-  assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento'],[2,T0,true,'confirmarPagamento']]);
-  assert.equal(h.previous(1,{}).erro,'Recusa posterior','nova recusa continua visível apesar da correção antiga aceita');
+  assert.deepEqual(signatures(h),[[2,T0,true,'confirmarPagamento']]);
+  assert.equal(h.previous(1,{}).valor,100,'todos os IDs anteriores vistos foram corrigidos, independentemente do horário');
   assert.equal(h.previous(2,{}).rejeitada,true);
 });
 test('correção aceita pela fila limpa antigas e preserva recusa posterior/outro pedido',async()=>{
@@ -129,11 +135,15 @@ test('correção aceita pela fila limpa antigas e preserva recusa posterior/outr
   assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento'],[2,T0,true,'confirmarPagamento']]);
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].ts_device,T2);
 });
-test('timestamp inválido nunca autoriza apagar uma declaração',async()=>{
-  const h=await harness();await h.enqueue(1,T1,{refused:true});await h.enqueue(1,'invalido',{refused:true});
-  const before=copy(h.queue());await h.api.removerConfirmacoesRecusadas(1,'invalido');assert.deepEqual(h.queue(),before);
-  await h.api.removerConfirmacoesRecusadas(1,T2);assert.equal(h.queue().length,1);assert.equal(h.queue()[0].params.ts_device,'invalido');
+test('legado sem vínculo explícito confirma só a própria entrada, mesmo com hora posterior',async()=>{
+  const store=new Map(),legacy=await harness();
+  await legacy.enqueue(1,T1,{refused:true});await legacy.enqueue(1,T3);
+  store.set(QUEUE,JSON.stringify(legacy.queue()));
+  const h=await harness({store});await h.api.processarFila();
+  assert.deepEqual(signatures(h),[[1,T1,true,'confirmarPagamento']]);
+  assert.equal(h.api.removerConfirmacoesRecusadas,undefined,'não existe API de apagar por relógio');
 });
+
 test('ok sem pagamento.gravado===true não remove pagamento nem recusa anterior',async()=>{
   for(const response of [{ok:true},{ok:true,pagamento:{}},{ok:true,pagamento:{gravado:'true'}},{ok:true,pagamento:{gravado:1}}]){
     const h=await harness({handler:async()=>response});await h.enqueue(1,T0,{refused:true});await h.enqueue(1,T2);
@@ -195,6 +205,31 @@ test('processarFila simultâneo não duplica tentativa e preserva recusa chegada
   await h.enqueue(1,T3,{refused:true});const simultaneous=h.api.processarFila();assert.equal(simultaneous,first);assert.equal(h.calls.length,1);
   release(accepted);await Promise.all([first,simultaneous]);assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento']]);
 });
+test('ACK antigo preserva recusa de outra aba criada depois com relógio atrasado e no reload',async()=>{
+  let release,started;const entered=new Promise(r=>{started=r;}),store=new Map();
+  const a=await harness({store,handler:async()=>{started();return new Promise(r=>{release=r;});}});
+  const b=await harness({store});await a.enqueue(1,T2);const sending=a.api.processarFila();await entered;
+  const newId=await b.enqueue(1,T0,{refused:true,reason:'Recusa nova com relógio atrasado'});
+  release(accepted);await sending;await b.refresh();
+  assert.equal(b.queue().length,1);assert.equal(b.queue()[0].id,newId);
+  a.state.pgRespondido[1]={...paid,tsDevice:T3};await a.refresh();
+  assert.equal(a.previous(1,{}).rejeitada,true,'memória com hora maior não esconde a recusa durável');
+  const reload=await harness({store});assert.equal(reload.queue()[0].id,newId);
+  assert.equal(reload.previous(1,{}).rejeitada,true);
+});
+
+test('ACK de correção e recusas vinculadas é atômico nos dois pontos de interrupção',async()=>{
+  for(const interromperAlvo of [false,true]){
+    const h=await harness();const anterior=await h.enqueue(1,T3,{refused:true});
+    const corrigida=await h.enqueue(1,T0,{response:{...paid,valor:100}});
+    h.abortAckOn(value=>value.estado==='ack' && (interromperAlvo?value.id===anterior:value.id===corrigida));
+    const result=await h.api.processarFila();assert.ok(result.erroArmazenamento);
+    const reload=await harness({store:h.store});
+    assert.deepEqual(reload.queue().map(x=>x.id),[anterior,corrigida],'ambos sobrevivem ao aborto de qualquer parte do ACK');
+    await reload.api.processarFila();assert.equal(reload.queue().length,0);
+  }
+});
+
 test('somente confirmarPagamento espera 45s, inclusive após recarregar a fila',async()=>{
   const h=await harness();await h.send(1,paid,T1,false);
   assert.deepEqual(h.timeouts,[45000]);

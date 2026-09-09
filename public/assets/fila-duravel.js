@@ -9,7 +9,8 @@
   function assinatura(item) {
     const params = { ...item.params }; delete params.pg_fila; // transporte não altera o ato declarado
     const meta = { ...(item.meta || {}) }; delete meta.erroPagamento;
-    return JSON.stringify(canonico({ params, meta, ts: item.ts }));
+    return JSON.stringify(canonico({ params, meta, ts: item.ts,
+      ...(Array.isArray(item.declaracoesAnteriores)?{declaracoesAnteriores:item.declaracoesAnteriores}:{}) }));
   }
   function criar({ nome, chaveLegada, onChange }) {
     let banco, cache = null, erro = null, ultimoLegado = null;
@@ -102,9 +103,14 @@
     }
     async function adicionar(entradas) {
       // Congela o conteúdo imediatamente, antes de qualquer await de abertura/commit.
+      const conhecidas=cache===null?[]:copiar(cache);
       const agora=Date.now(),novas=entradas.map(({params,meta})=>({
         id:uuid(),params:copiar(params),meta:copiar(meta||{}),ts:agora,
         precisaCorrigir:!!(meta&&meta.erroPagamento),erro:meta&&meta.erroPagamento||null,
+        // Congela quais declarações esta correção viu, inclusive uma ainda aguardando resposta.
+        // Uma inclusão posterior, mesmo com relógio atrasado, nunca entra nesse conjunto.
+        declaracoesAnteriores:params.action==='confirmarPagamento'?conhecidas.filter(x=>
+          x.params.action==='confirmarPagamento' && Number(x.params.row)===Number(params.row)).map(x=>x.id):[],
       }));
       if(!novas.length)return[];
       await garantir();await importarLegado();await inserirItens(novas);
@@ -118,25 +124,26 @@
         req.onsuccess=()=>{
           const item=req.result;if(!item || item.estado==='ack')return;
           if(tipo==='ack'){
-            // Não apaga recusas de outro ID: a equipe e a fila preservam o fato até resolução explícita.
-            store.put({ id:item.id,ordem:item.ordem,assinatura:item.assinatura,estado:'ack',ts:item.ts });
+            // ACK e resolução das declarações visadas pertencem ao MESMO commit.
+            // Legado sem vetor só confirma a própria entrada; relógio não prova sucessão.
+            const tombstone=(x,resolvidaPor)=>({id:x.id,ordem:x.ordem,assinatura:x.assinatura,estado:'ack',ts:x.ts,
+              ...(resolvidaPor?{resolvidaPor}:{})});
+            store.put(tombstone(item));
+            if(item.params && item.params.action==='confirmarPagamento' && Array.isArray(item.declaracoesAnteriores)){
+              for(const alvo of new Set(item.declaracoesAnteriores)){
+                if(alvo===item.id)continue;
+                const anterior=store.get(alvo);
+                anterior.onsuccess=()=>{
+                  const x=anterior.result;
+                  if(x && x.estado==='recusado' && x.ordem<item.ordem && x.params &&
+                    x.params.action==='confirmarPagamento' && Number(x.params.row)===Number(item.params.row)){
+                    store.put(tombstone(x,item.id));
+                  }
+                };
+              }
+            }
           } else store.put({...item,...(tipo==='recusa'?{estado:'recusado',erro:detalhe}:{reenviado:true})});
         };
-      });
-      await atualizarCache();avisar();
-    }
-    async function resolverRecusas(row,tsDevice) {
-      const aceitoEm=Date.parse(tsDevice||'');if(!Number.isFinite(aceitoEm))return;
-      await garantir();
-      await transacao(['itens'],'readwrite',(tx)=>{
-        const store=tx.objectStore('itens'),req=store.getAll();
-        req.onsuccess=()=>req.result.forEach(item=>{
-          const p=item.params,antes=Date.parse(p&&p.ts_device||'');
-          if(item.estado==='recusado' && p && p.action==='confirmarPagamento' && Number(p.row)===Number(row) &&
-              Number.isFinite(antes) && antes<=aceitoEm){
-            store.put({id:item.id,ordem:item.ordem,assinatura:item.assinatura,estado:'ack',ts:item.ts});
-          }
-        });
       });
       await atualizarCache();avisar();
     }
@@ -153,7 +160,7 @@
       if(e.key===chaveLegada)ler().catch(error=>{erro=error.message;if(onChange)onChange();});
     });
     return { pronta:garantir,ler,adicionar,ack:id=>alterar(id,'ack'),recusar:(id,motivo)=>alterar(id,'recusa',motivo),
-      marcarReenvio:id=>alterar(id,'reenvio'),resolverRecusas,exclusivo,
+      marcarReenvio:id=>alterar(id,'reenvio'),exclusivo,
       snapshot:()=>cache===null?null:copiar(cache),estado:()=>({pronta:cache!==null,erro,sincronizacaoDisponivel:!!(navigator.locks&&navigator.locks.request)}),
       fechar:()=>{if(canal)canal.close();if(banco)banco.close();}
     };

@@ -533,9 +533,6 @@ async function apiMarcarCancelado(row, obs) {
     });
     return achado;
   }
-  async function removerConfirmacoesRecusadas(row, tsDevice) {
-    await filaPronta();await bancoFila.resolverRecusas(row, tsDevice);
-  }
   let _processamentoFila = null;
   function processarFila() {
     if (_processamentoFila) return _processamentoFila;
@@ -564,7 +561,6 @@ async function apiMarcarCancelado(row, obs) {
         if (pagamento && (!res.pagamento || res.pagamento.gravado !== true)) {
           await bancoFila.marcarReenvio(item.id);continue;
         }
-        if (pagamento) await removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
         await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
         await bancoFila.recusar(item.id, 'Entrega não encontrada. A equipe precisa conferir este pagamento.');
@@ -821,7 +817,6 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     processarFila,
     filaRowsPendentes,
     filaParamsPendentes,
-    removerConfirmacoesRecusadas,
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,

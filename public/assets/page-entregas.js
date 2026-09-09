@@ -824,9 +824,9 @@ async function handleFinalizarRota() {
     }
     const mem = state.pgRespondido[r];
     const q = api.filaParamsPendentes && api.filaParamsPendentes(r, 'confirmarPagamento');
-    const memEm = Date.parse(mem && mem.tsDevice || ''), filaEm = Date.parse(q && q.ts_device || '');
-    // A fila conhece a recusa recebida depois do envio offline. Memória antiga não pode escondê-la.
-    const filaAtual = q && (!mem || !Number.isFinite(memEm) || !Number.isFinite(filaEm) || filaEm >= memEm);
+    // O relógio do aparelho não decide qual pendência existe. A fila durável vence
+    // a memória visual até ACK explícito ou correção vinculada aos seus IDs.
+    const filaAtual = !!q;
     if (filaAtual) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1, valeNome: q.pg_vale_nome || null, cartaoAgrupado: q.pg_cartao_agrupado === 1, rejeitada: q.pg_recusado === true, erro: q.pg_recusa || null };
     if (mem) return mem;
     const c = item && item.pgConfirmado;
