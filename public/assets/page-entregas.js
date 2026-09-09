@@ -878,30 +878,45 @@ async function handleFinalizarRota() {
     return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
   }
 
-  // Sobe UMA confirmação. `marcacaoNaFila` = o marcarEntregue desta row NÃO subiu (foi pra fila):
-  // então a confirmação vai DIRETO pra fila, atrás dele — a fila é FIFO e a entrega chega antes.
-  // Resposta null = "manter" (já tinha respondido, não mudou): não envia nada.
-  async function enviarConfirmacao(row, resposta, tsDevice, marcacaoNaFila) {
-    const Pg = window.PgPorta;
-    if (!Pg || !resposta) return;
-    const r = Number(row);
-    state.pgRespondido[r] = { ...resposta, tsDevice };
-    const params = Pg.montarParams(r, tsDevice, resposta, false);
-    if (marcacaoNaFila) { params.pg_fila = 1; api.enfileirar(params, { row: r }); return; }
-    try {
-      const res = await api.apiGet(params, { retries: 3 });
-      // Recusa explícita exige correção e fica visível. Resultado sem confirmação fica na fila.
-      if (!res || !res.ok || !res.pagamento || typeof res.pagamento.gravado !== 'boolean') throw new Error('confirmarPagamento sem confirmação');
-      if (res.pagamento && res.pagamento.gravado === true && api.removerConfirmacoesRecusadas) api.removerConfirmacoesRecusadas(r, tsDevice);
-      if (res.pagamento && res.pagamento.gravado === false) {
-        if (state.pgRespondido[r] && state.pgRespondido[r].tsDevice === tsDevice) delete state.pgRespondido[r];
-        api.enfileirar(params, { row: r, erroPagamento: res.pagamento.porque || 'Pagamento precisa de correção.' });
-        await AppUI.alerta('Pagamento não registrado: ' + (res.pagamento.porque || 'Confira com a equipe e tente novamente.'), { titulo: 'Conferir pagamento', tom: 'warn' });
-      }
-    } catch (e) {
-      params.pg_fila = 1;
-      api.enfileirar(params, { row: r });
+  // Nenhuma chamada de rede antecede esta gravação do ATO INTEIRO no aparelho.
+  function guardarRecebimento(marcacoes, pgPorRow, tsDevice) {
+    const entradas = marcacoes.map(params => ({ params, meta: { row: Number(params.row) } }));
+    for (const rk of Object.keys(pgPorRow || {})) {
+      const r = Number(rk), resposta = pgPorRow[r];
+      if (resposta) entradas.push({ params: window.PgPorta.montarParams(r, tsDevice, resposta, false), meta: { row: r } });
     }
+    const ids = api.enfileirarLote(entradas);
+    // O estado visual só muda depois que a gravação local foi confirmada.
+    for (const rk of Object.keys(pgPorRow || {})) {
+      const r = Number(rk);
+      if (pgPorRow[r]) state.pgRespondido[r] = { ...pgPorRow[r], tsDevice };
+    }
+    return ids;
+  }
+  async function enviarRecebimentoGuardado(ids) {
+    const resultado = await api.processarFila();
+    if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
+    const restantes = api.filaPorIds(ids);
+    const recusados = restantes.filter(x => x.precisaCorrigir);
+    for (const x of recusados) {
+      const row = Number(x.params.row);
+      if (state.pgRespondido[row] && state.pgRespondido[row].tsDevice === x.params.ts_device) delete state.pgRespondido[row];
+    }
+    if (recusados.length) {
+      await AppUI.alerta('Pagamento precisa de conferência: ' + (recusados[0].erro || 'Confira os dados com a equipe.') +
+        ' A declaração continua guardada no aparelho.', { titulo: 'Conferir pagamento', tom: 'warn' });
+    } else if (restantes.length) {
+      await AppUI.alerta('Aguardando envio. A marcação e o pagamento estão guardados neste aparelho e serão tentados novamente com conexão.',
+        { titulo: 'Guardado no aparelho', tom: 'warn' });
+    }
+    return restantes;
+  }
+  // Correção unitária usa o mesmo staging; sem resposta ("manter"), não cria outro ato.
+  async function enviarConfirmacao(row, resposta, tsDevice, marcacaoNaFila) {
+    if (!window.PgPorta || !resposta) return;
+    const r = Number(row);
+    const ids = guardarRecebimento([], { [r]: resposta }, tsDevice);
+    if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids);
   }
 
   async function handleAction(act, row) {
@@ -929,6 +944,7 @@ async function handleFinalizarRota() {
       if (!resC || resC.manteve || resC.cancelado) return;
       state.sendingAction = true; state.enviando = { row: Number(row), act: 'pgcorrigir' }; renderList();
       try { await enviarConfirmacao(row, resC.porRow[Number(row)], tsC, false); }
+      catch (error) { await AppUI.alerta('Não foi possível guardar o pagamento no aparelho. Mantenha esta tela aberta e tente novamente.', { tom: 'danger' }); }
       finally { state.sendingAction = false; state.enviando = null; renderList(); }
       return;
     }
@@ -1000,6 +1016,18 @@ async function handleFinalizarRota() {
         // de pagamento e viraria porta dos fundos. Mesma função, mesmo ts_device.
         const pgA = esc === 'done' ? await coletarPagamento(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant)) : null;
         if (pgA && pgA.cancelado) return;
+        if (esc === 'done') {
+          try {
+            const marcacoes = irmasA.map(x => ({ action: 'marcarEntregue', row: Number(x.row), obs: 'Entregue', ts_device: tsA }));
+            const ids = guardarRecebimento(marcacoes, pgA && !pgA.manteve ? pgA.porRow : null, tsA);
+            irmasA.forEach(x => { updateLocalStatus(Number(x.row), 'Entregue', 'Entregue'); state.expandidos.delete(Number(x.row)); });
+            await enviarRecebimentoGuardado(ids);
+          } catch (error) {
+            await AppUI.alerta('Não foi possível guardar a entrega no aparelho. Mantenha esta tela aberta e tente novamente.', { tom: 'danger' });
+            return;
+          }
+          continue;
+        }
         for (const x of irmasA) {
           const r = Number(x.row);
           const params = esc === 'done' ? { action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }
@@ -1109,24 +1137,21 @@ async function handleFinalizarRota() {
         : act === 'fail' ? { action: 'marcarNaoEntregue', row: r, obs: obs || '', ts_device: tsDevice }
         : { action: 'marcarCancelado', row: r, obs: obs || '', ts_device: tsDevice };
 
+      const idsRecebimento = act === 'done' ? guardarRecebimento(rowsAlvo.map(paramsDe), pgPorRow, tsDevice) : null;
       rowsAlvo.forEach((r) => updateLocalStatus(r, nextStatus, obs)); // já deixa TODAS marcadas na tela
       // Ao MARCAR (entregue/não entregue/cancelado) o cartão MINIMIZA sozinho (Bernardo). Iniciar NÃO
       // minimiza — pelo contrário, expande (feito acima). Tocar de novo num concluído reabre pra corrigir.
       if (act === 'done' || act === 'fail' || act === 'cancelado') rowsAlvo.forEach((r) => state.expandidos.delete(r));
-      // Cada uma sobe sozinha; a que falhar vai pra fila offline (as que subiram NÃO reenviam).
+      if (idsRecebimento) {
+        await enviarRecebimentoGuardado(idsRecebimento);
+        window.setTimeout(function () { carregarTudo(false); }, 800);
+        return;
+      }
+      // Outros status mantêm o seu fluxo; recebimentos só usam o consumidor da fila.
       const falhas = [];
       for (const r of rowsAlvo) {
         try { const res = await api.apiGet(paramsDe(r), { retries: 3 }); if (!res || !res.ok) throw new Error('falhou'); }
         catch (e2) { api.enfileirar(paramsDe(r), { row: Number(r) }); falhas.push(r); }
-      }
-      // A confirmação de pagamento sobe DEPOIS do marcarEntregue de cada row (ou vai pra fila atrás
-      // dele). Cobre também a irmã que já estava Entregue e não entrou em rowsAlvo — se ele disse
-      // "pagou tudo junto", a resposta é do grupo inteiro.
-      if (pgPorRow) {
-        for (const rk of Object.keys(pgPorRow)) {
-          const r = Number(rk);
-          if (pgPorRow[r]) await enviarConfirmacao(r, pgPorRow[r], tsDevice, falhas.indexOf(r) >= 0);
-        }
       }
       if (falhas.length) await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
       window.setTimeout(function () { carregarTudo(false); }, 800);

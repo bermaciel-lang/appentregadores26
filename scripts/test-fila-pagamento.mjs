@@ -24,12 +24,17 @@ function pageFunction(name){
   assert.ok(match,'Função real ausente: '+name);return match[0];
 }
 function harness({store=new Map(),handler=async()=>accepted}={}){
-  const calls=[],alerts=[],timeouts=[],state={pgRespondido:{}};
+  const calls=[],alerts=[],timeouts=[],storageWrites=[],statusUpdates=[],state={pgRespondido:{},expandidos:new Set(),items:[],rotaIniciada:true};
+  let storageFailure=false,readHook=null;
   let transport=handler;
   const window={APP_CONFIG:{API_URL:'https://app.ficticio.invalid/api',API_MODE:'json',API_RETRY_COUNT:0,
     API_TIMEOUT_MS:15000,STORAGE_CACHE_PREFIX:'teste_',STORAGE_DRIVER_KEY:'teste_driver',STORAGE_TOKEN_KEY:'teste_token'},
-    location:{origin:'https://app.ficticio.invalid'}};
-  const ctx=vm.createContext({window,localStorage:storage(store),sessionStorage:storage(new Map()),
+    location:{origin:'https://app.ficticio.invalid'},setTimeout:()=>0};
+  const local=storage(store);
+  const ctx=vm.createContext({window,localStorage:{...local,getItem:k=>{const value=local.getItem(k);if(k===QUEUE && readHook){const hook=readHook;readHook=null;hook();}return value;},setItem:(k,v)=>{
+      if(storageFailure)throw Error('QuotaExceededError fictícia');
+      storageWrites.push({key:k,value:v});local.setItem(k,v);
+    }},sessionStorage:storage(new Map()),
     navigator:{userAgent:'teste-node',onLine:true},URL,URLSearchParams,AbortController,Date,Map,Set,Number,String,Array,
     console,Response,queueMicrotask,
     // Acelera somente a espera entre retries; o relógio e o código de envio continuam reais.
@@ -46,11 +51,19 @@ function harness({store=new Map(),handler=async()=>accepted}={}){
   vm.runInContext(portaSource,ctx,{filename:'public/assets/pagamento-porta.js'});
   const api=window.AppEntrega;
   const ui={alerta:async(message,options)=>{alerts.push({message,options});return true;}};
-  Object.assign(ctx,{api,state,AppUI:ui});window.AppUI=ui;
-  const page=vm.runInContext(pageFunction('pgRespostaAnterior')+'\n'+pageFunction('enviarConfirmacao')+
-    '\n({pgRespostaAnterior,enviarConfirmacao});',ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
-  return {api,Pg:window.PgPorta,state,calls,alerts,store,
+  Object.assign(ctx,{api,state,AppUI:ui,renderList:()=>{},carregarTudo:()=>{},
+    updateLocalStatus:(row,status,obs)=>{statusUpdates.push({row,status,obs});const item=state.items.find(x=>Number(x.row)===Number(row));if(item)item.status=status;},
+    conferirGrupoValores:async x=>x,coletarPagamento:async()=>ctx.paymentAnswer,
+  });window.AppUI=ui;
+  ui.escolher=async()=>ctx.choice||'maos';
+  ui.perguntar=async()=>'';
+  const page=vm.runInContext(pageFunction('pgRespostaAnterior')+'\n'+pageFunction('guardarRecebimento')+'\n'+pageFunction('enviarRecebimentoGuardado')+'\n'+pageFunction('enviarConfirmacao')+'\n'+pageFunction('handleAction')+
+    '\n({pgRespostaAnterior,enviarConfirmacao,guardarRecebimento,enviarRecebimentoGuardado,handleAction});',ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
+  return {api,Pg:window.PgPorta,state,calls,alerts,store,storageWrites,statusUpdates,
     timeouts,send:page.enviarConfirmacao,previous:page.pgRespostaAnterior,
+    stage:page.guardarRecebimento,flush:page.enviarRecebimentoGuardado,action:page.handleAction,
+    setStorageFailure:yes=>{storageFailure=yes;},setReadHook:hook=>{readHook=hook;},
+    setAnswer:answer=>{ctx.paymentAnswer=answer;},setChoice:choice=>{ctx.choice=choice;},
     setHandler:h=>{transport=h;},queue:()=>JSON.parse(store.get(QUEUE)||'[]'),
     enqueue(row,tsDevice=T1,{refused=false,reason='Recusa fictícia',response=paid,action='confirmarPagamento'}={}){
       const params=action==='confirmarPagamento'?window.PgPorta.montarParams(row,tsDevice,response,true):{action,row,ts_device:tsDevice};
@@ -78,7 +91,7 @@ test('correção direta aceita limpa somente recusas até seu timestamp e do mes
   h.enqueue(1,T3,{refused:true,reason:'Recusa posterior'});h.enqueue(2,T0,{refused:true});
   h.enqueue(1,T1,{action:'marcarEntregue'});
   await h.send(1,{...paid,valor:100},T2,false);
-  assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento'],[2,T0,true,'confirmarPagamento'],[1,T1,false,'marcarEntregue']]);
+  assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento'],[2,T0,true,'confirmarPagamento']]);
   assert.equal(h.previous(1,{}).erro,'Recusa posterior','nova recusa continua visível apesar da correção antiga aceita');
   assert.equal(h.previous(2,{}).rejeitada,true);
 });
@@ -106,7 +119,7 @@ test('ok sem pagamento.gravado===true não remove pagamento nem recusa anterior'
 test('falha de rede e reload preservam payload, timestamp e correção pendente',async()=>{
   const offline=async()=>{throw Error('Sem rede fictícia');};
   const h=harness({handler:offline});await h.send(1,paid,T1,false);
-  assert.equal(h.calls.length,4,'tentativa inicial e três retries reais');
+  assert.equal(h.calls.length,2,'consumidor único: tentativa inicial e um retry real');
   assert.equal(h.queue().length,1);assert.equal(h.queue()[0].params.pg_fila,1);
   const before=copy(h.queue());await h.api.processarFila();assert.deepEqual(h.queue(),before);
   const reloaded=harness({store:h.store,handler:offline});assert.equal(reloaded.previous(1,{}).valor,95);
@@ -135,24 +148,25 @@ test('recusa direta preserva valor e mostra aviso; correção nova aceita deixa 
   assert.equal(h.queue().length,0);assert.equal(h.previous(1,{}).valor,100);
   assert.equal(h.Pg.respostaCompleta(h.previous(1,{}),forms),true);
 });
-test('recusa tardia de envio antigo não apaga resposta nova já aceita',async()=>{
+test('correção nova aguarda consumidor único e recusa antiga não apaga resposta nova',async()=>{
   let release,started;
   const entered=new Promise(r=>{started=r;});
   const h=harness({handler:async p=>{
     if(p.ts_device===T1){started();return new Promise(r=>{release=r;});}return accepted;
   }});
   const old=h.send(1,paid,T1,false);await entered;
-  await h.send(1,{...paid,valor:100},T2,false);release(denied);await old;
-  assert.equal(h.queue().length,1,'recusa recebida tarde permanece auditável');
-  assert.equal(h.queue()[0].precisaCorrigir,true);assert.equal(h.state.pgRespondido[1].tsDevice,T2);
-  assert.equal(h.previous(1,{}).valor,100);assert.equal(h.previous(1,{}).rejeitada,undefined);
+  const corrected=h.send(1,{...paid,valor:100},T2,false);
+  assert.equal(h.calls.length,1);assert.equal(h.queue().length,2,'ambas declarações guardadas enquanto a primeira não responde');
+  release(denied);await Promise.all([old,corrected]);
+  assert.equal(h.queue().length,0,'recusa antiga só sai após ACK da correção');
+  assert.equal(h.state.pgRespondido[1].tsDevice,T2);assert.equal(h.previous(1,{}).valor,100);
 });
 test('processarFila simultâneo não duplica tentativa e preserva recusa chegada durante envio',async()=>{
   let release,started;const entered=new Promise(r=>{started=r;});
   const h=harness({handler:async()=>{started();return new Promise(r=>{release=r;});}});
   h.enqueue(1,T1);const first=h.api.processarFila();await entered;
-  h.enqueue(1,T3,{refused:true});await h.api.processarFila();assert.equal(h.calls.length,1);
-  release(accepted);await first;assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento']]);
+  h.enqueue(1,T3,{refused:true});const simultaneous=h.api.processarFila();assert.equal(simultaneous,first);assert.equal(h.calls.length,1);
+  release(accepted);await Promise.all([first,simultaneous]);assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento']]);
 });
 test('somente confirmarPagamento espera 45s, inclusive após recarregar a fila',async()=>{
   const h=harness();await h.send(1,paid,T1,false);
@@ -172,6 +186,75 @@ test('recebimento coletivo conserva intenção idêntica após falha e recarga',
   assert.deepEqual(reloaded.calls[0],Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v)])));
   assert.equal(reloaded.calls[0].pg_grupo,'1:'+T1);
   assert.equal(reloaded.calls[0].pg_valor,'140.00');assert.equal(reloaded.queue().length,0);
+});
+test('fechar durante primeiro request conserva as 40 entradas do grupo antes de qualquer ACK',async()=>{
+  let started;const entered=new Promise(r=>{started=r;});
+  const h=harness({handler:async()=>{
+    assert.equal(h.queue().length,40,'20 marcações e 20 pagamentos já persistidos antes da primeira rede');
+    assert.equal(h.storageWrites.filter(w=>w.key===QUEUE).length,1,'um único setItem contém o ato inteiro');
+    started();return new Promise(()=>{}); // simula fechar o processo com fetch ainda pendente
+  }});
+  const porRow={};
+  h.state.items=Array.from({length:20},(_,i)=>({row:i+1,numero:7,status:'Indo para entrega',naEntrega:true}));
+  for(const item of h.state.items)porRow[item.row]={...paid,valor:2000,grupo:'1:'+T1,grupoRows:h.state.items.map(x=>x.row)};
+  h.setAnswer({porRow});h.action('done',1);await entered;
+  const guardadas=copy(h.queue()),reloaded=harness({store:h.store});
+  assert.deepEqual(reloaded.queue(),guardadas,'reload sem catch/finally mantém IDs e payload integral');
+  await reloaded.api.processarFila();
+  assert.equal(reloaded.calls.length,40);assert.equal(reloaded.queue().length,0);
+  assert.deepEqual(reloaded.calls.map(p=>p.action),[
+    ...Array(20).fill('marcarEntregue'),...Array(20).fill('confirmarPagamento')
+  ]);
+  assert.deepEqual(reloaded.calls.map(p=>p.ts_device),Array(40).fill(guardadas[0].params.ts_device));
+});
+test('ACK parcial seguido de fechamento remove somente a entrada confirmada e conserva recusa posterior',async()=>{
+  let started;const entered=new Promise(r=>{started=r;});
+  const h=harness({handler:async(p,n)=>{if(n===1)return {ok:true};started();return new Promise(()=>{});}});
+  const pg={1:{...paid,valor:200,grupo:'grupo-parcial',grupoRows:[1,2]},2:{...paid,valor:200,grupo:'grupo-parcial',grupoRows:[1,2]}};
+  const ids=h.stage([{action:'marcarEntregue',row:1,ts_device:T1},{action:'marcarEntregue',row:2,ts_device:T1}],pg,T1);
+  h.flush(ids);await entered;assert.deepEqual(h.queue().map(x=>x.id),ids.slice(1));
+  const pending=copy(h.queue()),reloaded=harness({store:h.store,handler:async p=>p.action==='confirmarPagamento'&&p.row==='2'?denied:accepted});
+  await reloaded.api.processarFila();assert.equal(reloaded.queue().length,1);
+  assert.equal(reloaded.queue()[0].id,pending[2].id);assert.equal(reloaded.queue()[0].precisaCorrigir,true);
+  assert.deepEqual(reloaded.queue()[0].params,pending[2].params);
+});
+test('correção também está persistida quando o fetch não terminou',async()=>{
+  let started;const entered=new Promise(r=>{started=r;});
+  const h=harness({handler:async()=>{started();return new Promise(()=>{});}});
+  h.send(1,{...paid,valor:99.90},T2,false);await entered;
+  const x=harness({store:h.store});assert.equal(x.queue().length,1);
+  assert.equal(x.queue()[0].params.pg_valor,'99.90');assert.equal(x.queue()[0].params.ts_device,T2);
+  await x.api.processarFila();assert.equal(x.queue().length,0);
+});
+test('porta do menu de entrega em andamento guarda todo o grupo antes da rede',async()=>{
+  let started;const entered=new Promise(r=>{started=r;});
+  const h=harness({handler:async()=>{started();return new Promise(()=>{});}});
+  h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true},{row:2,numero:1,status:'Indo para entrega',naEntrega:true},
+    {row:3,numero:2,status:'',naEntrega:false}];
+  h.setChoice('done');h.setAnswer({porRow:{1:paid,2:paid}});
+  h.action('start',3);await entered;
+  assert.equal(h.queue().length,4);assert.deepEqual(h.queue().map(x=>x.params.action),['marcarEntregue','marcarEntregue','confirmarPagamento','confirmarPagamento']);
+  assert.equal(h.storageWrites.filter(x=>x.key===QUEUE).length,1);
+});
+test('falha de armazenamento aborta antes da rede e de mostrar entrega concluída',async()=>{
+  const h=harness();h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true}];
+  h.setAnswer({porRow:{1:paid}});h.setStorageFailure(true);await h.action('done',1);
+  assert.equal(h.calls.length,0);assert.equal(h.statusUpdates.length,0);assert.equal(h.state.items[0].status,'Indo para entrega');
+  assert.deepEqual(h.state.pgRespondido,{});assert.equal(h.alerts.length,1);assert.equal(h.queue().length,0);
+});
+test('fila ilegível nunca é sobrescrita ao guardar uma nova confirmação',async()=>{
+  const h=harness();h.store.set(QUEUE,'{fila-incompleta');
+  assert.throws(()=>h.stage([],{1:paid},T1));assert.equal(h.store.get(QUEUE),'{fila-incompleta');
+  assert.equal(h.calls.length,0);assert.deepEqual(h.state.pgRespondido,{});
+});
+test('resposta antiga de outro contexto não ressuscita item já corrigido e confirmado',async()=>{
+  let started,release;const entered=new Promise(r=>{started=r;});
+  const h=harness({handler:async()=>{started();return new Promise(r=>{release=r;});}});
+  const first=h.send(1,paid,T1,false);await entered;
+  const reloaded=harness({store:h.store,handler:async p=>p.ts_device===T1?denied:accepted});
+  await reloaded.send(1,{...paid,valor:100},T2,false);assert.equal(reloaded.queue().length,0);
+  release(denied);await first;assert.equal(h.queue().length,0);
+  assert.equal(reloaded.state.pgRespondido[1].valor,100);
 });
 let failures=0;
 for(const [name,run] of tests){try{await run();console.log('PASS '+name);}catch(e){failures++;console.error('FAIL '+name+'\n'+e.stack);}}
