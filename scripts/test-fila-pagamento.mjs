@@ -24,16 +24,16 @@ function pageFunction(name){
   assert.ok(match,'Função real ausente: '+name);return match[0];
 }
 function harness({store=new Map(),handler=async()=>accepted}={}){
-  const calls=[],alerts=[],state={pgRespondido:{}};
+  const calls=[],alerts=[],timeouts=[],state={pgRespondido:{}};
   let transport=handler;
   const window={APP_CONFIG:{API_URL:'https://app.ficticio.invalid/api',API_MODE:'json',API_RETRY_COUNT:0,
-    API_TIMEOUT_MS:60000,STORAGE_CACHE_PREFIX:'teste_',STORAGE_DRIVER_KEY:'teste_driver',STORAGE_TOKEN_KEY:'teste_token'},
+    API_TIMEOUT_MS:15000,STORAGE_CACHE_PREFIX:'teste_',STORAGE_DRIVER_KEY:'teste_driver',STORAGE_TOKEN_KEY:'teste_token'},
     location:{origin:'https://app.ficticio.invalid'}};
   const ctx=vm.createContext({window,localStorage:storage(store),sessionStorage:storage(new Map()),
     navigator:{userAgent:'teste-node',onLine:true},URL,URLSearchParams,AbortController,Date,Map,Set,Number,String,Array,
     console,Response,queueMicrotask,
     // Acelera somente a espera entre retries; o relógio e o código de envio continuam reais.
-    setTimeout:(fn,ms)=>{const timer={cancelled:false};if(ms<5000)queueMicrotask(()=>{if(!timer.cancelled)fn();});return timer;},
+    setTimeout:(fn,ms)=>{timeouts.push(ms);const timer={cancelled:false};if(ms<5000)queueMicrotask(()=>{if(!timer.cancelled)fn();});return timer;},
     clearTimeout:timer=>{if(timer)timer.cancelled=true;},
     fetch:async(url,options)=>{
       const parsed=new URL(url);assert.equal(parsed.origin,'https://app.ficticio.invalid');
@@ -50,7 +50,7 @@ function harness({store=new Map(),handler=async()=>accepted}={}){
   const page=vm.runInContext(pageFunction('pgRespostaAnterior')+'\n'+pageFunction('enviarConfirmacao')+
     '\n({pgRespostaAnterior,enviarConfirmacao});',ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
   return {api,Pg:window.PgPorta,state,calls,alerts,store,
-    send:page.enviarConfirmacao,previous:page.pgRespostaAnterior,
+    timeouts,send:page.enviarConfirmacao,previous:page.pgRespostaAnterior,
     setHandler:h=>{transport=h;},queue:()=>JSON.parse(store.get(QUEUE)||'[]'),
     enqueue(row,tsDevice=T1,{refused=false,reason='Recusa fictícia',response=paid,action='confirmarPagamento'}={}){
       const params=action==='confirmarPagamento'?window.PgPorta.montarParams(row,tsDevice,response,true):{action,row,ts_device:tsDevice};
@@ -153,6 +153,25 @@ test('processarFila simultâneo não duplica tentativa e preserva recusa chegada
   h.enqueue(1,T1);const first=h.api.processarFila();await entered;
   h.enqueue(1,T3,{refused:true});await h.api.processarFila();assert.equal(h.calls.length,1);
   release(accepted);await first;assert.deepEqual(signatures(h),[[1,T3,true,'confirmarPagamento']]);
+});
+test('somente confirmarPagamento espera 45s, inclusive após recarregar a fila',async()=>{
+  const h=harness();await h.send(1,paid,T1,false);
+  assert.deepEqual(h.timeouts,[45000]);
+  await h.api.apiGet({action:'marcarEntregue',row:1},{retries:0});
+  assert.deepEqual(h.timeouts,[45000,15000]);
+  h.enqueue(2,T2);const reloaded=harness({store:h.store});await reloaded.api.processarFila();
+  assert.deepEqual(reloaded.timeouts,[45000]);assert.equal(reloaded.queue().length,0);
+});
+test('recebimento coletivo conserva intenção idêntica após falha e recarga',async()=>{
+  const response={forma:'credito-entrega',operadora:null,valor:140,digitado:false,
+    grupo:'1:'+T1,grupoRows:[1,2],cartaoAgrupado:true};
+  const h=harness({handler:async()=>{throw Error('ACK perdido fictício');}});
+  await h.send(1,response,T1,false);
+  const payload=copy(h.queue()[0].params);
+  const reloaded=harness({store:h.store});await reloaded.api.processarFila();
+  assert.deepEqual(reloaded.calls[0],Object.fromEntries(Object.entries(payload).map(([k,v])=>[k,String(v)])));
+  assert.equal(reloaded.calls[0].pg_grupo,'1:'+T1);
+  assert.equal(reloaded.calls[0].pg_valor,'140.00');assert.equal(reloaded.queue().length,0);
 });
 let failures=0;
 for(const [name,run] of tests){try{await run();console.log('PASS '+name);}catch(e){failures++;console.error('FAIL '+name+'\n'+e.stack);}}

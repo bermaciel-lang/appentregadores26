@@ -144,7 +144,7 @@ function buildMapsUrl(item) {
     return cached.value;
   }
 
-  function loadJSONP(url) {
+  function loadJSONP(url, timeoutMs = C.API_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
       const callback = 'cb' + Date.now() + Math.floor(Math.random() * 1000);
       const script = document.createElement('script');
@@ -166,7 +166,7 @@ function buildMapsUrl(item) {
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error('Tempo esgotado ao chamar a API'));
-      }, C.API_TIMEOUT_MS);
+      }, timeoutMs);
 
       window[callback] = (data) => {
         clearTimeout(timeout);
@@ -207,9 +207,9 @@ function buildMapsUrl(item) {
     return url.toString();
   }
 
-  async function fetchJson(url) {
+  async function fetchJson(url, timeoutMs = C.API_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -292,13 +292,16 @@ function espelharNoPainel(body) {
   async function apiGet(params, options) {
     const opt = options || {};
     const url = buildApiUrl(params);
+    // Um recebimento coletivo consulta até 20 pedidos antes da primeira gravação.
+    // A fila conserva o mesmo ato; não iniciar retries enquanto a conferência ainda roda.
+    const timeoutMs = params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS;
     const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
     let lastError = null;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        if (C.API_MODE === 'json') return await fetchJson(url);
-        return await loadJSONP(url);
+        if (C.API_MODE === 'json') return await fetchJson(url, timeoutMs);
+        return await loadJSONP(url, timeoutMs);
       } catch (error) {
         lastError = error;
         if (attempt < retries) {
