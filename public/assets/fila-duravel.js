@@ -31,7 +31,10 @@
       return new Promise((resolve,reject) => {
         let tx,valor,motivo;
         try {
-          tx=banco.transaction(stores,modo);
+          // Prefere persistência física antes do complete para dados que não podem ser reconstruídos.
+          tx=modo==='readwrite'
+            ? banco.transaction(stores,modo,{durability:'strict'})
+            : banco.transaction(stores,modo);
           tx.oncomplete=()=>resolve(valor);
           tx.onabort=()=>reject(motivo || tx.error || Error('A gravação no aparelho foi interrompida.'));
           tx.onerror=()=>{};
