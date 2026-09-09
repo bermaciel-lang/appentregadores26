@@ -1,34 +1,6 @@
-// ====================================================================
-// pagamento-porta.js — o entregador CONFIRMA como o cliente pagou NA PORTA (05/09/2026).
-//
-// O dono (05/09): "quando o pagamento for NA ENTREGA [...] ao finalizar quero um modal
-// perguntando para o ENTREGADOR confirmar o VALOR e a FORMA que o cliente pagou. Aí sabemos
-// também o HORÁRIO aproximado [...] e dá pra pesquisar no extrato da Cielo."
-//
-// Por que existe como arquivo separado (e não dentro de page-entregas.js):
-//   1. a LÓGICA PURA (o que o modal monta, o que vai no payload) fica provável em node, sem
-//      navegador: scripts/_t-pagamento-porta.mjs carrega este arquivo com um AppUI de mentira;
-//   2. o fluxo é chamado por DUAS portas (o botão Entregue e o menu de "entrega em andamento"),
-//      e uma função só garante que as duas montam a MESMA coisa.
-//
-// ⭐ A ordem dos atos joga a favor: a entrega acontece ANTES de o dono finalizar o pedido, e a
-//    NF-e só sai na finalização (manual). A resposta daqui chega ANTES DA NOTA — no servidor ela
-//    vira a forma do pedido (erp_pedido_edicao / loja_pedidos) e faz a nota sair com o tPag certo.
-//
-// ⛔ REGRAS QUE ESTE ARQUIVO NÃO PODE QUEBRAR:
-//   - NUNCA impede o "Entregue": qualquer saída do modal (inclusive fechar o overlay ou uma
-//     exceção) vira uma resposta — no pior caso `naoSei` — e o fluxo segue.
-//   - NUNCA depende de rede: só monta a resposta; quem envia é page-entregas.js pela fila que
-//     já existe (core.js enfileirar/processarFila).
-//   - O caso comum ("pagou como disse") custa 1 TOQUE. Medido 05/09: 32,6 modais/dia.
-//
-// Contrato com o servidor (docs/DESENHO-pagamento-na-entrega.md §B.2/§B.5, no painel):
-//   entra pelo `entregas`: { perguntarPagamento: bool, formasNaPorta: [{chave, rotulo, operadora?, tom?}] }
-//                          e por item: pgFormaChave (forma DECLARADA como chave) · pgConfirmado
-//   sai como ação própria: { action:'confirmarPagamento', row, ts_device, pg_forma, pg_operadora?,
-//                            pg_valor ("" = não sei), pg_digitado (0/1), pg_grupo?, pg_obs?, pg_fila (0/1),
-//                            pg_naosei (1 só quando ele não soube dizer) }
-// ====================================================================
+// Pagamento na entrega: forma permitida, vale identificado e valor obrigatório.
+// Cancelar interrompe a confirmação; não transforma ausência em pagamento.
+// As respostas completas usam a fila existente, inclusive sem internet.
 (function (root, factory) {
   var api = factory();
   if (typeof module === 'object' && module && module.exports) module.exports = api; // node (réguas)
@@ -36,8 +8,6 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
-  // Quantas vezes o entregador pode "voltar" entre telas antes de o modal desistir sozinho e
-  // devolver "não sei" — trava contra loop infinito com o cliente esperando na porta.
   var MAX_VOLTAS = 6;
 
   function fmtBRL(n) {
@@ -117,25 +87,50 @@
       isFinite(Number(item.valor)) && Number(item.valor) >= 0;
   }
 
+  function cartao(chave) { return chave === 'credito-entrega' || chave === 'debito-entrega'; }
+  function equivalentes(a, b) { return a === b || (cartao(a) && cartao(b)); }
+  function proibida(f) {
+    if (!f) return true;
+    if (['credito-online', 'pix', 'bling-4936197', 'bling-2892828'].indexOf(f.chave) >= 0) return true;
+    var n = String(f.rotulo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return /credito.*online|pix.*(instabuy|cielo)|link.*pagamento.*multiplas.*formas/.test(n);
+  }
+  function ehVale(f) {
+    return f.chave === 'vale' || ['bling-822307', 'bling-1207605', 'bling-1014165', 'bling-1139437'].indexOf(f.chave) >= 0;
+  }
+  function formasPermitidas(formas) { return (formas || []).filter(function (f) { return f && f.chave && !proibida(f); }); }
+  function formaResolvida(item, formas) {
+    return formasPermitidas(formas).some(function (f) {
+      return f.chave === item.pgFormaChave && (!f.operadora || f.operadora === item.pgOperadora) &&
+        !(f.chave === 'vale' && (!item.pgOperadora || item.pgOperadora === 'outra'));
+    });
+  }
+  function respostaCompleta(r, formas) {
+    return !!r && !r.naoSei && !r.rejeitada && r.aprovacao !== 'rejeitado' && formasPermitidas(formas).some(function (f) {
+      return f.chave === r.forma && (!f.operadora || f.operadora === r.operadora);
+    }) && (r.forma === 'nao-pagou' || (r.valor != null && isFinite(Number(r.valor)) && Number(r.valor) >= 0 &&
+      (r.forma !== 'vale' || (r.operadora && (r.operadora !== 'outra' || String(r.valeNome || '').trim().length >= 2)))));
+  }
+
   // ---- As telas (o que cada uma MONTA, sem tocar em DOM: são dados para AppUI.escolher) ----
 
   // Tela 1 — o caso comum. Cancelar (ou fechar o overlay) = "Não sei / não vi".
   function opcoesTela1(item, grupo, formas) {
     var forma = item.pgFormaChave || null;
-    var rot = rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
+    var rot = cartao(forma) ? 'Crédito/Débito' : rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
     var ops = [];
-    if (grupo && grupo.length > 1 && forma && grupo.every(valorConfirmado)) {
+    if (grupo && grupo.length > 1 && formaResolvida(item, formas) && grupo.every(function (x) { return valorConfirmado(x) && equivalentes(x.pgFormaChave, forma) && x.pgOperadora === item.pgOperadora; })) {
       ops.push({ valor: 'tudo', rotulo: '✓ Pagou tudo junto: ' + fmtBRL(grupo.soma) + ' no ' + rot.toUpperCase() + ' (' + grupo.length + ' pedidos)', tom: 'success' });
     }
     // O 1º botão é o caso comum e ganha o tom verde (e o foco automático do ui.js).
-    if (forma && valorConfirmado(item)) ops.push({ valor: 'igual', rotulo: '✓ Pagou ' + fmtBRL(item.valor) + ' no ' + rot.toUpperCase(), tom: ops.length ? undefined : 'success' });
+    if (formaResolvida(item, formas) && valorConfirmado(item)) ops.push({ valor: 'igual', rotulo: '✓ Pagou ' + fmtBRL(item.valor) + ' no ' + rot.toUpperCase(), tom: ops.length ? undefined : 'success' });
     ops.push({ valor: 'diferente', rotulo: forma ? '✏️ Foi diferente (outra forma ou outro valor)' : '✏️ Informar como pagou' });
     return ops;
   }
 
   function mensagemTela1(item, formas) {
     var forma = item.pgFormaChave || null;
-    var rot = rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
+    var rot = cartao(forma) ? 'Crédito/Débito' : rotuloForma(forma, item.pgOperadora || null, formas, item.formaPagamento);
     var troco = Number(item.troco) || 0;
     var linha = valorConfirmado(item)
       ? 'Pedido ' + fmtBRL(item.valor) + (forma ? ' · ' + rot.toUpperCase() : ' · forma não informada')
@@ -146,14 +141,19 @@
 
   // Tela 2 — a forma. A declarada vem PRIMEIRO, marcada "(como no pedido)".
   function opcoesTela2(item, formas) {
-    var lista = (Array.isArray(formas) ? formas : []).filter(function (f) { return f && f.chave; });
-    var decl = item.pgFormaChave || null, declOp = item.pgOperadora || null;
-    var ops = lista.map(function (f) {
-      var ehDecl = f.chave === decl && (declOp ? f.operadora === declOp : !f.operadora);
-      return { valor: { forma: f.chave, operadora: f.operadora || null }, rotulo: String(f.rotulo || f.chave) + (ehDecl ? ' (como no pedido)' : ''), tom: ehDecl ? 'success' : (f.tom || undefined), _decl: ehDecl };
+    var lista = formasPermitidas(formas), ops = [], temCartao = false, temVale = false;
+    lista.forEach(function (f) {
+      if (cartao(f.chave)) {
+        if (!temCartao) ops.push({ valor: { grupo: 'cartao' }, rotulo: 'Crédito/Débito' });
+        temCartao = true; return;
+      }
+      if (ehVale(f)) {
+        if (!temVale) ops.push({ valor: { grupo: 'vale' }, rotulo: 'Vale — escolher operadora' });
+        temVale = true; return;
+      }
+      ops.push({ valor: { forma: f.chave, operadora: f.operadora || null }, rotulo: f.rotulo || f.chave });
     });
-    ops.sort(function (a, b) { return (b._decl ? 1 : 0) - (a._decl ? 1 : 0); });
-    return ops.map(function (o) { return { valor: o.valor, rotulo: o.rotulo, tom: o.tom }; });
+    return ops;
   }
 
   // ---- O payload que vai pro servidor (querystring, como o resto do app) ----
@@ -170,6 +170,8 @@
       pg_fila: fila ? 1 : 0,
     };
     if (r.operadora) p.pg_operadora = r.operadora;
+    if (r.valeNome) p.pg_vale_nome = String(r.valeNome).slice(0,80);
+    if (r.cartaoAgrupado) p.pg_cartao_agrupado = 1;
     if (r.grupo) p.pg_grupo = r.grupo;
     // As rows que o MESMO comprovante cobre (contrato §5, `pg_grupo_rows`): é por elas que o
     // servidor soma os totais do grupo e compara soma × comprovante. Sem isto (revisão 05/09) o
@@ -183,143 +185,117 @@
   // Frase curta para o cartão ("💳 Crédito · R$ 189,50 ✓").
   function fraseResposta(resposta, formas) {
     var r = resposta || {};
+    if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
     if (r.naoSei) return '💳 Pagamento: não soube dizer';
     if (r.forma === 'nao-pagou') return '⚠️ NÃO PAGOU';
-    var rot = rotuloForma(r.forma, r.operadora, formas, r.forma);
+    var rot = cartao(r.forma) ? 'Crédito/Débito' : (r.valeNome || rotuloForma(r.forma, r.operadora, formas, r.forma));
     var v = (r.valor === null || r.valor === undefined) ? 'valor não informado' : fmtBRL(r.valor);
     return '💳 ' + rot + ' · ' + v + (r.digitado ? ' (digitado)' : ' ✓');
   }
 
-  // ---- O FLUXO (as 4 telas). NUNCA lança, NUNCA devolve "aborta". ----
-  // ctx = { item, irmas, cfg, ui, anterior?, tsDevice, posicao? {n, de} }
-  // Devolve { porRow: { [row]: resposta | null }, manteve: bool }
-  //   resposta null = "manter" (já tinha respondido e não mudou) → não envia nada.
   async function perguntar(ctx) {
-    var item = ctx.item, ui = ctx.ui, cfg = ctx.cfg || {}, formas = cfg.formas || [];
-    var out = { porRow: {}, manteve: false };
+    var item = ctx.item, ui = ctx.ui, formas = formasPermitidas((ctx.cfg || {}).formas);
+    var out = { porRow: {}, manteve: false, cancelado: false };
     try {
       var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item]);
       if (!grupo.length) grupo = [item];
-      grupo.soma = grupo.reduce(function (s, x) { return s + (Number(x.valor) || 0); }, 0);
-
-      // Tela 4 — já respondeu antes (reaberto, ou está na fila): manter (1 toque) ou corrigir.
-      if (ctx.anterior) {
-        var esc4 = await ui.escolher('Você já respondeu: ' + fraseResposta(ctx.anterior, formas).replace(/^💳 /, '') + '\n\nQuer manter ou corrigir?', [
-          { valor: 'manter', rotulo: '✓ Manter', tom: 'success' },
-          { valor: 'corrigir', rotulo: '✏️ Corrigir' },
-        ], { titulo: '💳 Pagamento na entrega', textoCancelar: 'Manter' });
-        if (esc4 !== 'corrigir') { out.manteve = true; grupo.forEach(function (x) { out.porRow[Number(x.row)] = null; }); return out; }
-        // corrigir → cai nas telas 2/3 do pedido tocado (o grupo, se houver, responde 1 a 1)
+      grupo.soma = grupo.reduce(function (s, x) { return s + Number(x.valor || 0); }, 0);
+      var anteriorValido = respostaCompleta(ctx.anterior, formas);
+      if (ctx.anterior && anteriorValido) {
+        var esc = await ui.escolher('Você já informou: ' + fraseResposta(ctx.anterior, formas) + '\nQuer manter ou corrigir?', [
+          { valor: 'manter', rotulo: 'Manter', tom: 'success' }, { valor: 'corrigir', rotulo: 'Corrigir' }
+        ], { titulo: 'Pagamento na entrega', textoCancelar: 'Cancelar' });
+        if (cancelou(esc)) return { porRow: {}, manteve: false, cancelado: true };
+        if (esc === 'manter') { out.manteve = true; return out; }
       }
-
-      for (var gi = 0; gi < grupo.length; gi++) {
-        var x = grupo[gi];
-        var pos = grupo.length > 1 ? (gi + 1) + ' de ' + grupo.length + ' · ' : '';
-        // Corrigindo uma resposta anterior: pula a tela 1 (ele já disse que foi diferente).
-        var resp = await perguntarUm(x, ui, formas, gi === 0 && !ctx.anterior ? grupo : null, pos, !!ctx.anterior);
-        if (resp && resp.tudo) {
-          // "Pagou tudo junto": UMA resposta para TODAS as irmãs; o servidor compara soma × comprovante.
+      for (var i = 0; i < grupo.length; i++) {
+        var r = await perguntarUm(grupo[i], ui, formas, i === 0 && !ctx.anterior ? grupo : null,
+          grupo.length > 1 ? (i + 1) + ' de ' + grupo.length + ' · ' : '', !!ctx.anterior);
+        if (!r) return { porRow: {}, manteve: false, cancelado: true };
+        if (r.tudo) {
           var chaveGrupo = String(Number(item.row)) + ':' + String(ctx.tsDevice || '');
-          var rowsGrupo = grupo.map(function (y) { return Number(y.row); });
-          grupo.forEach(function (y) {
-            out.porRow[Number(y.row)] = { forma: resp.forma, operadora: resp.operadora, valor: grupo.soma, digitado: false, grupo: chaveGrupo, grupoRows: rowsGrupo };
+          var rowsGrupo = grupo.map(function (x) { return Number(x.row); });
+          grupo.forEach(function (x) {
+            out.porRow[Number(x.row)] = { forma: x.pgFormaChave, operadora: x.pgOperadora || null,
+              valor: grupo.soma, digitado: false, grupo: chaveGrupo, grupoRows: rowsGrupo, cartaoAgrupado: cartao(x.pgFormaChave) };
           });
           return out;
         }
-        out.porRow[Number(x.row)] = resp;
+        out.porRow[Number(grupo[i].row)] = r;
       }
       return out;
     } catch (e) {
-      // ⛔ O modal quebrou (AppUI ausente, exceção): a entrega NÃO pode parar. Registra "não sei"
-      // com o motivo, e segue.
-      try { console.error('[pagamento-porta]', e); } catch (e2) {}
-      var g2 = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item]);
-      if (!g2.length) g2 = [item];
-      g2.forEach(function (y) { if (out.porRow[Number(y.row)] === undefined) out.porRow[Number(y.row)] = { forma: y.pgFormaChave || '', operadora: null, valor: null, digitado: false, naoSei: true, obs: 'erro-no-modal' }; });
-      return out;
+      try { console.error('[pagamento-porta]', e); await ui.alerta('Não foi possível concluir o pagamento. Confira novamente antes de salvar.', { tom: 'warn' }); } catch (_) {}
+      return { porRow: {}, manteve: false, cancelado: true };
     }
   }
 
-  // Um pedido: telas 1 → (2 → 3). Devolve resposta (nunca null).
-  async function perguntarUm(item, ui, formas, grupoTela1, posicao, direto2) {
-    var declarada = { forma: item.pgFormaChave || null, operadora: item.pgOperadora || null };
-    var voltas = 0;
-    var naoSei = { forma: declarada.forma || '', operadora: declarada.operadora, valor: null, digitado: false, naoSei: true };
-
-    while (voltas++ < MAX_VOLTAS) {
-      var escolha;
-      if (declarada.forma && !(direto2 && voltas === 1)) {
-        // Tela 1 — 1 toque no caso comum. Cancelar/fechar = não sei.
-        escolha = await ui.escolher(mensagemTela1(item, formas), opcoesTela1(item, grupoTela1, formas), {
-          titulo: '💳 ' + posicao + 'Como o cliente pagou?', textoCancelar: 'Não sei / não vi',
-        });
-        if (cancelou(escolha)) return naoSei;
-        if (escolha === 'tudo') return { tudo: true, forma: declarada.forma, operadora: declarada.operadora };
-        if (escolha === 'igual' && valorConfirmado(item)) return { forma: declarada.forma, operadora: declarada.operadora, valor: Number(item.valor) || 0, digitado: false };
-      } else {
-        escolha = 'diferente'; // sem forma declarada → direto na tela 2
+  async function perguntarUm(item, ui, formas, grupo, pos, direto) {
+    for (var volta = 0; volta < MAX_VOLTAS; volta++) {
+      if (!direto && formaResolvida(item, formas)) {
+        var e = await ui.escolher(mensagemTela1(item, formas), opcoesTela1(item, grupo, formas),
+          { titulo: pos + 'Como o cliente pagou?', textoCancelar: 'Cancelar' });
+        if (cancelou(e)) return null;
+        if (e === 'tudo' && opcoesTela1(item, grupo, formas).some(function (o) { return o.valor === 'tudo'; })) return { tudo: true };
+        if (e === 'igual' && valorConfirmado(item)) return { forma: item.pgFormaChave, operadora: item.pgOperadora || null,
+          valor: Number(item.valor), digitado: false, cartaoAgrupado: cartao(item.pgFormaChave) };
       }
-
-      // Tela 2 — a forma.
-      var ops2 = opcoesTela2(item, formas);
-      if (!ops2.length) {
-        // O servidor não mandou a lista (ou ela está vazia): não dá para escolher forma; ainda
-        // vale perguntar o VALOR, que é a segunda fonte que o dono pediu.
-        var soValor = await telaValor(item, ui, declarada.forma, formas);
-        if (soValor === 'voltar') { if (!declarada.forma) return naoSei; continue; }
-        return { forma: declarada.forma || '', operadora: declarada.operadora, valor: soValor.valor, digitado: soValor.digitado };
+      direto = false;
+      var ops = opcoesTela2(item, formas);
+      if (!ops.length) { await ui.alerta('As formas de pagamento não estão disponíveis. Atualize o app para continuar.', { tom: 'warn' }); return null; }
+      var f = await ui.escolher('Qual foi a forma de pagamento?', ops,
+        { titulo: pos + 'Forma de pagamento', textoCancelar: 'Cancelar' });
+      if (cancelou(f)) return null;
+      if (f.grupo === 'cartao') {
+        if (cartao(item.pgFormaChave) && formaResolvida(item, formas)) {
+          f = { forma: item.pgFormaChave, operadora: null, cartaoAgrupado: true };
+        } else {
+          f = await ui.escolher('Qual tipo aparece no comprovante?', formas.filter(function (x) { return cartao(x.chave); }).map(function (x) {
+            return { valor: { forma: x.chave, operadora: null }, rotulo: x.chave === 'credito-entrega' ? 'Crédito' : 'Débito' };
+          }), { titulo: 'Cartão na entrega', textoCancelar: 'Voltar' });
+          if (cancelou(f)) continue;
+        }
+      } else if (f.grupo === 'vale') {
+        f = await ui.escolher('Qual foi o vale usado?', formas.filter(ehVale).map(function (x) {
+          return { valor: { forma: x.chave, operadora: x.operadora || null }, rotulo: x.rotulo || x.chave };
+        }), { titulo: 'Operadora do vale', textoCancelar: 'Voltar' });
+        if (cancelou(f)) continue;
+        if (f.operadora === 'outra') {
+          var nome = await ui.perguntar('Nome do vale usado:', { titulo: 'Outro vale', textoOk: 'Continuar', textoCancelar: 'Voltar', placeholder: 'Nome da operadora' });
+          if (cancelou(nome)) continue;
+          if (String(nome).trim().length < 2) { await ui.alerta('Informe o nome do vale.', { tom: 'warn' }); continue; }
+          f.valeNome = String(nome).trim().slice(0,80);
+        }
       }
-      var f2 = await ui.escolher('Qual foi a forma de pagamento?', ops2, { titulo: '💳 ' + posicao + 'Forma de pagamento', textoCancelar: declarada.forma ? 'Voltar' : 'Não sei / não vi' });
-      if (cancelou(f2) || !f2.forma) { if (!declarada.forma) return naoSei; continue; } // volta à tela 1
-
-      if (f2.forma === 'nao-pagou') {
-        var confirmar = await ui.escolher('Confirma que entregou o pedido e o cliente NÃO PAGOU?', [
-          { valor: 'sim', rotulo: 'Confirmar NÃO PAGOU', tom: 'danger' }
-        ], { titulo: 'NÃO PAGOU', textoCancelar: 'Voltar' });
-        if (confirmar !== 'sim') continue;
+      if (!f.forma || !formas.some(function (x) { return x.chave === f.forma && (!x.operadora || x.operadora === f.operadora); })) continue;
+      if (f.forma === 'nao-pagou') {
+        var n = await ui.escolher('Confirma que entregou o pedido e o cliente NÃO PAGOU?',
+          [{ valor: 'sim', rotulo: 'Confirmar NÃO PAGOU', tom: 'danger' }], { titulo: 'NÃO PAGOU', textoCancelar: 'Voltar' });
+        if (n !== 'sim') continue;
         return { forma: 'nao-pagou', operadora: null, valor: null, digitado: false,
           obs: 'O entregador declarou no aplicativo: NÃO PAGOU. Pedido entregue sem receber.' };
       }
-      // Tela 3 — o valor EXATO do comprovante.
-      var v3 = await telaValor(item, ui, f2.forma, formas);
-      if (v3 === 'voltar') continue;
-      return { forma: f2.forma, operadora: f2.operadora || null, valor: v3.valor, digitado: v3.digitado };
+      var v = await telaValor(item, ui, f.forma);
+      if (!v) return null;
+      return { forma: f.forma, operadora: f.operadora || null, valor: v.valor, digitado: v.digitado,
+        ...(f.valeNome ? { valeNome: f.valeNome } : {}), ...(f.cartaoAgrupado ? { cartaoAgrupado: true } : {}) };
     }
-    return naoSei;
+    return null;
   }
 
-  // Tela 3. Devolve { valor: number|null, digitado: bool } ou 'voltar'.
-  // "É esse mesmo" aceita o pré-preenchido (digitado=false → NÃO é fonte independente de valor).
-  // OK com número = digitado=true. Vazio = valor null ("não sei o valor", a forma continua valendo).
-  async function telaValor(item, ui, formaChave, formas) {
-    var confirmado = valorConfirmado(item);
-    var pre = confirmado ? Number(item.valor) : null;
-    var dinheiro = ehDinheiro(formaChave);
-    var msg = dinheiro
-      ? 'Quanto você RECEBEU em dinheiro? (o valor do pedido é ' + fmtBRL(pre) + ')'
-      : 'Digite exatamente o valor que aparece no comprovante.\n(o valor do pedido é ' + fmtBRL(pre) + ')';
-    if (!confirmado) msg = dinheiro ? 'Quanto você RECEBEU em dinheiro?' : 'Digite exatamente o valor que aparece no comprovante.';
-    var atual = confirmado ? pre.toFixed(2).replace('.', ',') : '';
-    for (var tent = 0; tent < 3; tent++) {
-      var raw = await ui.perguntar(msg, {
-        titulo: dinheiro ? '💵 Valor pago — quanto recebeu em dinheiro' : '🧾 Valor pago — igual no comprovante',
-        valor: atual, placeholder: 'Ex.: 189,50', inputmode: 'decimal',
-        textoOk: 'Confirmar', textoCancelar: confirmado ? 'É esse mesmo' : 'Não sei o valor',
-      });
-      if (cancelou(raw)) return { valor: pre, digitado: false }; // "É esse mesmo" / fechou = aceita o pré-preenchido
-      var s = String(raw).trim();
-      if (!s) return { valor: null, digitado: false }; // apagou tudo = não sei o valor
-      var n = parseValor(s);
-      if (n === null) {
-        atual = s;
-        await ui.alerta('Valor inválido. Digite só números, com vírgula nos centavos (ex.: 189,50).', { titulo: 'Valor inválido', tom: 'warn' });
-        continue;
-      }
-      // Igual ao pré-preenchido (ao centavo) = ele "aceitou", não "digitou": a coluna
-      // valor_digitado é o que faz a fonte ser ou não independente (desenho §A.3).
-      return { valor: n, digitado: !confirmado || Math.abs(n - pre) > 0.004 };
+  async function telaValor(item, ui, forma) {
+    var msg = ehDinheiro(forma) ? 'Informe quanto recebeu em dinheiro (desconte o troco devolvido).' : 'Informe o valor cobrado, igual no comprovante.';
+    if (valorConfirmado(item)) msg += '\nValor do pedido: ' + fmtBRL(item.valor);
+    var atual = '';
+    for (var i = 0; i < MAX_VOLTAS; i++) {
+      var raw = await ui.perguntar(msg, { titulo: 'Valor recebido — obrigatório', valor: atual, placeholder: 'Ex.: 189,50',
+        inputmode: 'decimal', textoOk: 'Salvar pagamento', textoCancelar: 'Cancelar' });
+      if (cancelou(raw)) return null;
+      var n = parseValor(raw);
+      if (n == null || n >= 10000000000) { atual = String(raw); await ui.alerta('Informe um valor válido para salvar, igual no comprovante.', { tom: 'warn' }); continue; }
+      return { valor: n, digitado: true };
     }
-    return { valor: null, digitado: false };
+    return null;
   }
 
   return {
@@ -336,5 +312,6 @@
     fraseResposta: fraseResposta,
     perguntar: perguntar,
     MAX_VOLTAS: MAX_VOLTAS,
+    respostaCompleta: respostaCompleta, formasPermitidas: formasPermitidas,
   };
 });
