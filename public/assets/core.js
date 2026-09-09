@@ -503,13 +503,34 @@ async function apiMarcarCancelado(row, obs) {
 
   // ===== Fila offline: se o envio falhar (sem sinal), guarda e reenvia sozinho =====
   function filaKey() { return C.STORAGE_CACHE_PREFIX + 'fila_v1'; }
-  function filaLer() { try { return JSON.parse(localStorage.getItem(filaKey()) || '[]'); } catch (e) { return []; } }
-  function filaSalvar(arr) { localStorage.setItem(filaKey(), JSON.stringify(Array.isArray(arr) ? arr : [])); }
-  function enfileirar(params, meta) {
-    const arr = filaLer();
-    arr.push({ precisaCorrigir: !!(meta && meta.erroPagamento), erro: meta && meta.erroPagamento || null, id: String(Date.now()) + '_' + Math.random().toString(36).slice(2, 7), params: params, meta: meta || {}, ts: Date.now() });
-    filaSalvar(arr);
+  function filaLerEstrita() {
+    const raw = localStorage.getItem(filaKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr) || arr.some(x => !x || !x.id || !x.params || typeof x.params !== 'object')) {
+      throw new Error('A fila do aparelho está ilegível. Não foi possível guardar outra declaração.');
+    }
+    return arr;
   }
+  function filaLer() { try { return filaLerEstrita(); } catch (e) { return []; } }
+  function filaSalvar(arr) {
+    const raw = JSON.stringify(arr);
+    localStorage.setItem(filaKey(), raw);
+    if (localStorage.getItem(filaKey()) !== raw) throw new Error('Não foi possível confirmar a gravação no aparelho.');
+  }
+  // O ato inteiro é persistido em uma escrita antes de qualquer rede: marcações e pagamentos.
+  function enfileirarLote(entradas) {
+    if (!Array.isArray(entradas) || !entradas.length) return [];
+    const arr = filaLerEstrita();
+    const novas = entradas.map(({ params, meta }) => ({
+      precisaCorrigir: !!(meta && meta.erroPagamento), erro: meta && meta.erroPagamento || null,
+      id: String(Date.now()) + '_' + Math.random().toString(36).slice(2, 12),
+      params: JSON.parse(JSON.stringify(params)), meta: JSON.parse(JSON.stringify(meta || {})), ts: Date.now()
+    }));
+    filaSalvar(arr.concat(novas));
+    return novas.map(x => x.id);
+  }
+  function enfileirar(params, meta) { return enfileirarLote([{ params, meta }])[0]; }
+  function filaPorIds(ids) { const alvo = new Set(ids); return filaLerEstrita().filter(x => alvo.has(x.id)); }
   function filaRowsPendentes() {
     const set = new Set();
     filaLer().forEach((x) => { const r = Number(x.meta && x.meta.row); if (r) set.add(r); });
@@ -525,54 +546,59 @@ async function apiMarcarCancelado(row, obs) {
   function removerConfirmacoesRecusadas(row, tsDevice) {
     const aceitoEm = Date.parse(tsDevice || '');
     if (!Number.isFinite(aceitoEm)) return;
-    filaSalvar(filaLer().filter(x => {
+    filaSalvar(filaLerEstrita().filter(x => {
       const p = x.params || {}, anteriorEm = Date.parse(p.ts_device || '');
       return !(x.precisaCorrigir && p.action === 'confirmarPagamento' &&
         Number(p.row) === Number(row) && Number.isFinite(anteriorEm) && anteriorEm <= aceitoEm);
     }));
   }
-  let _processandoFila = false;
-  async function processarFila() {
-    if (_processandoFila) return;
-    _processandoFila = true;
-    try {
-      const arr = filaLer();
-      for (const item of arr.slice()) {
-        if (item.precisaCorrigir) continue;
-        try {
-          const res = await apiGet(item.params, { retries: 1 });
-          if (res && res.ok && res.pagamento && res.pagamento.gravado === false && item.params.action === 'confirmarPagamento') {
-            filaSalvar(filaLer().map(x => x.id === item.id ? { ...x, precisaCorrigir: true, erro: res.pagamento.porque || 'Pagamento precisa de correção.' } : x));
-          }
-          else if (res && res.ok) {
-            // HTTP/ok sem confirmação explícita não comprova que o pagamento foi gravado.
-            if (item.params.action === 'confirmarPagamento') {
-              if (!res.pagamento || res.pagamento.gravado !== true) continue;
-              removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
-            }
-            filaSalvar(filaLer().filter((x) => x.id !== item.id));
-          }
-          else if (res && res.naoEncontrado && item.params.action === 'confirmarPagamento') {
-            filaSalvar(filaLer().map(x => x.id === item.id ? { ...x, precisaCorrigir: true, erro: 'Entrega não encontrada. A equipe precisa conferir este pagamento.' } : x));
-          }
-          else if (res && res.naoEncontrado) { filaSalvar(filaLer().filter((x) => x.id !== item.id)); } // parada não existe mais (rota refeita) -> descarta, não adianta repetir
-          // ⛔ A CONFIRMAÇÃO DE PAGAMENTO NUNCA SEGURA A ENTREGA ATRÁS DELA (revisão 05/09/2026).
-          // O servidor responde ok:false "tente depois" quando o cofre está ILEGÍVEL ou o banco
-          // falhou — e um cofre com valor errado ("abc") fica assim por HORAS. Com o `break` de
-          // baixo, um confirmarPagamento preso na frente deixava TODAS as marcações de entrega
-          // seguintes sem subir. A entrega vale mais que a confirmação: ela fica na fila e é
-          // pulada; fica preservada no aparelho até confirmação explícita ou correção.
-          // Uma trilha de tentativa no servidor não substitui a declaração original.
-          else if (item.params && item.params.action === 'confirmarPagamento') {
-            // Pagamento não expira: o comprovante informado precisa sobreviver até confirmação/correção.
-            continue;
-          }
-          else break; // ainda falhando -> tenta depois
-        } catch (e) { break; } // sem conexão -> tenta depois
+  let _processamentoFila = null;
+  function processarFila() {
+    // Foreground e timer aguardam o MESMO consumidor. Não abrem um segundo envio.
+    if (_processamentoFila) return _processamentoFila;
+    _processamentoFila = consumirFila().catch(error => {
+      console.error('[fila]', error);
+      return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
+    }).finally(() => { _processamentoFila = null; });
+    return _processamentoFila;
+  }
+  async function consumirFila() {
+    const tentados = new Set();
+    for (;;) {
+      // Inclui atos guardados enquanto uma chamada estava pendente, sem repetir falhas nesta rodada.
+      const item = filaLerEstrita().find(x => !x.precisaCorrigir && !tentados.has(x.id));
+      if (!item) break;
+      tentados.add(item.id);
+      const pagamento = item.params.action === 'confirmarPagamento';
+      let res;
+      try { res = await apiGet(item.params, { retries: 1 }); }
+      catch (error) {
+        if (pagamento) filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
+        break; // sem rede: preserva o restante do ato para a próxima rodada
       }
-      // Reenvia também o INICIAR/FINALIZAR rota que ficou pendente (KM+foto salvos no aparelho).
-      try { await reenviarRotaPendente(); } catch (e) {}
-    } finally { _processandoFila = false; }
+      if (pagamento && res && res.ok && res.pagamento && res.pagamento.gravado === false) {
+        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, precisaCorrigir: true,
+          erro: res.pagamento.porque || 'Pagamento precisa de correção.' } : x));
+      } else if (res && res.ok) {
+        // HTTP 200/ok não prova a gravação da declaração. Remove somente o ID confirmado.
+        if (pagamento && (!res.pagamento || res.pagamento.gravado !== true)) {
+          filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
+          continue;
+        }
+        if (pagamento) removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
+        filaSalvar(filaLerEstrita().filter(x => x.id !== item.id));
+      } else if (res && res.naoEncontrado && pagamento) {
+        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, precisaCorrigir: true,
+          erro: 'Entrega não encontrada. A equipe precisa conferir este pagamento.' } : x));
+      } else if (res && res.naoEncontrado) {
+        filaSalvar(filaLerEstrita().filter(x => x.id !== item.id));
+      } else if (pagamento) {
+        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
+        continue; // uma referência aguardando confirmação não impede marcações posteriores
+      } else break;
+    }
+    try { await reenviarRotaPendente(); } catch (e) {}
+    return { erroArmazenamento: null };
   }
 
   async function abrirWhatsapp(row) {
@@ -811,6 +837,8 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     apiMarcarCancelado,
     gerarResumoEntregas,
     enfileirar,
+    enfileirarLote,
+    filaPorIds,
     processarFila,
     filaRowsPendentes,
     filaParamsPendentes,
