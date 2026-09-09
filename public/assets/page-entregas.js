@@ -289,9 +289,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const emAndamento = key === 'start';
     const expandido = state.expandidos.has(row);
     const enviandoEsta = state.enviando && Number(state.enviando.row) === row;
-    const pendenteFila = !enviandoEsta && api.filaRowsPendentes && api.filaRowsPendentes().has(row);
-    const dis = enviandoEsta ? 'disabled' : '';
-    const envioHtml = enviandoEsta
+    const pendentesLocais = api.filaRowsPendentes();
+    const filaDisponivel = pendentesLocais !== null;
+    const pendenteFila = !enviandoEsta && filaDisponivel && pendentesLocais.has(row);
+    const dis = enviandoEsta || !filaDisponivel ? 'disabled' : '';
+    const envioHtml = !filaDisponivel ? '<div class="dc-envio">Conferindo os dados guardados neste aparelho…</div>' : enviandoEsta
       ? '<div class="dc-envio">⏳ Enviando, aguarde…</div>'
       : (pendenteFila ? '<div class="dc-envio">⏳ Aguardando envio (sobe sozinho quando a internet voltar)</div>' : '');
     const restr = String(item.restricao || '').trim();
@@ -511,6 +513,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     errorBox.classList.add('hidden');
 
     try {
+      await api.filaPronta(); // hidrata antes de tratar pendência local como inexistente
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
       if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
@@ -879,13 +882,13 @@ async function handleFinalizarRota() {
   }
 
   // Nenhuma chamada de rede antecede esta gravação do ATO INTEIRO no aparelho.
-  function guardarRecebimento(marcacoes, pgPorRow, tsDevice) {
+  async function guardarRecebimento(marcacoes, pgPorRow, tsDevice) {
     const entradas = marcacoes.map(params => ({ params, meta: { row: Number(params.row) } }));
     for (const rk of Object.keys(pgPorRow || {})) {
       const r = Number(rk), resposta = pgPorRow[r];
       if (resposta) entradas.push({ params: window.PgPorta.montarParams(r, tsDevice, resposta, false), meta: { row: r } });
     }
-    const ids = api.enfileirarLote(entradas);
+    const ids = await api.enfileirarLote(entradas);
     // O estado visual só muda depois que a gravação local foi confirmada.
     for (const rk of Object.keys(pgPorRow || {})) {
       const r = Number(rk);
@@ -896,7 +899,7 @@ async function handleFinalizarRota() {
   async function enviarRecebimentoGuardado(ids) {
     const resultado = await api.processarFila();
     if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
-    const restantes = api.filaPorIds(ids);
+    const restantes = await api.filaPorIds(ids);
     const recusados = restantes.filter(x => x.precisaCorrigir);
     for (const x of recusados) {
       const row = Number(x.params.row);
@@ -905,6 +908,9 @@ async function handleFinalizarRota() {
     if (recusados.length) {
       await AppUI.alerta('Pagamento precisa de conferência: ' + (recusados[0].erro || 'Confira os dados com a equipe.') +
         ' A declaração continua guardada no aparelho.', { titulo: 'Conferir pagamento', tom: 'warn' });
+    } else if (resultado && resultado.sincronizacaoIndisponivel && restantes.length) {
+      await AppUI.alerta('A sincronização não está disponível nesta versão do navegador. Atualize este navegador para enviar os registros. Os dados continuam guardados nele.',
+        { titulo: 'Guardado no aparelho', tom: 'warn' });
     } else if (restantes.length) {
       await AppUI.alerta('Aguardando envio. A marcação e o pagamento estão guardados neste aparelho e serão tentados novamente com conexão.',
         { titulo: 'Guardado no aparelho', tom: 'warn' });
@@ -915,7 +921,7 @@ async function handleFinalizarRota() {
   async function enviarConfirmacao(row, resposta, tsDevice, marcacaoNaFila) {
     if (!window.PgPorta || !resposta) return;
     const r = Number(row);
-    const ids = guardarRecebimento([], { [r]: resposta }, tsDevice);
+    const ids = await guardarRecebimento([], { [r]: resposta }, tsDevice);
     if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids);
   }
 
@@ -971,7 +977,7 @@ async function handleFinalizarRota() {
       try {
         for (const r of alvo) {
           try { const res = await api.apiGet({ action: 'desfazer', row: r }, { retries: 3 }); if (!res || !res.ok) throw new Error('x'); }
-          catch (e) { api.enfileirar({ action: 'desfazer', row: r }, { row: Number(r) }); }
+          catch (e) { await api.enfileirar({ action: 'desfazer', row: r }, { row: Number(r) }); }
         }
         window.setTimeout(function () { carregarTudo(false); }, 700);
       } finally { state.sendingAction = false; state.enviando = null; renderList(); }
@@ -1019,7 +1025,7 @@ async function handleFinalizarRota() {
         if (esc === 'done') {
           try {
             const marcacoes = irmasA.map(x => ({ action: 'marcarEntregue', row: Number(x.row), obs: 'Entregue', ts_device: tsA }));
-            const ids = guardarRecebimento(marcacoes, pgA && !pgA.manteve ? pgA.porRow : null, tsA);
+            const ids = await guardarRecebimento(marcacoes, pgA && !pgA.manteve ? pgA.porRow : null, tsA);
             irmasA.forEach(x => { updateLocalStatus(Number(x.row), 'Entregue', 'Entregue'); state.expandidos.delete(Number(x.row)); });
             await enviarRecebimentoGuardado(ids);
           } catch (error) {
@@ -1037,7 +1043,7 @@ async function handleFinalizarRota() {
           state.expandidos.delete(r);
           let naFila = false;
           try { const res = await api.apiGet(params, { retries: 3 }); if (!res || !res.ok) throw new Error('x'); }
-          catch (e) { api.enfileirar(params, { row: r }); naFila = true; }
+          catch (e) { await api.enfileirar(params, { row: r }); naFila = true; }
           if (pgA && pgA.porRow && pgA.porRow[r]) await enviarConfirmacao(r, pgA.porRow[r], tsA, naFila);
         }
       }
@@ -1098,7 +1104,7 @@ async function handleFinalizarRota() {
         if (api.statusKey(item.status) !== 'start') {
           updateLocalStatus(row, 'Indo para entrega');
           try { const r = await api.apiIniciarEntrega(row); if (!r || !r.ok) throw new Error('x'); }
-          catch (e) { api.enfileirar({ action: 'iniciarEntrega', row: row }, { row: Number(row) }); }
+          catch (e) { await api.enfileirar({ action: 'iniciarEntrega', row: row }, { row: Number(row) }); }
         }
         await openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
         return;
@@ -1137,7 +1143,7 @@ async function handleFinalizarRota() {
         : act === 'fail' ? { action: 'marcarNaoEntregue', row: r, obs: obs || '', ts_device: tsDevice }
         : { action: 'marcarCancelado', row: r, obs: obs || '', ts_device: tsDevice };
 
-      const idsRecebimento = act === 'done' ? guardarRecebimento(rowsAlvo.map(paramsDe), pgPorRow, tsDevice) : null;
+      const idsRecebimento = act === 'done' ? await guardarRecebimento(rowsAlvo.map(paramsDe), pgPorRow, tsDevice) : null;
       rowsAlvo.forEach((r) => updateLocalStatus(r, nextStatus, obs)); // já deixa TODAS marcadas na tela
       // Ao MARCAR (entregue/não entregue/cancelado) o cartão MINIMIZA sozinho (Bernardo). Iniciar NÃO
       // minimiza — pelo contrário, expande (feito acima). Tocar de novo num concluído reabre pra corrigir.
@@ -1151,7 +1157,7 @@ async function handleFinalizarRota() {
       const falhas = [];
       for (const r of rowsAlvo) {
         try { const res = await api.apiGet(paramsDe(r), { retries: 3 }); if (!res || !res.ok) throw new Error('falhou'); }
-        catch (e2) { api.enfileirar(paramsDe(r), { row: Number(r) }); falhas.push(r); }
+        catch (e2) { await api.enfileirar(paramsDe(r), { row: Number(r) }); falhas.push(r); }
       }
       if (falhas.length) await AppUI.alerta('Sem conexão agora. ✅ A marcação foi guardada e será enviada sozinha quando a internet voltar (fica como "⏳ Aguardando envio").', { titulo: 'Sem conexão', tom: 'warn' });
       window.setTimeout(function () { carregarTudo(false); }, 800);
@@ -1164,6 +1170,8 @@ async function handleFinalizarRota() {
       renderList();
     }
   }
+
+  window.addEventListener('fila-entregas-mudou', function () { renderList(); });
 
   function startAutoRefresh() {
     stopAutoRefresh();

@@ -501,100 +501,77 @@ async function apiMarcarCancelado(row, obs) {
     return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() }, { retries: 3 });
   }
 
-  // ===== Fila offline: se o envio falhar (sem sinal), guarda e reenvia sozinho =====
-  function filaKey() { return C.STORAGE_CACHE_PREFIX + 'fila_v1'; }
-  function filaLerEstrita() {
-    const raw = localStorage.getItem(filaKey());
-    const arr = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(arr) || arr.some(x => !x || !x.id || !x.params || typeof x.params !== 'object')) {
-      throw new Error('A fila do aparelho está ilegível. Não foi possível guardar outra declaração.');
+  // ===== Fila do aparelho: IndexedDB é a autoridade; o snapshot só serve à renderização =====
+  const bancoFila = window.FilaDuravel && window.FilaDuravel.criar({
+    nome: (C.STORAGE_CACHE_PREFIX || 'entregas_') + 'fila_transacional_v1',
+    chaveLegada: (C.STORAGE_CACHE_PREFIX || '') + 'fila_v1',
+    onChange: () => {
+      if (window.dispatchEvent && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('fila-entregas-mudou'));
     }
-    return arr;
+  });
+  async function filaPronta() {
+    if (!bancoFila) throw new Error('O armazenamento de entregas não foi carregado. Reabra o aplicativo.');
+    await bancoFila.pronta();
   }
-  function filaLer() { try { return filaLerEstrita(); } catch (e) { return []; } }
-  function filaSalvar(arr) {
-    const raw = JSON.stringify(arr);
-    localStorage.setItem(filaKey(), raw);
-    if (localStorage.getItem(filaKey()) !== raw) throw new Error('Não foi possível confirmar a gravação no aparelho.');
+  function filaEstado() { return bancoFila ? bancoFila.estado() : { pronta: false, erro: 'Armazenamento indisponível' }; }
+  async function enfileirarLote(entradas) { await filaPronta(); return bancoFila.adicionar(entradas); }
+  async function enfileirar(params, meta) { return (await enfileirarLote([{ params, meta }]))[0]; }
+  async function filaPorIds(ids) {
+    await filaPronta();const alvo = new Set(ids);return (await bancoFila.ler()).filter(x => alvo.has(x.id));
   }
-  // O ato inteiro é persistido em uma escrita antes de qualquer rede: marcações e pagamentos.
-  function enfileirarLote(entradas) {
-    if (!Array.isArray(entradas) || !entradas.length) return [];
-    const arr = filaLerEstrita();
-    const novas = entradas.map(({ params, meta }) => ({
-      precisaCorrigir: !!(meta && meta.erroPagamento), erro: meta && meta.erroPagamento || null,
-      id: String(Date.now()) + '_' + Math.random().toString(36).slice(2, 12),
-      params: JSON.parse(JSON.stringify(params)), meta: JSON.parse(JSON.stringify(meta || {})), ts: Date.now()
-    }));
-    filaSalvar(arr.concat(novas));
-    return novas.map(x => x.id);
-  }
-  function enfileirar(params, meta) { return enfileirarLote([{ params, meta }])[0]; }
-  function filaPorIds(ids) { const alvo = new Set(ids); return filaLerEstrita().filter(x => alvo.has(x.id)); }
   function filaRowsPendentes() {
-    const set = new Set();
-    filaLer().forEach((x) => { const r = Number(x.meta && x.meta.row); if (r) set.add(r); });
-    return set;
+    const fila = bancoFila && bancoFila.snapshot();
+    if (fila === null || !bancoFila) return null; // desconhecida não é uma fila vazia
+    return new Set(fila.map(x => Number(x.meta && x.meta.row)).filter(Boolean));
   }
-  // Os params da ÚLTIMA ação `action` enfileirada para esta row (ou null). Serve para a tela saber
-  // que uma confirmação de pagamento ainda está esperando subir (e perguntar "manter ou corrigir").
   function filaParamsPendentes(row, action) {
-    let achado = null;
-    filaLer().forEach((x) => { if (x && x.params && x.params.action === action && Number(x.params.row) === Number(row)) achado = { ...x.params, pg_recusado: !!x.precisaCorrigir, pg_recusa: x.erro || null }; });
+    let achado = null;const fila = bancoFila && bancoFila.snapshot();
+    if (!fila) return null;
+    fila.forEach(x => {
+      if (x.params.action === action && Number(x.params.row) === Number(row))
+        achado = { ...x.params, pg_recusado: !!x.precisaCorrigir, pg_recusa: x.erro || null };
+    });
     return achado;
   }
-  function removerConfirmacoesRecusadas(row, tsDevice) {
-    const aceitoEm = Date.parse(tsDevice || '');
-    if (!Number.isFinite(aceitoEm)) return;
-    filaSalvar(filaLerEstrita().filter(x => {
-      const p = x.params || {}, anteriorEm = Date.parse(p.ts_device || '');
-      return !(x.precisaCorrigir && p.action === 'confirmarPagamento' &&
-        Number(p.row) === Number(row) && Number.isFinite(anteriorEm) && anteriorEm <= aceitoEm);
-    }));
+  async function removerConfirmacoesRecusadas(row, tsDevice) {
+    await filaPronta();await bancoFila.resolverRecusas(row, tsDevice);
   }
   let _processamentoFila = null;
   function processarFila() {
-    // Foreground e timer aguardam o MESMO consumidor. Não abrem um segundo envio.
     if (_processamentoFila) return _processamentoFila;
-    _processamentoFila = consumirFila().catch(error => {
+    _processamentoFila = filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
       console.error('[fila]', error);
       return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
     }).finally(() => { _processamentoFila = null; });
     return _processamentoFila;
   }
-  async function consumirFila() {
+  async function consumirFila(continua) {
     const tentados = new Set();
     for (;;) {
-      // Inclui atos guardados enquanto uma chamada estava pendente, sem repetir falhas nesta rodada.
-      const item = filaLerEstrita().find(x => !x.precisaCorrigir && !tentados.has(x.id));
-      if (!item) break;
+      const item = (await bancoFila.ler()).find(x => !x.precisaCorrigir && !tentados.has(x.id));
+      if (!item || !await continua()) break;
       tentados.add(item.id);
       const pagamento = item.params.action === 'confirmarPagamento';
       let res;
       try { res = await apiGet(item.params, { retries: 1 }); }
       catch (error) {
-        if (pagamento) filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
-        break; // sem rede: preserva o restante do ato para a próxima rodada
+        if (pagamento) await bancoFila.marcarReenvio(item.id);
+        break;
       }
       if (pagamento && res && res.ok && res.pagamento && res.pagamento.gravado === false) {
-        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, precisaCorrigir: true,
-          erro: res.pagamento.porque || 'Pagamento precisa de correção.' } : x));
+        await bancoFila.recusar(item.id, res.pagamento.porque || 'Pagamento precisa de correção.');
       } else if (res && res.ok) {
-        // HTTP 200/ok não prova a gravação da declaração. Remove somente o ID confirmado.
         if (pagamento && (!res.pagamento || res.pagamento.gravado !== true)) {
-          filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
-          continue;
+          await bancoFila.marcarReenvio(item.id);continue;
         }
-        if (pagamento) removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
-        filaSalvar(filaLerEstrita().filter(x => x.id !== item.id));
+        if (pagamento) await removerConfirmacoesRecusadas(item.params.row, item.params.ts_device);
+        await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
-        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, precisaCorrigir: true,
-          erro: 'Entrega não encontrada. A equipe precisa conferir este pagamento.' } : x));
+        await bancoFila.recusar(item.id, 'Entrega não encontrada. A equipe precisa conferir este pagamento.');
       } else if (res && res.naoEncontrado) {
-        filaSalvar(filaLerEstrita().filter(x => x.id !== item.id));
+        await bancoFila.ack(item.id);
       } else if (pagamento) {
-        filaSalvar(filaLerEstrita().map(x => x.id === item.id ? { ...x, params: { ...x.params, pg_fila: 1 } } : x));
-        continue; // uma referência aguardando confirmação não impede marcações posteriores
+        await bancoFila.marcarReenvio(item.id);continue;
       } else break;
     }
     try { await reenviarRotaPendente(); } catch (e) {}
@@ -839,6 +816,8 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     enfileirar,
     enfileirarLote,
     filaPorIds,
+    filaPronta,
+    filaEstado,
     processarFila,
     filaRowsPendentes,
     filaParamsPendentes,
