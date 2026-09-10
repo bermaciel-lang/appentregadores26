@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import {createRequire} from "node:module";
 import {readFileSync} from "node:fs";
-const Pg=createRequire(import.meta.url)("../public/assets/pagamento-porta.js");
+// ⛔ CAMINHO FIXO AQUI JÁ MATOU ESTA RÉGUA. A régua de MUTAÇÃO (_t-pagamento-porta-reintroducao.mjs)
+// planta defeitos numa CÓPIA e a aponta por PG_PORTA_PATH; se este require ignorar a variável, a
+// régua testa o ORIGINAL a cada rodada, todo defeito plantado "fica verde", e a mutação vira ruído.
+// Aconteceu em 09/09 e de novo em 10/09/2026. Não voltar a fixar o caminho.
+const ALVO=process.env.PG_PORTA_PATH || "../public/assets/pagamento-porta.js";
+const Pg=createRequire(import.meta.url)(ALVO);
+console.log("alvo="+ALVO); // a mutação CONFERE este eco — é a auto-prova de que o mutante foi lido
 const forms=[
  {chave:"credito-entrega",rotulo:"Cartão de Crédito"},{chave:"debito-entrega",rotulo:"Cartão de Débito"},
  {chave:"dinheiro",rotulo:"Dinheiro"},{chave:"bling-800431",rotulo:"Cheque"},
@@ -106,6 +112,44 @@ assert.equal(volta.r.porRow[1].valor,100,"'corrigir' descarta o valor divergente
 const itDin={...item,pgFormaChave:"dinheiro"};
 let dinMais=await flow(["diferente",{forma:"dinheiro"},"150"],{item:itDin,irmas:[itDin]});
 assert.equal(dinMais.r.porRow[1].valor,150,"dinheiro a mais passa direto");
-const page=readFileSync("public/assets/page-entregas.js","utf8");
+// Relativo ao MÓDULO, não ao cwd: rodar de `scripts/` fazia a régua crashar, e a mutação lia o
+// crash como "VERMELHO como devia" — falso vermelho que escondia 4 defeitos plantados.
+const page=readFileSync(new URL("../public/assets/page-entregas.js",import.meta.url),"utf8");
 for(const guard of ["if (pgA && pgA.cancelado) return;","if (pgRes && pgRes.cancelado) return;","resC.cancelado"])assert.ok(page.includes(guard),guard);
-console.log("PASS app: trava 10x, modal de valor, modal de conta, parse, cofre, grupos, cartão único com identidade fiscal, formas proibidas inclusive cache antigo, vale identificado, valor obrigatório, cancelamento, correção e comprovante offline.");
+// ===== Os 4 PONTOS CEGOS que a régua de mutação achou em 10/09/2026, agora cobertos =====
+// Antes deles, plantar cada um destes defeitos deixava esta régua VERDE. Não remover sem antes
+// conferir na mutação que o defeito correspondente volta a ficar vermelho por outro caminho.
+
+// 1. Cancelar o menu "MANTER ou CORRIGIR" (só aparece quando já há declaração anterior válida)
+//    tem de abortar declarando `cancelado`. Sem isso a correção seguia calada e a entrega era
+//    marcada como se o pagamento tivesse sido reconfirmado.
+for(const x of [null,false,undefined]){const g=await flow([x],{anterior:{forma:"credito-entrega",valor:80,digitado:true}});
+ assert.equal(g.r.cancelado,true,"cancelar o manter/corrigir tem de devolver cancelado");
+ assert.equal(g.r.manteve,false,"cancelar o manter/corrigir nao pode contar como manter");
+ assert.deepEqual(g.r.porRow,{},"cancelar o manter/corrigir nao pode declarar pagamento");}
+
+// 2. Exceção dentro do modal NÃO pode vazar: vazando, derruba o "Entregue" inteiro (a entrega
+//    some sem ninguém ver). Tem de virar `cancelado` + um aviso ao entregador.
+{const uExplode={telas:[],avisos:[],escolher:async()=>{throw new Error("modal explodiu");},
+  perguntar:async()=>null,alerta:async(m)=>{uExplode.avisos.push(m);return true;}};
+ let saiu=null;
+ try{saiu=await Pg.perguntar({item,irmas:[item],cfg,ui:uExplode,tsDevice:ts});}
+ catch(e){assert.fail("excecao no modal VAZOU e derrubaria o Entregue: "+e.message);}
+ assert.equal(saiu.cancelado,true,"excecao no modal tem de virar cancelado");
+ assert.deepEqual(saiu.porRow,{},"excecao no modal nao pode declarar pagamento");
+ assert.ok(uExplode.avisos.length>0,"excecao no modal tem de avisar o entregador");}
+
+// 3. Valor DIGITADO tem de chegar marcado como digitado. `digitado:false` num valor que a pessoa
+//    escreveu inventa uma fonte que não existe — o painel passa a tratar palpite como conferência.
+{const d=await flow(["diferente",{grupo:"cartao"},"95,00","sim"]);
+ assert.equal(d.r.porRow[1].valor,95);
+ assert.equal(d.r.porRow[1].digitado,true,"valor escrito pelo entregador tem de vir digitado:true");}
+
+// 4. O `ui.js` real resolve `false` (não `null`) no cancelar. Tratar só `null` fazia o cancelamento
+//    virar resposta válida e o app seguir perguntando até esgotar as voltas. O sinal de que o
+//    defeito voltou é o entregador levar aviso de "não foi salva" onde devia sair calado.
+{const c=await flow(["diferente",{forma:"dinheiro"},"sim",false]);
+ assert.equal(c.r.cancelado,true,"cancelar com false tem de abortar");
+ assert.equal(c.u.avisos.length,0,"cancelar com false tem de sair na hora, sem esgotar as voltas");}
+
+console.log("PASS app: trava 10x, modal de valor, modal de conta, parse, cofre, grupos, cartão único com identidade fiscal, formas proibidas inclusive cache antigo, vale identificado, valor obrigatório, cancelamento, correção, comprovante offline e os 4 pontos cegos de 10/09.");
