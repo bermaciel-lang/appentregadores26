@@ -768,6 +768,14 @@ btnIniciarRota.disabled = true;
     try {
       const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
 
+      // ⛔ 10/09/2026 — O SERVIDOR RESPONDEU E RECUSOU: isso não é falta de sinal, e não pode virar
+      // "iniciada e salva ✅". Cair no catch de baixo marcava a rota como iniciada localmente e
+      // dizia "você já pode fazer as entregas" — com o servidor sem saber de rota nenhuma.
+      if (res && res.recusadoPeloServidor) {
+        await AppUI.alerta(res.error + '\n\nO KM e a foto continuam salvos no aparelho. Confira se o TURNO está certo e avise o supervisor — reenviar sozinho não resolve.',
+          { titulo: 'A rota NÃO foi iniciada', tom: 'danger' });
+        return;
+      }
       if (!res || !res.ok) {
         throw new Error((res && res.error) || 'Falha ao iniciar rota');
       }
@@ -873,9 +881,17 @@ async function handleFinalizarRota() {
       foto ? foto.mimeType : 'image/jpeg'
     );
 
-    if (!res || !res.ok) {
-      throw new Error((res && res.error) || 'Falha ao finalizar rota');
-    }
+      // ⛔ 10/09/2026 — O SERVIDOR RESPONDEU E RECUSOU: isso não é falta de sinal, e não pode virar
+      // "salvo, sobe sozinho". Antes o entregador fechava o app achando estar resolvido enquanto a
+      // foto era reenviada e recusada a cada poll, sem fim. Mostra o motivo do servidor e para.
+      if (res && res.recusadoPeloServidor) {
+        await AppUI.alerta(res.error + '\n\nO KM e a foto continuam salvos no aparelho. Avise o supervisor — reenviar sozinho não resolve.',
+          { titulo: 'A rota NÃO foi finalizada', tom: 'danger' });
+        return;
+      }
+      if (!res || !res.ok) {
+        throw new Error((res && res.error) || 'Falha ao finalizar rota');
+      }
 
     state.rotaFinalizada = true;
     state.rotaIniciada = false;

@@ -709,6 +709,16 @@ function temRotaPendenteFase(fase) { const p = lerRotaPend(fase); return !!(p &&
 // Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
 async function enviarRotaPayload(payload) {
   let recusadoPorLogin = false;
+  // ⛔ 10/09/2026 — RECUSA DO SERVIDOR VIRAVA "VOCÊ ESTÁ SEM INTERNET".
+  // Só três respostas eram distinguidas: ok, precisaLogin e montagem*. Qualquer outro
+  // `{ok:false, error:...}` — "Rota não iniciada neste turno", validação, exceção do servidor —
+  // caía no mesmo `return null` de "não subiu". A tela então afirmava "SALVA ✅ … você está sem
+  // internet … pode fechar o app" com sinal cheio, o fim nunca era gravado, e a cada poll a foto
+  // subia de novo para ser recusada de novo, para sempre. Agora a recusa sobe como recusa.
+  const recusa = (res) => (res && res.ok === false && res.error && !res.precisaLogin
+    && !res.montagemBloqueada && !res.montagemIndisponivel)
+    ? Object.assign({}, res, { recusadoPeloServidor: true }) : null;
+  let recusadoPeloServidor = null;
   if (payload && payload.fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
       try {
@@ -718,6 +728,8 @@ async function enviarRotaPayload(payload) {
         // Recusa do PORTEIRO não é falta de sinal: repetir o upload da foto não muda nada
         // (só gasta dados e tempo do entregador). Para na hora e avisa quem chamou.
         if (res && res.precisaLogin) { recusadoPorLogin = true; break; }
+        // Recusa de NEGÓCIO também não melhora com repetição: o servidor respondeu e disse não.
+        const r = recusa(res); if (r) { recusadoPeloServidor = r; break; }
       } catch (e) { /* tenta de novo */ }
       await sleep(800 * (i + 1));
     }
@@ -730,8 +742,10 @@ async function enviarRotaPayload(payload) {
       if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
       if (res && res.ok) return Object.assign({}, res, { semFoto: true });
       if (res && res.precisaLogin) recusadoPorLogin = true;
+      recusadoPeloServidor = recusa(res) || recusadoPeloServidor;
     } catch (e) {}
-    return recusadoPorLogin ? { ok: false, precisaLogin: true } : null;
+    if (recusadoPorLogin) return { ok: false, precisaLogin: true };
+    return recusadoPeloServidor || null;
   }
   const semF2 = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
   if (payload.kmInicial != null) semF2.kmInicial = payload.kmInicial;
@@ -742,8 +756,10 @@ async function enviarRotaPayload(payload) {
     if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
     if (res && res.ok) return res;
     if (res && res.precisaLogin) recusadoPorLogin = true;
+    recusadoPeloServidor = recusa(res) || recusadoPeloServidor;
   } catch (e) {}
-  return recusadoPorLogin ? { ok: false, precisaLogin: true } : null;
+  if (recusadoPorLogin) return { ok: false, precisaLogin: true };
+  return recusadoPeloServidor || null;
 }
 
 // Quantas vezes o app tenta subir SOZINHO uma foto que ficou pra trás (o poll roda a cada 60s,
@@ -798,6 +814,13 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   if (res && res.ok) guardarInicioConfirmado(entregador, true); // o servidor confirmou o início, mesmo se a foto ficou pendente
   if (res && res.ok && !res.semFoto) { limparRotaPend('inicio'); return res; }
   if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  // O servidor RESPONDEU e recusou: não é falta de sinal. Mentir "salvo, sobe sozinho" fazia o
+  // entregador fechar o app achando que estava resolvido, e a foto era reenviada a cada poll para
+  // ser recusada de novo, sem fim. Marca `desistiu` (para o reenvio automático) e devolve o motivo.
+  if (res && res.recusadoPeloServidor) {
+    salvarRotaPend('inicio', Object.assign({}, payload, { desistiu: true, recusa: res.error }));
+    return { ok: false, error: res.error, recusadoPeloServidor: true };
+  }
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
@@ -812,6 +835,10 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
   }
   if (res && res.ok && !res.semFoto) { limparRotaPend('fim'); return res; }
   if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.recusadoPeloServidor) { // ver o comentário em apiIniciarRota
+    salvarRotaPend('fim', Object.assign({}, payload, { desistiu: true, recusa: res.error }));
+    return { ok: false, error: res.error, recusadoPeloServidor: true };
+  }
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
