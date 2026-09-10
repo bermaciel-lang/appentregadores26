@@ -498,9 +498,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const foto = await pedirFotoObrigatoria();
     if (!foto || !foto.base64) { await AppUI.alerta('Nenhuma foto selecionada.', { tom: 'warn' }); return; }
     try {
+      // `jaTinhaFoto`: o servidor já tem uma foto desta fase → isto é TROCA; o "foto ok" que ele
+      // devolver é da antiga e não pode ser lido como "a nova subiu" (core.js fotoJaNoServidor).
       const res = tipo === 'fim'
-        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
-        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType, { jaTinhaFoto: state.rotaInfo.fotoFim === 'ok' })
+        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType, { jaTinhaFoto: state.rotaInfo.fotoInicio === 'ok' });
       if (!res || !res.ok) throw new Error();
       // A foto NÃO se perde mais quando não sobe na hora: fica guardada no aparelho e o app tenta
       // sozinho. Por isso a mensagem não manda mais "tente de novo com sinal melhor" (o entregador
@@ -557,6 +559,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       const result = await api.carregarEntregasPorEntregador(state.driver);
       state.items = result.data || [];
       if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
+      // Resposta FRESCA: se o servidor diz que a foto já está lá, o pendente da foto no aparelho
+      // já cumpriu o papel — some o "a foto não subiu" contradizendo o "Foto ✅" da mesma tela.
+      if (result.rotaInfo && !result.stale && api.reconciliarRotaPendente) api.reconciliarRotaPendente(result.rotaInfo);
       // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
       // modal some do aparelho no próximo poll (rollback sem deploy). No cache (stale) fica a última.
       if (result.pgConfig) { state.pgCfg = result.pgConfig; salvarPgCfg(result.pgConfig); }
@@ -740,7 +745,7 @@ loadingRota.classList.remove('hidden');
 btnIniciarRota.disabled = true;
 
     try {
-      const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
+      const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg', { jaTinhaFoto: state.rotaInfo.fotoInicio === 'ok' });
 
       if (!res || !res.ok) {
         throw new Error((res && res.error) || 'Falha ao iniciar rota');
@@ -844,7 +849,8 @@ async function handleFinalizarRota() {
       state.driver,
       km,
       foto ? foto.base64 : '',
-      foto ? foto.mimeType : 'image/jpeg'
+      foto ? foto.mimeType : 'image/jpeg',
+      { jaTinhaFoto: state.rotaInfo.fotoFim === 'ok' }
     );
 
     if (!res || !res.ok) {

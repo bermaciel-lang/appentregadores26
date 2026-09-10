@@ -261,9 +261,10 @@ function corpoComToken(body) {
   return b;
 }
 
-async function postJson(body) {
+// `timeoutMs` opcional: o POST com FOTO usa API_TIMEOUT_FOTO_MS (maior), o resto o padrão.
+async function postJson(body, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs || C.API_TIMEOUT_MS);
 
   try {
     // Se houver override do painel neste aparelho, posta direto pra ele (cross-origin,
@@ -673,21 +674,40 @@ function statusRotaPendente() {
 // refazer (tirar a foto de novo) — o KM dessa tentativa já subiu, então não se perde nada.
 function temRotaPendenteFase(fase) { const p = lerRotaPend(fase); return !!(p && !p.desistiu); }
 
+// O servidor JÁ TEM a foto desta fase? Toda resposta de iniciar/finalizar/entregas traz
+// `rotaInfo.fotoInicio/fotoFim === 'ok'` quando a foto está gravada. Isso acontece de verdade
+// quando o POST com a foto CHEGOU mas a resposta se perdeu no caminho (timeout): o app achava
+// que não subiu, caía no envio só-KM, ignorava o `rotaInfo` da própria resposta e ficava
+// reenviando a mesma foto a cada 60s até 20x — com "Foto ✅" na linha de status e "a foto não
+// subiu" logo abaixo. Exceção: `jaTinhaFoto` (o entregador está TROCANDO a foto e o servidor
+// já tinha uma antes) — aí o 'ok' é da foto velha e não prova nada sobre a nova.
+function fotoJaNoServidor(payload, res) {
+  if (!payload || payload.jaTinhaFoto || !res || !res.rotaInfo) return false;
+  return res.rotaInfo[payload.action === 'finalizarRota' ? 'fotoFim' : 'fotoInicio'] === 'ok';
+}
+
 // Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok), `{ok:false,
 // precisaLogin:true}` quando o porteiro recusou, ou null (não subiu).
-// Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
+// Com foto: POST (timeout maior); se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao
+// menos fechar — e se o servidor responder que a foto já está lá, é sucesso completo.
 async function enviarRotaPayload(payload) {
   let recusadoPorLogin = false;
   if (payload && payload.fotoBase64) {
     for (let i = 0; i < 2; i += 1) {
       try {
-        const res = await postJson(payload);
+        const res = await postJson(payload, C.API_TIMEOUT_FOTO_MS || C.API_TIMEOUT_MS);
         if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
         if (res && res.ok) return res;
         // Recusa do PORTEIRO não é falta de sinal: repetir o upload da foto não muda nada
         // (só gasta dados e tempo do entregador). Para na hora e avisa quem chamou.
         if (res && res.precisaLogin) { recusadoPorLogin = true; break; }
-      } catch (e) { /* tenta de novo */ }
+      } catch (e) {
+        // TIMEOUT no upload da foto = o link está lento demais pra ela AGORA. Repetir o mesmo
+        // upload em seguida era mais 45s de tela travada pra provavelmente estourar de novo. Vai
+        // direto pro KM (pequeno, rápido); a foto fica salva e sobe em segundo plano no poll.
+        // Falha IMEDIATA (sem sinal, erro de rede) ainda tenta uma 2ª vez: pode ser só um piscar.
+        if (e && e.name === 'AbortError') break;
+      }
       await sleep(800 * (i + 1));
     }
     const semF = { action: payload.action, entregador: payload.entregador, turno: payload.turno };
@@ -697,7 +717,7 @@ async function enviarRotaPayload(payload) {
     try {
       const res = await apiGet(semF, { retries: 1 });
       if (res && (res.montagemBloqueada || res.montagemIndisponivel)) return res;
-      if (res && res.ok) return Object.assign({}, res, { semFoto: true });
+      if (res && res.ok) return fotoJaNoServidor(payload, res) ? res : Object.assign({}, res, { semFoto: true });
       if (res && res.precisaLogin) recusadoPorLogin = true;
     } catch (e) {}
     return recusadoPorLogin ? { ok: false, precisaLogin: true } : null;
@@ -731,14 +751,33 @@ async function reenviarRotaPendente() {
     // O KM subiu e a FOTO não. Antes isto era tratado como sucesso e a foto era APAGADA do
     // aparelho (perdida de vez). Agora ela fica salva e continua tentando sozinha.
     const n = Number(p.tentativas || 0) + 1;
-    salvarRotaPend(fase, Object.assign({}, p, { tentativas: n, desistiu: n >= MAX_TENTATIVAS_FOTO }));
+    salvarRotaPend(fase, Object.assign({}, p, { tentativas: n, desistiu: n >= MAX_TENTATIVAS_FOTO, kmSubiu: true }));
   }
 }
 
-async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+// O servidor é a fonte da verdade sobre a foto. A cada `entregas` FRESCA (poll), se ele diz que
+// a foto da fase está lá e o aparelho ainda guarda um pendente dessa fase cujo KM já subiu, o
+// pendente já cumpriu o papel: limpa. Cura o caso do POST que chegou mas cuja resposta se perdeu
+// (ver fotoJaNoServidor) — inclusive nos aparelhos que já tinham "desistido" antes deste conserto
+// e mostravam "Foto ✅" + "a foto não subiu" na mesma tela. Só mexe em pendente COM foto e com
+// KM já subido (`kmSubiu`/`tentativas`): um pendente que nunca subiu nada guarda KM + hora do
+// clique, e "tem foto no servidor" não diz nada sobre eles. Troca de foto (`jaTinhaFoto`) fica.
+function reconciliarRotaPendente(rotaInfo) {
+  if (!rotaInfo) return;
+  for (const fase of ['inicio', 'fim']) {
+    const p = lerRotaPend(fase);
+    if (!p || !p.fotoBase64 || p.jaTinhaFoto) continue;
+    if (!p.kmSubiu && !(Number(p.tentativas || 0) > 0)) continue;
+    if (rotaInfo[fase === 'fim' ? 'fotoFim' : 'fotoInicio'] === 'ok') limparRotaPend(fase);
+  }
+}
+
+// `opts.jaTinhaFoto` = o servidor JÁ tinha foto desta fase antes deste envio (troca de foto). Vai
+// no payload persistido pra o 'ok' da foto velha não ser lido como "a nova subiu" (fotoJaNoServidor).
+async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opts) {
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
-  const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+  const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString(), jaTinhaFoto: !!(opts && opts.jaTinhaFoto) };
   // 1) PERSISTE ANTES DE QUALQUER REDE. Regressão de 08/09 (commit 71d469e): a conferência da
   //    montagem entrou ANTES deste salvar, e como ela lança quando não há resposta, KM + foto (que
   //    só existiam na memória) iam pro lixo. Cenário real: garagem do CD, sinal ruim, o entregador
@@ -766,12 +805,12 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   }
   if (res && res.ok) guardarInicioConfirmado(entregador, true); // o servidor confirmou o início, mesmo se a foto ficou pendente
   if (res && res.ok && !res.semFoto) { limparRotaPend('inicio'); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok) { salvarRotaPend('inicio', Object.assign({}, payload, { kmSubiu: true })); return res; } // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
-async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opts) {
+  const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString(), jaTinhaFoto: !!(opts && opts.jaTinhaFoto) };
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
@@ -780,7 +819,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     throw erroMontagem(res);
   }
   if (res && res.ok && !res.semFoto) { limparRotaPend('fim'); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok) { salvarRotaPend('fim', Object.assign({}, payload, { kmSubiu: true })); return res; } // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
@@ -865,6 +904,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     filaParamsPendentes,
     removerConfirmacoesRecusadas,
     reenviarRotaPendente,
+    reconciliarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
     statusRotaPendente,
