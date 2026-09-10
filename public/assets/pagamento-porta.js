@@ -10,6 +10,36 @@
 
   var MAX_VOLTAS = 6;
 
+  // ORDEM DO DONO (09/09/2026): "caso a forma de pagamento ou o valor seja diferente do que esta
+  // no pedido, que abra tipo um modal enorme perguntando se ele confirma o valor e a conta. O
+  // ideal e travar o valor se for muito discrepante, tipo 10x menor ou 10x maior."
+  //
+  // POR QUE 10x PEGA O ERRO REAL: os casos que chegaram na Alteracoes Rota em 09/09 eram
+  // R$ 20.426,00 num pedido de R$ 204,26 e R$ 16.680,00 num de R$ 166,83 - 100x os dois. E a
+  // virgula esquecida, nao um valor "meio diferente". A trava em 10x pega isso com folga e ainda
+  // deixa passar diferenca de verdade (pedido mudou na porta, cliente levou mais um item).
+  var FATOR_TRAVA = 10;
+
+  // Fora desta faixa o app RECUSA e manda conferir - nao e confirmacao, e trava.
+  // `pedido <= 0` (ou nao confirmado) = nao ha com o que comparar: nada trava.
+  function discrepante(informado, pedido) {
+    var i = Number(informado), p = Number(pedido);
+    if (!isFinite(i) || !isFinite(p) || p <= 0 || i < 0) return false;
+    return i >= p * FATOR_TRAVA || i * FATOR_TRAVA <= p;
+  }
+
+  // Diferenca que merece o modal grande. Um centavo nao e erro de digitacao.
+  // DINHEIRO A MAIS NAO E DIFERENCA: o cliente da R$ 200 num pedido de R$ 189,50 e leva troco - a
+  // propria tela do painel diz que "diferencas em dinheiro podem incluir troco e nao exigem
+  // aprovacao de valor". Cobrar confirmacao ai seria alarde em cima do caso mais comum do dia.
+  function valorDivergente(informado, pedido, forma) {
+    var i = Number(informado), p = Number(pedido);
+    if (!isFinite(i) || !isFinite(p) || p <= 0) return false;
+    if (Math.abs(i - p) < 0.01) return false;
+    if (ehDinheiro(forma) && i > p) return false;
+    return true;
+  }
+
   function fmtBRL(n) {
     var v = Number(n) || 0;
     // toLocaleString pode não existir com pt-BR em node antigo; o fallback monta na mão.
@@ -275,6 +305,24 @@
         return { forma: 'nao-pagou', operadora: null, valor: null, digitado: false,
           obs: 'O entregador declarou no aplicativo: NÃO PAGOU. Pedido entregue sem receber.' };
       }
+      // MODAL GRANDE DA FORMA: mudou a conta em relacao ao pedido. Credito e debito NAO contam
+      // como mudanca (equivalentes) - e a mesma maquininha, e alardear isso seria ruido diario.
+      // Sem forma declarada no pedido nao ha divergencia: nao havia o que contrariar.
+      if (item.pgFormaChave && !equivalentes(f.forma, item.pgFormaChave)) {
+        var rotPedido = cartao(item.pgFormaChave) ? 'Crédito/Débito' : rotuloForma(item.pgFormaChave, item.pgOperadora || null, formas, item.formaPagamento);
+        var rotNovo = cartao(f.forma) ? 'Crédito/Débito' : (f.valeNome || rotuloForma(f.forma, f.operadora || null, formas, f.forma));
+        var okForma = await ui.escolher(
+          'A forma de pagamento é DIFERENTE da que está no pedido.' + '\n\n' +
+          'No pedido: ' + String(rotPedido).toUpperCase() + '\n' +
+          'Você marcou: ' + String(rotNovo).toUpperCase() + '\n\n' +
+          'Confirma que o cliente pagou nessa conta?',
+          [{ valor: 'sim', rotulo: '✓ Sim, foi ' + String(rotNovo).toUpperCase(), tom: 'danger' },
+           { valor: 'nao', rotulo: '✏️ Não, escolher de novo' }],
+          { titulo: 'Confere a conta', textoCancelar: 'Cancelar' }
+        );
+        if (cancelou(okForma)) return null;
+        if (okForma !== 'sim') continue;
+      }
       var v = await telaValor(item, ui, f.forma);
       if (!v) return null;
       return { forma: f.forma, operadora: f.operadora || null, valor: v.valor, digitado: v.digitado,
@@ -293,6 +341,37 @@
       if (cancelou(raw)) return null;
       var n = parseValor(raw);
       if (n == null || n >= 10000000000) { atual = String(raw); await ui.alerta('Informe um valor válido para salvar, igual no comprovante.', { tom: 'warn' }); continue; }
+
+      // TRAVA: 10x pra mais ou pra menos nao e diferenca, e virgula errada. Nao da pra confirmar.
+      if (valorConfirmado(item) && discrepante(n, item.valor)) {
+        atual = String(raw);
+        await ui.alerta(
+          'Esse valor está MUITO longe do pedido e não pode ser salvo.' + '\n\n' +
+          'Você digitou: ' + fmtBRL(n) + '\n' +
+          'Pedido: ' + fmtBRL(item.valor) + '\n\n' +
+          'Confira a vírgula e digite de novo, igual no comprovante.',
+          { titulo: 'Valor não confere', tom: 'danger' }
+        );
+        continue;
+      }
+
+      // MODAL GRANDE: diferente do pedido, mas possivel. Confirma valor E conta antes de salvar.
+      if (valorConfirmado(item) && valorDivergente(n, item.valor, forma)) {
+        var difere = n - Number(item.valor);
+        var conf = await ui.escolher(
+          'O valor que você digitou é DIFERENTE do pedido.' + '\n\n' +
+          'Você digitou: ' + fmtBRL(n) + '\n' +
+          'Pedido: ' + fmtBRL(item.valor) + '\n' +
+          (difere > 0 ? 'A MAIS: ' + fmtBRL(difere) : 'A MENOS: ' + fmtBRL(-difere)) + '\n\n' +
+          'Confirma que foi esse o valor cobrado, igual no comprovante?',
+          [{ valor: 'sim', rotulo: '✓ Sim, foi ' + fmtBRL(n), tom: 'danger' },
+           { valor: 'nao', rotulo: '✏️ Não, corrigir o valor' }],
+          { titulo: 'Confere o valor', textoCancelar: 'Cancelar' }
+        );
+        if (cancelou(conf)) return null;
+        if (conf !== 'sim') { atual = String(raw); continue; }
+      }
+
       return { valor: n, digitado: true };
     }
     return null;
@@ -313,5 +392,7 @@
     perguntar: perguntar,
     MAX_VOLTAS: MAX_VOLTAS,
     respostaCompleta: respostaCompleta, formasPermitidas: formasPermitidas,
+    // Regras puras da conferencia de valor - expostas para a regua testar sem simular tela.
+    discrepante: discrepante, valorDivergente: valorDivergente, FATOR_TRAVA: FATOR_TRAVA,
   };
 });
