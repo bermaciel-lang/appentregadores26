@@ -24,25 +24,25 @@ assert.ok(ops.some(x=>x.rotulo==="Cheque"));
 assert.ok(!JSON.stringify(ops).includes("Instabuy")&&!JSON.stringify(ops).includes("online")&&!JSON.stringify(ops).includes("Múltiplas"));
 let {r}=await flow(["igual"]);assert.equal(r.porRow[1].valor,100);assert.equal(r.porRow[1].cartaoAgrupado,true);
 for(const x of [null,false,undefined]){r=(await flow([x])).r;assert.equal(r.cancelado,true);assert.deepEqual(r.porRow,{});}
-r=(await flow(["diferente",{grupo:"cartao"},"95,00"])).r;
+r=(await flow(["diferente",{grupo:"cartao"},"95,00","sim"])).r;  // 95 != 100 -> confirma valor
 assert.equal(r.porRow[1].forma,"credito-entrega");assert.equal(r.porRow[1].cartaoAgrupado,true);assert.equal(r.porRow[1].valor,95);
-r=(await flow(["diferente",{grupo:"cartao"},{forma:"debito-entrega"},"90"],{item:{...item,pgFormaChave:"dinheiro"},irmas:[{...item,pgFormaChave:"dinheiro"}]})).r;
+r=(await flow(["diferente",{grupo:"cartao"},{forma:"debito-entrega"},"sim","90","sim"],{item:{...item,pgFormaChave:"dinheiro"},irmas:[{...item,pgFormaChave:"dinheiro"}]})).r;  // dinheiro->cartao e 90!=100
 assert.equal(r.porRow[1].forma,"debito-entrega");assert.equal(r.porRow[1].cartaoAgrupado,undefined);
-let f=await flow(["diferente",{forma:"dinheiro"},"","abc","95"]);
+let f=await flow(["diferente",{forma:"dinheiro"},"sim","","abc","95","sim"]);  // troca conta + 95<100
 assert.equal(f.r.porRow[1].valor,95);assert.equal(f.u.avisos.length,2);
-for(const raw of [null,false])assert.equal((await flow(["diferente",{forma:"dinheiro"},raw])).r.cancelado,true);
-r=(await flow(["diferente",{grupo:"vale"},{forma:"bling-822307"},"100"])).r;assert.equal(r.porRow[1].forma,"bling-822307");
-r=(await flow(["diferente",{grupo:"vale"},{forma:"vale",operadora:"outra"},"Vale Fictício","90"])).r;
+for(const raw of [null,false])assert.equal((await flow(["diferente",{forma:"dinheiro"},"sim",raw])).r.cancelado,true);
+r=(await flow(["diferente",{grupo:"vale"},{forma:"bling-822307"},"sim","100"])).r;assert.equal(r.porRow[1].forma,"bling-822307");  // vale != cartao; valor igual nao pergunta
+r=(await flow(["diferente",{grupo:"vale"},{forma:"vale",operadora:"outra"},"Vale Fictício","sim","90","sim"])).r;
 assert.equal(r.porRow[1].valeNome,"Vale Fictício");
 r=(await flow(["diferente",{grupo:"vale"},null,null])).r;assert.equal(r.cancelado,true);
 r=(await flow(["diferente",{forma:"nao-pagou"},"sim"])).r;
 assert.equal(r.porRow[1].forma,"nao-pagou");assert.equal(r.porRow[1].valor,null);
 const zero={...item,valor:0};r=(await flow(["igual"],{item:zero,irmas:[zero]})).r;assert.equal(r.porRow[1].valor,0);
 const offline={...item,valorConferido:false};assert.deepEqual(Pg.opcoesTela1(offline,[offline],forms).map(x=>x.valor),["diferente"]);
-r=(await flow(["diferente",{forma:"dinheiro"},"65"],{item:offline,irmas:[offline]})).r;assert.equal(r.porRow[1].valor,65);
+r=(await flow(["diferente",{forma:"dinheiro"},"sim","65"],{item:offline,irmas:[offline]})).r;assert.equal(r.porRow[1].valor,65);  // sem valor confirmado nao ha o que comparar
 r=(await flow(["manter"],{anterior:{forma:"credito-entrega",valor:80,digitado:true}})).r;assert.equal(r.manteve,true);
-r=(await flow([{forma:"dinheiro"},"75"],{anterior:{forma:"credito-entrega",valor:null,naoSei:true}})).r;assert.equal(r.porRow[1].valor,75,"resposta vazia anterior não permite manter");
-r=(await flow([{forma:"dinheiro"},"75"],{anterior:{forma:"credito-entrega",valor:80,aprovacao:"rejeitado"}})).r;assert.equal(r.porRow[1].valor,75);
+r=(await flow([{forma:"dinheiro"},"sim","75","sim"],{anterior:{forma:"credito-entrega",valor:null,naoSei:true}})).r;assert.equal(r.porRow[1].valor,75,"resposta vazia anterior não permite manter");
+r=(await flow([{forma:"dinheiro"},"sim","75","sim"],{anterior:{forma:"credito-entrega",valor:80,aprovacao:"rejeitado"}})).r;assert.equal(r.porRow[1].valor,75);
 const sisters=[item,{...item,row:2,pedido:"TEST-2",valor:20,pgFormaChave:"debito-entrega"}];
 r=(await flow(["tudo"],{irmas:sisters})).r;assert.equal(r.porRow[1].valor,120);assert.equal(r.porRow[2].forma,"debito-entrega");assert.deepEqual(r.porRow[1].grupoRows,[1,2]);
 const mixed=[item,{...item,row:2,pgFormaChave:"dinheiro"}];mixed.soma=200;assert.ok(!Pg.opcoesTela1(item,mixed,forms).some(x=>x.valor==="tudo"));
@@ -55,6 +55,57 @@ assert.equal(params.pg_vale_nome,"OutroFictício");assert.equal(params.pg_valor,
 assert.equal(Pg.montarParams(1,ts,{forma:"credito-entrega",valor:10,cartaoAgrupado:true},false).pg_cartao_agrupado,1);
 assert.equal(Pg.respostaCompleta({forma:"vale",operadora:"outra",valor:10},forms),false);
 assert.ok(Pg.fraseResposta({forma:"credito-entrega",valor:10},forms).includes("Crédito/Débito"));
+// ── TRAVA DE DISCREPANCIA (dono, 09/09/2026): 10x pra mais ou pra menos nao salva ─────────────
+// Os casos reais da Alteracoes Rota eram 100x (virgula esquecida): R$ 20.426,00 num pedido de
+// R$ 204,26 e R$ 16.680,00 num de R$ 166,83.
+assert.equal(Pg.FATOR_TRAVA,10);
+assert.equal(Pg.discrepante(20426,204.26),true,"o caso real do dono (100x) trava");
+assert.equal(Pg.discrepante(16680,166.83),true,"o segundo caso real trava");
+assert.equal(Pg.discrepante(1000,100),true,"exatamente 10x trava");
+assert.equal(Pg.discrepante(10,100),true,"exatamente 10x menor trava");
+assert.equal(Pg.discrepante(999.99,100),false,"abaixo de 10x passa (com confirmacao)");
+assert.equal(Pg.discrepante(10.01,100),false,"acima de 1/10 passa (com confirmacao)");
+assert.equal(Pg.discrepante(5000,0),false,"pedido sem valor: nao ha com o que comparar");
+assert.equal(Pg.discrepante(5000,null),false,"pedido nulo nao trava");
+// Os buracos que a revisao adversarial de 09/09 achou (nunca voltar a comparar em reais):
+assert.equal(Pg.discrepante(1668.30,166.83),true,"virgula andando uma casa: float dizia que NAO travava");
+assert.equal(Pg.discrepante(2.12,21.20),true,"10x menor exato tambem escapava por float");
+assert.equal(Pg.discrepante(2042.60,204.26),true,"o mesmo no primeiro caso real");
+// ── MODAL DE DIFERENCA ────────────────────────────────────────────────────────────────────────
+assert.equal(Pg.valorDivergente(100,100,"credito-entrega"),false,"igual nao pergunta");
+assert.equal(Pg.valorDivergente(100.004,100,"credito-entrega"),false,"menos de 1 centavo nao e erro de digitacao");
+assert.equal(Pg.valorDivergente(95,100,"credito-entrega"),true,"a menos pergunta");
+assert.equal(Pg.valorDivergente(120,100,"credito-entrega"),true,"a mais no cartao pergunta");
+assert.equal(Pg.valorDivergente(150,100,"dinheiro"),false,"DINHEIRO a mais e troco: nao pergunta");
+assert.equal(Pg.valorDivergente(90,100,"dinheiro"),true,"dinheiro a MENOS pergunta");
+assert.equal(Pg.valorDivergente(50,0,"dinheiro"),false,"sem valor de pedido nao pergunta");
+// Teto do troco: sem ele "1668" num pedido de R$ 166,83 passava CALADO por ser "dinheiro a mais".
+assert.equal(Pg.TROCO_MAX_CENTAVOS,20000);
+assert.equal(Pg.valorDivergente(1668,166.83,"dinheiro"),true,"troco de R$ 1.501 nao e troco: pergunta");
+assert.equal(Pg.valorDivergente(200,21.20,"dinheiro"),false,"nota de R$ 200 em pedido pequeno e troco de verdade");
+assert.equal(Pg.valorDivergente(200,189.50,"dinheiro"),false,"o caso comum do dia nao pergunta");
+assert.equal(Pg.valorDivergente(366.83,166.83,"dinheiro"),false,"exatamente R$ 200 de troco ainda passa");
+assert.equal(Pg.valorDivergente(366.84,166.83,"dinheiro"),true,"um centavo acima do teto ja pergunta");
+// TRAVA vale mesmo sem valor conferido (modo degradado) - era onde o erro real passava.
+const semConf={...item,valorConferido:false};
+let deg=await flow(["diferente",{grupo:"cartao"},"20426","204,26"],{item:semConf,irmas:[semConf]});
+assert.ok(deg.u.avisos.some(m=>/MUITO longe/.test(m)),"offline tambem trava os 100x");
+assert.equal(deg.r.porRow[1].valor,204.26,"e aceita o valor corrigido");
+// Esgotar as tentativas avisa em vez de sumir com a entrega.
+let esgota=await flow(["diferente",{grupo:"cartao"},"20426","20426","20426","20426","20426","20426"]);
+assert.equal(esgota.r.cancelado,true);
+assert.ok(esgota.u.avisos.some(m=>/NÃO foi salva/.test(m)),"avisa que a entrega nao foi salva");
+// ── Pelos fluxos: o valor travado NAO e salvo, e o app pede de novo ───────────────────────────
+let trava=await flow(["diferente",{grupo:"cartao"},"10000","100"]);
+assert.equal(trava.r.porRow[1].valor,100,"depois da trava, o valor corrigido e salvo");
+assert.ok(trava.u.avisos.some(m=>/MUITO longe/.test(m)),"a trava avisa por que recusou");
+// Recusar a confirmacao volta pro campo do valor, sem salvar o numero errado.
+let volta=await flow(["diferente",{grupo:"cartao"},"95","nao","100"]);
+assert.equal(volta.r.porRow[1].valor,100,"'corrigir' descarta o valor divergente");
+// Dinheiro a mais nao pede confirmacao nenhuma (troco).
+const itDin={...item,pgFormaChave:"dinheiro"};
+let dinMais=await flow(["diferente",{forma:"dinheiro"},"150"],{item:itDin,irmas:[itDin]});
+assert.equal(dinMais.r.porRow[1].valor,150,"dinheiro a mais passa direto");
 const page=readFileSync("public/assets/page-entregas.js","utf8");
 for(const guard of ["if (pgA && pgA.cancelado) return;","if (pgRes && pgRes.cancelado) return;","resC.cancelado"])assert.ok(page.includes(guard),guard);
-console.log("PASS app: parse, cofre, grupos, cartão único com identidade fiscal, formas proibidas inclusive cache antigo, vale identificado, valor obrigatório, cancelamento, correção e comprovante offline.");
+console.log("PASS app: trava 10x, modal de valor, modal de conta, parse, cofre, grupos, cartão único com identidade fiscal, formas proibidas inclusive cache antigo, vale identificado, valor obrigatório, cancelamento, correção e comprovante offline.");
