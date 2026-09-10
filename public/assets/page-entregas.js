@@ -569,8 +569,14 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       sectionsRoot.innerHTML = '';
       const detalhes = (error.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
       errorBox.style.whiteSpace = 'pre-line';
+      // O rodapé "após finalizar no app de montagem" só faz sentido quando o servidor DISSE que há
+      // pendência. Sem resposta (sem sinal) a instrução mandava o entregador caçar pendência que não
+      // existe; o certo é esperar a conexão e tocar em Atualizar.
+      const rodape = (error.bloqueioMontagem && !error.semResposta)
+        ? '\n\nApós finalizar no app de montagem, toque em Atualizar.'
+        : '\n\nAssim que a internet voltar, toque em Atualizar.';
       errorBox.textContent = (error.bloqueioMontagem ? error.message : 'Não foi possível carregar as entregas deste entregador.') +
-        (detalhes ? '\n\nPendentes:\n' + detalhes : '') + '\n\nApós finalizar no app de montagem, toque em Atualizar.';
+        (detalhes ? '\n\nPendentes:\n' + detalhes : '') + rodape;
     } finally {
       setLoading(false);
     }
@@ -630,6 +636,30 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       return;
     }
 
+    const loadingRota = document.getElementById('loadingRota');
+    const btnIniciarRota = document.getElementById('btnIniciarRota');
+
+    // CONFERE A MONTAGEM ANTES de pedir KM e foto. A trava da montagem (08/09) precisa do servidor
+    // responder; se ela vier DEPOIS de o entregador digitar o KM e tirar a foto, uma falha de sinal
+    // custava tudo o que ele tinha feito (a foto e o KM só existiam na memória — regressão do commit
+    // 71d469e). Aqui, se o servidor não responder ou disser que tem pendência, ele ainda não digitou
+    // nada: avisa e volta, sem perda. É o mesmo que a tela inicial já faz ao entrar (page-home.js).
+    state.sendingRouteAction = true;
+    loadingRota.textContent = '⏳ Conferindo a montagem da rota…';
+    loadingRota.classList.remove('hidden');
+    btnIniciarRota.disabled = true;
+    try {
+      await api.verificarMontagem(state.driver, false);
+    } catch (error) {
+      const detalhes = (error.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
+      await AppUI.alerta(error.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: error.precisaLogin ? 'Precisa entrar de novo' : 'Montagem da rota', tom: 'warn' });
+      return;
+    } finally {
+      loadingRota.classList.add('hidden');
+      btnIniciarRota.disabled = false;
+      state.sendingRouteAction = false;
+    }
+
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // cancelou o KM -> aborta
 
@@ -653,8 +683,6 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     }
 
     state.sendingRouteAction = true;
-const loadingRota = document.getElementById('loadingRota');
-const btnIniciarRota = document.getElementById('btnIniciarRota');
 
 loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
 loadingRota.classList.remove('hidden');

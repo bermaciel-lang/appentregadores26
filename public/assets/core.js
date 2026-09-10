@@ -353,6 +353,12 @@ function espelharNoPainel(body) {
   function erroMontagem(res) {
     const e = new Error(res && res.error || 'Não foi possível verificar a montagem. Confira a internet e tente novamente.');
     e.bloqueioMontagem = true;
+    // Distingue BLOQUEIO DE VERDADE (o servidor respondeu "tem pendência na montagem") de FALTA DE
+    // RESPOSTA (sem sinal / timeout / proxy fora). Quem chama precisa saber a diferença: no primeiro
+    // caso tem que PARAR; no segundo pode GUARDAR o que o entregador já fez e tentar de novo depois.
+    // Antes os dois viravam a mesma coisa e o app jogava fora KM+foto por causa de sinal ruim.
+    e.montagemBloqueada = !!(res && res.montagemBloqueada);
+    e.semResposta = !res;
     e.pendentes = res && res.pendentes || [];
     return e;
   }
@@ -701,11 +707,28 @@ async function reenviarRotaPendente() {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  await verificarMontagem(entregador, false);
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
-  const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
+  // 1) PERSISTE ANTES DE QUALQUER REDE. Regressão de 08/09 (commit 71d469e): a conferência da
+  //    montagem entrou ANTES deste salvar, e como ela lança quando não há resposta, KM + foto (que
+  //    só existiam na memória) iam pro lixo. Cenário real: garagem do CD, sinal ruim, o entregador
+  //    digita o KM, tira a foto, toca Iniciar, 15s depois "não foi possível verificar a montagem" —
+  //    e tinha que refazer tudo. Salvo aqui, nada mais se perde, aconteça o que acontecer abaixo.
+  const salvouCompleto = salvarRotaPend('inicio', payload);
+  // 2) Confere a montagem (best-effort). BLOQUEIO de verdade (o servidor disse "tem pendência") →
+  //    para aqui, sem subir foto à toa (o servidor recusaria de qualquer jeito). SEM RESPOSTA (sem
+  //    sinal, timeout) → NÃO para: o próprio iniciarRota é conferido de novo no servidor, então
+  //    seguir é seguro; e se o envio também não subir, fica salvo e reenvia sozinho (processarFila).
+  //    A tela já conferiu a montagem ANTES de pedir KM/foto (page-entregas.js) — esta é a 2ª rede.
+  try { await verificarMontagem(entregador, false); }
+  catch (e) {
+    if (e && e.montagemBloqueada) {
+      salvarRotaPend('inicio', Object.assign({}, payload, { desistiu: true }));
+      throw e;
+    }
+    // sem resposta → segue pro envio (o servidor confere a montagem no iniciarRota)
+  }
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
