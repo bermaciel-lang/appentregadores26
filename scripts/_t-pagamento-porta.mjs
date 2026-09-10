@@ -116,6 +116,22 @@ assert.equal(dinMais.r.porRow[1].valor,150,"dinheiro a mais passa direto");
 // crash como "VERMELHO como devia" — falso vermelho que escondia 4 defeitos plantados.
 const page=readFileSync(new URL("../public/assets/page-entregas.js",import.meta.url),"utf8");
 for(const guard of ["if (pgA && pgA.cancelado) return;","if (pgRes && pgRes.cancelado) return;","resC.cancelado"])assert.ok(page.includes(guard),guard);
+// ===== A trava de 10x NÃO pode recusar o troco que a própria tela manda declarar (10/09/2026) ===
+// A tela diz "informe o total recebido em dinheiro, ANTES de devolver o troco". Num pedido pequeno
+// pago com nota grande, obedecer era cair na trava e a ENTREGA NÃO ERA SALVA (6 voltas).
+{const p1990={...item,valor:19.90,pgFormaChave:"dinheiro"};
+ const troco=await flow(["diferente",{forma:"dinheiro"},"200"],{item:p1990,irmas:[p1990]});
+ assert.equal(troco.r.porRow[1].valor,200,"nota de R$200 num pedido de R$19,90 tem de ser salva");
+ assert.ok(!troco.r.cancelado,"declarar o dinheiro bruto nao pode abortar a entrega");
+ assert.equal(troco.u.avisos.length,0,"declarar o dinheiro bruto nao pode gerar aviso de trava");}
+// ...e a isenção NÃO pode enfraquecer a trava contra o erro real (vírgula andando casas).
+assert.equal(Pg.discrepante(20426,204.26,"dinheiro"),true,"R$20.426 num pedido de R$204,26 continua travando");
+assert.equal(Pg.discrepante(16680,166.83,"dinheiro"),true,"R$16.680 num pedido de R$166,83 continua travando");
+assert.equal(Pg.discrepante(200,19.90,"dinheiro"),false,"troco de R$180,10 e plausivel");
+assert.equal(Pg.discrepante(200,19.90,"credito-entrega"),true,"no CARTAO nao existe troco: continua travando");
+assert.equal(Pg.discrepante(300,19.90,"dinheiro"),true,"acima do teto de R$200 de troco volta a travar");
+assert.equal(Pg.discrepante(1,19.90,"dinheiro"),true,"dinheiro A MENOS nao tem isencao");
+
 // ===== Os 4 PONTOS CEGOS que a régua de mutação achou em 10/09/2026, agora cobertos =====
 // Antes deles, plantar cada um destes defeitos deixava esta régua VERDE. Não remover sem antes
 // conferir na mutação que o defeito correspondente volta a ficar vermelho por outro caminho.

@@ -34,9 +34,21 @@
 
   // Fora desta faixa o app RECUSA e manda conferir - nao e confirmacao, e trava.
   // `pedido <= 0` = nao ha com o que comparar: nada trava.
-  function discrepante(informado, pedido) {
+  //
+  // ⛔ 10/09/2026 — A TRAVA ESTAVA RECUSANDO O DINHEIRO QUE A PROPRIA TELA MANDA DECLARAR.
+  // `telaValor` diz, com estas palavras: "Informe o total recebido em dinheiro, ANTES de devolver
+  // o troco". Num pedido de R$ 19,90 pago com nota de R$ 200, o entregador obedecia e digitava 200
+  // -- e 200 >= 19,90 x 10 travava. Seis voltas de "Valor nao confere" e a ENTREGA NAO ERA SALVA.
+  // Medido pela revisao: R$ 9,90 com nota de R$ 100 e R$ 4,99 com R$ 50 caem igual; ja R$ 200 num
+  // pedido de R$ 21,20 passava, entao o furo dependia so do tamanho do pedido.
+  // A isencao aqui e a MESMA de `valorDivergente`, com o MESMO teto de troco: dinheiro A MAIS, ate
+  // R$ 200 de diferenca. Ela NAO enfraquece a trava contra o erro real -- os casos que a motivaram
+  // (R$ 20.426,00 num pedido de R$ 204,26; R$ 16.680,00 num de R$ 166,83) tem diferenca de milhares
+  // de reais, muito acima do teto, e continuam travando.
+  function discrepante(informado, pedido, forma) {
     var i = centavos(informado), p = centavos(pedido);
     if (!isFinite(i) || !isFinite(p) || p <= 0 || i < 0) return false;
+    if (ehDinheiro(forma) && i > p && (i - p) <= TROCO_MAX_CENTAVOS) return false;
     return i >= p * FATOR_TRAVA || i * FATOR_TRAVA <= p;
   }
 
@@ -372,7 +384,7 @@
 
       // TRAVA: 10x pra mais ou pra menos nao e diferenca, e virgula errada. Nao da pra confirmar.
       var refTrava = valorReferencia(item);
-      if (refTrava != null && discrepante(n, refTrava)) {
+      if (refTrava != null && discrepante(n, refTrava, forma)) {
         atual = String(raw);
         await ui.alerta(
           'Esse valor está MUITO longe do pedido e não pode ser salvo.' + '\n\n' +
