@@ -99,6 +99,24 @@ function buildMapsUrl(item) {
   function clearDriverToken() {
     try { localStorage.removeItem(C.STORAGE_TOKEN_KEY); } catch (e) {}
   }
+  // O servidor recusou por LOGIN (`precisaLogin`): token ausente, inválido ou de outro entregador.
+  // Apaga o token do aparelho AQUI, no lugar único por onde toda resposta passa — assim a home volta
+  // a pedir o PIN (ela só pede quando o nome salvo NÃO bate com o token guardado; com um token
+  // inválido de MESMO nome ela nunca pedia, e o entregador ficava trancado pra sempre, vendo
+  // "não foi possível verificar a montagem" — a equipe caçava defeito de montagem que não existia).
+  // Não lança: quem chama decide o que fazer com a resposta (a fila offline, por exemplo, só espera).
+  function tratarPrecisaLogin(res) {
+    if (res && res.precisaLogin) { clearDriverToken(); return true; }
+    return false;
+  }
+  // Erro de LOGIN pra subir até a tela. NUNCA vira `erroMontagem`: são problemas diferentes, com
+  // soluções diferentes (PIN × app de montagem), e a mensagem certa poupa a equipe de investigar
+  // a coisa errada.
+  function erroLogin(res) {
+    const e = new Error(res && res.error || 'Faça login com o PIN pra abrir a rota.');
+    e.precisaLogin = true;
+    return e;
+  }
   // Login por PIN. Devolve { ok, token, nome } ou { ok:false, error }. Não anexa token (não tem ainda).
   async function apiLogin(nome, pin) {
     var aparelho = '';
@@ -262,7 +280,9 @@ async function postJson(body) {
     });
 
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    return await res.json();
+    const data = await res.json();
+    tratarPrecisaLogin(data); // mesma regra do GET: token recusado → apaga do aparelho
+    return data;
   } finally {
     clearTimeout(timer);
   }
@@ -297,8 +317,9 @@ function espelharNoPainel(body) {
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        if (C.API_MODE === 'json') return await fetchJson(url);
-        return await loadJSONP(url);
+        const res = (C.API_MODE === 'json') ? await fetchJson(url) : await loadJSONP(url);
+        tratarPrecisaLogin(res); // token recusado → apaga do aparelho (a home volta a pedir o PIN)
+        return res;
       } catch (error) {
         lastError = error;
         if (attempt < retries) {
@@ -365,6 +386,8 @@ function espelharNoPainel(body) {
   async function verificarMontagem(entregador, permitirEmAndamento = true) {
     try {
       const res = await apiGet({ action: 'verificarMontagem', entregador, turno: getTurno() }, { retries: 0 });
+      // Recusa de LOGIN sai como erro de login, antes de qualquer leitura de montagem.
+      if (res && res.precisaLogin) throw erroLogin(res);
       if (res && res.montagemBloqueada) {
         guardarInicioConfirmado(entregador, false);
         throw erroMontagem(res);
@@ -373,6 +396,9 @@ function espelharNoPainel(body) {
       if (res.rotaIniciada !== undefined) guardarInicioConfirmado(entregador, res.rotaIniciada);
       return res;
     } catch (error) {
+      // Sem token válido o servidor recusa TUDO — abrir pelo cache não ajudaria (nenhuma marcação
+      // subiria) e transformar em "montagem" mandaria a equipe investigar o problema errado.
+      if (error && error.precisaLogin) throw error;
       if (permitirEmAndamento && inicioConfirmado(entregador)) return { ok: true, rotaIniciada: true, offline: true };
       throw error.bloqueioMontagem ? error : erroMontagem();
     }
@@ -406,6 +432,7 @@ async function carregarEntregasPorEntregador(entregador) {
       turno: getTurno()
     });
 
+    if (res && res.precisaLogin) throw erroLogin(res); // login ≠ montagem (ver erroLogin)
     if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
       if (res.montagemBloqueada) guardarInicioConfirmado(entregador, false);
       throw erroMontagem(res);
@@ -429,6 +456,8 @@ async function carregarEntregasPorEntregador(entregador) {
       pgConfig: { perguntar: res.perguntarPagamento === true, formas: Array.isArray(res.formasNaPorta) ? res.formasNaPorta : [] }
     };
   } catch (error) {
+    // Recusa de LOGIN sobe como está: nem cache, nem "montagem". A tela manda pedir o PIN.
+    if (error && error.precisaLogin) throw error;
     // Só uma rota cujo INÍCIO foi confirmado pelo servidor hoje pode abrir offline.
     if (!inicioConfirmado(entregador)) throw error.bloqueioMontagem ? error : erroMontagem();
     const cached = getFreshCache(cacheName) || readCache(cacheName);

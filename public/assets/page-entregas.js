@@ -79,6 +79,19 @@
     warningBox.classList.remove('hidden');
   }
 
+  // O servidor recusou por LOGIN (token inválido/ausente — `precisaLogin`). O core já apagou o
+  // token do aparelho; aqui a gente explica UMA vez e leva pra tela inicial, onde tocar no nome
+  // pede o PIN. Antes isso virava "não foi possível verificar a montagem" e o entregador ficava
+  // trancado sem saída (a home só pedia PIN quando o nome não batia com o token — e batia).
+  // Guarda contra repetição: o poll, o visibilitychange e o online chamam carregarTudo em sequência.
+  async function pedirLoginDeNovo(mensagem) {
+    if (state.pedindoLogin) return;
+    state.pedindoLogin = true;
+    stopAutoRefresh();
+    await AppUI.alerta(String(mensagem || 'Faça login com o PIN pra abrir a rota.') + '\n\nNa tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O que você já marcou fica guardado no aparelho e sobe depois.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
+    window.location.href = '/';
+  }
+
   function compressImageToBase64(file, maxWidth, quality) {
     return new Promise((resolve, reject) => {
       if (!file) {
@@ -564,6 +577,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       }
     } catch (error) {
       console.error(error);
+      if (error && error.precisaLogin) { await pedirLoginDeNovo(error.message); return; }
       errorBox.classList.remove('hidden');
       state.items = [];
       sectionsRoot.innerHTML = '';
@@ -651,8 +665,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     try {
       await api.verificarMontagem(state.driver, false);
     } catch (error) {
+      if (error && error.precisaLogin) { await pedirLoginDeNovo(error.message); return; }
       const detalhes = (error.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
-      await AppUI.alerta(error.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: error.precisaLogin ? 'Precisa entrar de novo' : 'Montagem da rota', tom: 'warn' });
+      await AppUI.alerta(error.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: 'Montagem da rota', tom: 'warn' });
       return;
     } finally {
       loadingRota.classList.add('hidden');
@@ -1188,6 +1203,11 @@ async function handleFinalizarRota() {
     sessionStorage.removeItem('rota_finalizada_' + state.driver);
     sessionStorage.removeItem('rota_assinatura_' + state.driver);
     api.clearSavedDriverName();
+    // Trocar de entregador apaga o TOKEN também, não só o nome. Sem isto o token do anterior ficava
+    // no aparelho: (1) quem voltasse com o mesmo nome entrava sem PIN mesmo com o token já inválido
+    // no servidor — trancado sem saída; (2) o celular passado de mão em mão carregava o acesso do
+    // anterior. O PIN são 4 dígitos que a pessoa sabe; pedir de novo custa nada.
+    if (api.clearDriverToken) api.clearDriverToken();
     window.location.href = '/';
   });
 
