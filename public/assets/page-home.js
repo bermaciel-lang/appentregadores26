@@ -54,6 +54,13 @@
       await api.verificarMontagem(nome);
       window.location.href = '/entregas/';
     } catch (e) {
+      // LOGIN recusado (token inválido/ausente): o token já foi apagado pelo core, então basta o
+      // entregador tocar no nome de novo que o PIN é pedido. O título diz isso — antes vinha como
+      // "Montagem da rota" e a equipe procurava pendência de montagem em vez do PIN.
+      if (e && e.precisaLogin) {
+        await AppUI.alerta(e.message + '\n\nToque no seu nome de novo e digite seu PIN (os últimos 4 números do seu telefone).', { titulo: 'Precisa entrar de novo', tom: 'warn' });
+        return;
+      }
       const detalhes = (e.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
       await AppUI.alerta(e.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: 'Montagem da rota', tom: 'warn' });
     }

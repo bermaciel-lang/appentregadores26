@@ -99,6 +99,24 @@ function buildMapsUrl(item) {
   function clearDriverToken() {
     try { localStorage.removeItem(C.STORAGE_TOKEN_KEY); } catch (e) {}
   }
+  // O servidor recusou por LOGIN (`precisaLogin`): token ausente, inválido ou de outro entregador.
+  // Apaga o token do aparelho AQUI, no lugar único por onde toda resposta passa — assim a home volta
+  // a pedir o PIN (ela só pede quando o nome salvo NÃO bate com o token guardado; com um token
+  // inválido de MESMO nome ela nunca pedia, e o entregador ficava trancado pra sempre, vendo
+  // "não foi possível verificar a montagem" — a equipe caçava defeito de montagem que não existia).
+  // Não lança: quem chama decide o que fazer com a resposta (a fila offline, por exemplo, só espera).
+  function tratarPrecisaLogin(res) {
+    if (res && res.precisaLogin) { clearDriverToken(); return true; }
+    return false;
+  }
+  // Erro de LOGIN pra subir até a tela. NUNCA vira `erroMontagem`: são problemas diferentes, com
+  // soluções diferentes (PIN × app de montagem), e a mensagem certa poupa a equipe de investigar
+  // a coisa errada.
+  function erroLogin(res) {
+    const e = new Error(res && res.error || 'Faça login com o PIN pra abrir a rota.');
+    e.precisaLogin = true;
+    return e;
+  }
   // Login por PIN. Devolve { ok, token, nome } ou { ok:false, error }. Não anexa token (não tem ainda).
   async function apiLogin(nome, pin) {
     var aparelho = '';
@@ -262,7 +280,9 @@ async function postJson(body) {
     });
 
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    return await res.json();
+    const data = await res.json();
+    tratarPrecisaLogin(data); // mesma regra do GET: token recusado → apaga do aparelho
+    return data;
   } finally {
     clearTimeout(timer);
   }
@@ -300,8 +320,11 @@ function espelharNoPainel(body) {
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        if (C.API_MODE === 'json') return await fetchJson(url, timeoutMs);
-        return await loadJSONP(url, timeoutMs);
+        // As DUAS frentes de 09/09 entram aqui: o timeout longo da fila (recebimento coletivo
+        // consulta até 20 pedidos antes da 1ª gravação) E a limpeza do token recusado.
+        const res = (C.API_MODE === 'json') ? await fetchJson(url, timeoutMs) : await loadJSONP(url, timeoutMs);
+        tratarPrecisaLogin(res); // token recusado → apaga do aparelho (a home volta a pedir o PIN)
+        return res;
       } catch (error) {
         lastError = error;
         if (attempt < retries) {
@@ -356,12 +379,20 @@ function espelharNoPainel(body) {
   function erroMontagem(res) {
     const e = new Error(res && res.error || 'Não foi possível verificar a montagem. Confira a internet e tente novamente.');
     e.bloqueioMontagem = true;
+    // Distingue BLOQUEIO DE VERDADE (o servidor respondeu "tem pendência na montagem") de FALTA DE
+    // RESPOSTA (sem sinal / timeout / proxy fora). Quem chama precisa saber a diferença: no primeiro
+    // caso tem que PARAR; no segundo pode GUARDAR o que o entregador já fez e tentar de novo depois.
+    // Antes os dois viravam a mesma coisa e o app jogava fora KM+foto por causa de sinal ruim.
+    e.montagemBloqueada = !!(res && res.montagemBloqueada);
+    e.semResposta = !res;
     e.pendentes = res && res.pendentes || [];
     return e;
   }
   async function verificarMontagem(entregador, permitirEmAndamento = true) {
     try {
       const res = await apiGet({ action: 'verificarMontagem', entregador, turno: getTurno() }, { retries: 0 });
+      // Recusa de LOGIN sai como erro de login, antes de qualquer leitura de montagem.
+      if (res && res.precisaLogin) throw erroLogin(res);
       if (res && res.montagemBloqueada) {
         guardarInicioConfirmado(entregador, false);
         throw erroMontagem(res);
@@ -370,6 +401,9 @@ function espelharNoPainel(body) {
       if (res.rotaIniciada !== undefined) guardarInicioConfirmado(entregador, res.rotaIniciada);
       return res;
     } catch (error) {
+      // Sem token válido o servidor recusa TUDO — abrir pelo cache não ajudaria (nenhuma marcação
+      // subiria) e transformar em "montagem" mandaria a equipe investigar o problema errado.
+      if (error && error.precisaLogin) throw error;
       if (permitirEmAndamento && inicioConfirmado(entregador)) return { ok: true, rotaIniciada: true, offline: true };
       throw error.bloqueioMontagem ? error : erroMontagem();
     }
@@ -403,6 +437,7 @@ async function carregarEntregasPorEntregador(entregador) {
       turno: getTurno()
     });
 
+    if (res && res.precisaLogin) throw erroLogin(res); // login ≠ montagem (ver erroLogin)
     if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
       if (res.montagemBloqueada) guardarInicioConfirmado(entregador, false);
       throw erroMontagem(res);
@@ -426,6 +461,8 @@ async function carregarEntregasPorEntregador(entregador) {
       pgConfig: { perguntar: res.perguntarPagamento === true, formas: Array.isArray(res.formasNaPorta) ? res.formasNaPorta : [] }
     };
   } catch (error) {
+    // Recusa de LOGIN sobe como está: nem cache, nem "montagem". A tela manda pedir o PIN.
+    if (error && error.precisaLogin) throw error;
     // Só uma rota cujo INÍCIO foi confirmado pelo servidor hoje pode abrir offline.
     if (!inicioConfirmado(entregador)) throw error.bloqueioMontagem ? error : erroMontagem();
     const cached = getFreshCache(cacheName) || readCache(cacheName);
@@ -703,11 +740,28 @@ async function reenviarRotaPendente() {
 }
 
 async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
-  await verificarMontagem(entregador, false);
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
-  const salvouCompleto = salvarRotaPend('inicio', payload); // PERSISTE antes de enviar (não perde KM/foto)
+  // 1) PERSISTE ANTES DE QUALQUER REDE. Regressão de 08/09 (commit 71d469e): a conferência da
+  //    montagem entrou ANTES deste salvar, e como ela lança quando não há resposta, KM + foto (que
+  //    só existiam na memória) iam pro lixo. Cenário real: garagem do CD, sinal ruim, o entregador
+  //    digita o KM, tira a foto, toca Iniciar, 15s depois "não foi possível verificar a montagem" —
+  //    e tinha que refazer tudo. Salvo aqui, nada mais se perde, aconteça o que acontecer abaixo.
+  const salvouCompleto = salvarRotaPend('inicio', payload);
+  // 2) Confere a montagem (best-effort). BLOQUEIO de verdade (o servidor disse "tem pendência") →
+  //    para aqui, sem subir foto à toa (o servidor recusaria de qualquer jeito). SEM RESPOSTA (sem
+  //    sinal, timeout) → NÃO para: o próprio iniciarRota é conferido de novo no servidor, então
+  //    seguir é seguro; e se o envio também não subir, fica salvo e reenvia sozinho (processarFila).
+  //    A tela já conferiu a montagem ANTES de pedir KM/foto (page-entregas.js) — esta é a 2ª rede.
+  try { await verificarMontagem(entregador, false); }
+  catch (e) {
+    if (e && e.montagemBloqueada) {
+      salvarRotaPend('inicio', Object.assign({}, payload, { desistiu: true }));
+      throw e;
+    }
+    // sem resposta → segue pro envio (o servidor confere a montagem no iniciarRota)
+  }
   espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
