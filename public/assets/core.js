@@ -4,8 +4,28 @@
   // Turno selecionado (MANHÃ/TARDE). Só é relevante no backend do PAINEL (Supabase), onde
   // manhã e tarde coexistem; no backend antigo (Apps Script) o turno é ignorado (rota única).
   function turnoPadrao() { return new Date().getHours() < 14 ? 'MANHÃ' : 'TARDE'; }
-  function getTurno() { try { return sessionStorage.getItem('app_turno') || turnoPadrao(); } catch (e) { return turnoPadrao(); } }
-  function setTurno(t) { try { sessionStorage.setItem('app_turno', t); } catch (e) {} }
+  // ⛔ 10/09/2026 — O TURNO MORRIA E O APP VOLTAVA NO TURNO DO RELÓGIO.
+  // Ele vivia só no `sessionStorage`, que o Android apaga ao matar o WebView — e o momento de maior
+  // risco é justamente a CÂMERA, que é outro app: o entregador tira a foto do KM e volta para um app
+  // que esqueceu em que turno estava. Depois das 14h, `turnoPadrao()` responde TARDE para uma rota
+  // da MANHÃ; o servidor lê o cabeçalho do turno errado, responde "rota não iniciada", e o app
+  // apaga o início (o outro conserto deste commit). É o "envia mas não libera" que o dono relatou.
+  // 📏 A impressão digital está nos dados: em 27/08 o Daniel e Heloisa aparece com início às 15:04
+  // no turno MANHÃ (km 156) e às 15:05 no TARDE (km 22251) — um minuto depois, ele tentando de novo.
+  // Agora o turno é lembrado em `localStorage` POR DIA: sobrevive ao kill, e não vaza para amanhã.
+  function diaSP() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()); }
+  function chaveTurno() { return 'app_turno_v1_' + diaSP(); }
+  function getTurno() {
+    try {
+      var doDia = localStorage.getItem(chaveTurno());
+      if (doDia) return doDia;
+      return sessionStorage.getItem('app_turno') || turnoPadrao(); // sessão viva ainda vale
+    } catch (e) { return turnoPadrao(); }
+  }
+  function setTurno(t) {
+    try { sessionStorage.setItem('app_turno', t); } catch (e) {}
+    try { localStorage.setItem(chaveTurno(), t); } catch (e) {}
+  }
   function usandoPainel() { try { return !!localStorage.getItem('app_api_url_override'); } catch (e) { return false; } }
 
   function sleep(ms) {
@@ -454,6 +474,13 @@ async function carregarEntregasPorEntregador(entregador) {
       data: items,
       stale: false,
       rotaIniciada: res.rotaIniciada || false,
+      // ⛔ 10/09/2026 — ESTE CAMPO NUNCA FOI REPASSADO, e o bloco que o lê em `page-entregas.js`
+      // (a reconciliação do commit e2078bf, "finalizei e depois aparece em aberto de novo") era
+      // CÓDIGO MORTO desde que nasceu: `git log -S'rotaFinalizada' -- public/assets/core.js` volta
+      // vazio. Sem ele, quem perde a sessão depois de finalizar vê o botão verde "🏁 Finalizar
+      // rota" de novo e refaz KM + foto — e o segundo envio SOBRESCREVE o carimbo, o KM e a foto
+      // do fim. Fica `undefined` quando o servidor não manda: a tela só desfaz com `=== false`.
+      rotaFinalizada: res.rotaFinalizada,
       rotaInfo: res.rotaInfo || null,
       // Pagamento na porta (05/09): o servidor diz se PERGUNTA (cofre ENTREGADOR_CONFIRMA_PAGAMENTO
       // ≥ 1) e manda a lista de formas do banco — o app não tem lista escrita nele. Só vem na
@@ -874,6 +901,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
+    inicioConfirmado, // 10/09: a tela usa pra saber que a rota do dia JA foi confirmada (localStorage, sobrevive ao kill)
     statusRotaPendente,
     apiEditarKm,
     getTurno,

@@ -34,7 +34,13 @@
     enviando: null, // { row, act } -> mostra "Enviando..." no card
     expandidos: new Set(), // rows com o cartão EXPANDIDO (Iniciar abre; Minimizar/marcar fecha)
     sendingRouteAction: false,
-    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1',
+    // ⛔ 10/09/2026 — `sessionStorage` sozinho perdia a rota em andamento quando o Android matava o
+    // WebView (rotineiro: GPS + câmera + WhatsApp). O entregador voltava numa área sem sinal, via
+    // "Clique em Iniciar entregas" com a mercadoria no carro, e o Iniciar recusava por não
+    // conseguir conferir a montagem. `inicioConfirmado` mora em `localStorage`, é por dia+turno+
+    // entregador, e só é escrito quando o SERVIDOR confirmou o início — então não inventa rota.
+    rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1'
+                  || (!!savedDriver && api.inicioConfirmado(savedDriver)),
     rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1',
     // Pagamento na porta (05/09): { perguntar, formas } vem do servidor a cada `entregas` fresco;
     // guardado no aparelho para o modal funcionar SEM SINAL (a resposta sobe pela fila offline).
@@ -575,11 +581,25 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada) {
+      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada
+                 && !(api.temRotaPendenteFase && api.temRotaPendenteFase('inicio'))) {
         // SÓ no fluxo do PAINEL (Etapa C), onde a resposta SEMPRE traz rotaIniciada de verdade.
         // No fluxo ANTIGO (Apps Script) a resposta NÃO traz esse campo (vem false), então isto
         // NÃO roda — senão "des-iniciava" a rota do entregador a cada refresh (bug reportado).
         // Aqui (painel) o servidor diz que a rota não está iniciada → libera o "Iniciar" de novo.
+        //
+        // ⛔ 10/09/2026 — E ERA AQUI QUE O APP DESFAZIA O QUE TINHA ACABADO DE SALVAR.
+        // `handleIniciarRota` marca `state.rotaIniciada = true`, mostra "Rota iniciada e SALVA no
+        // aparelho ✅" e TRÊS LINHAS DEPOIS chama `carregarTudo(false)`. Quando o envio ficou na
+        // fila (foto não subiu, sinal ruim), o servidor AINDA NÃO SABE da rota e responde
+        // `rotaIniciada: false` — e este ramo apagava o início. O entregador via a mensagem de
+        // sucesso e o botão "Iniciar entregas" voltar, com as entregas trancadas.
+        // ⭐ Por isso "no celular da outra pessoa funciona": lá o POST completa, o servidor grava o
+        // `inicio`, e este ramo nunca dispara.
+        // O guarda certo já existia e ninguém consultava: um início PENDENTE no aparelho significa
+        // que o silêncio do servidor não é evidência de que a rota não começou. E ele não prende
+        // para sempre — `temRotaPendenteFase` devolve false quando o item desiste, e desistir só
+        // acontece depois que o KM subiu (aí o servidor tem `inicio` e nem chegamos aqui).
         state.rotaIniciada = false;
         sessionStorage.removeItem('rota_iniciada_' + state.driver);
         sessionStorage.removeItem('rota_assinatura_' + state.driver);
@@ -592,7 +612,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       if (result.rotaFinalizada && !state.rotaFinalizada) {
         state.rotaFinalizada = true;
         sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada) {
+      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada
+                 && !(api.temRotaPendenteFase && api.temRotaPendenteFase('fim'))) {
+        // Mesmo guarda do início: com um "finalizar" ainda na fila do aparelho, o servidor
+        // legitimamente não sabe do fim — o `false` dele não desfaz o que está salvo aqui.
         // Servidor diz EXPLICITAMENTE que não está finalizada (ex.: supervisor reabriu a rota) —
         // libera de novo. `=== false` (não `!result.rotaFinalizada`) de propósito: se o app novo for
         // ao ar ANTES do servidor novo, a resposta ainda viria SEM este campo (undefined) — tratar
