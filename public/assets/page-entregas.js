@@ -191,6 +191,28 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   }
 }
 
+  // Foto que chegou DEPOIS de a rede de segurança já ter concluído "sem foto" (ver
+  // pedirFotoObrigatoria). Não dá mais pra devolver pela Promise, então fica aqui, e quem pediu a
+  // foto consulta antes de seguir "sem foto". Vale por pouco tempo: é a foto DESTE início/fim.
+  let fotoAtrasada = null; // { result, ts }
+  function pegarFotoAtrasada() {
+    const f = fotoAtrasada; fotoAtrasada = null;
+    return (f && (Date.now() - f.ts) < 3 * 60000) ? f.result : null;
+  }
+
+  // Abre a câmera e devolve { base64, mimeType } ou null (cancelou / sem foto).
+  //
+  // HISTÓRICO — este pedaço já perdeu foto duas vezes, sempre por ADIVINHAR o cancelamento pelo
+  // relógio: no Android o `focus` (voltou pro app) chega ANTES do `change` (o arquivo), e um
+  // corte fixo (1,5s no commit 4369610; depois 8s) descartava a foto que chegava depois. O app
+  // oferecia "Iniciar sem foto?" com a foto tirada — e a foto ia pro lixo em silêncio. No iPhone
+  // não havia fallback nenhum: cancelar a câmera deixava a Promise pendurada pra sempre.
+  //
+  // AGORA: quem diz que cancelou é o EVENTO `cancel` do <input type=file> (Chrome/WebView 113+,
+  // Safari 16.4+), que dispara na hora e só quando NÃO veio arquivo. O relógio vira só REDE DE
+  // SEGURANÇA pra WebView antiga sem `cancel`, com folga grande (30s depois de o app voltar), e
+  // uma foto que chegue mesmo depois disso não é descartada: fica em `fotoAtrasada` pra quem
+  // pediu usar antes de seguir sem foto.
   function pedirFotoObrigatoria() {
     return new Promise((resolve) => {
       const input = document.createElement('input');
@@ -203,57 +225,65 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       document.body.appendChild(input);
 
       let resolved = false;
-      let gotFile = false; // marca assim que uma foto chega (evita o fallback descartá-la)
+      let gotFile = false; // marca assim que uma foto chega (a rede de segurança nunca derruba foto boa)
+      let redeArmada = false;
+      let redeTimer = null;
+
+      function encerrar(valor) {
+        if (resolved) return;
+        resolved = true;
+        if (redeTimer) clearTimeout(redeTimer);
+        window.removeEventListener('focus', aoVoltar);
+        document.removeEventListener('visibilitychange', aoVoltar);
+        // O input SÓ sai do DOM ao encerrar. Antes ele era removido no `change` antes de comprimir e
+        // no fallback — aqui fica até o fim pra `input.files` continuar legível pela rede de segurança.
+        if (input.parentNode) document.body.removeChild(input);
+        resolve(valor);
+      }
 
       input.addEventListener('change', async function () {
-        if (resolved) return;
         const file = input.files && input.files[0];
-        if (file) gotFile = true; // <- ANTES de comprimir, pra o fallback não derrubar a foto boa
-        if (input.parentNode) document.body.removeChild(input);
-
-        if (!file) {
-          resolved = true;
-          resolve(null);
-          return;
-        }
-
+        if (file) gotFile = true; // <- ANTES de comprimir, pra a rede de segurança não derrubar a foto boa
+        if (!file) { encerrar(null); return; }
+        let result = null;
         try {
-          const result = await compressImageToBase64(file, 800, 0.5);
-          resolved = true;
-          resolve(result);
+          result = await compressImageToBase64(file, 800, 0.5);
         } catch (error) {
           console.error(error);
           await AppUI.alerta('Não foi possível preparar a foto. Tente tirar de novo.', { tom: 'warn' });
-          resolved = true;
-          resolve(null);
+          encerrar(null);
+          return;
         }
+        if (resolved) {
+          // Chegou DEPOIS de a rede de segurança ter concluído "sem foto" (WebView antiga, câmera
+          // muito lenta). Não joga fora: quem pediu a foto confere `pegarFotoAtrasada()` antes de
+          // seguir sem ela.
+          console.warn('[foto] chegou atrasada, guardada pra quem pediu');
+          fotoAtrasada = { result: result, ts: Date.now() };
+          return;
+        }
+        encerrar(result);
       });
 
-// Fallback (só não-iOS): detecta quando o entregador CANCELOU a câmera (voltou sem foto).
-// No Android o evento 'focus' (volta pro app) chega ANTES do 'change' (o arquivo da foto),
-// e em celular/câmera mais lentos a foto demora vários segundos. O corte fixo de 1,5s
-// DESCARTAVA a foto que chegava depois (a foto "não ia"). Agora ficamos CHECANDO se a foto
-// apareceu e só concluímos "sem foto" depois de ~8s sem nenhum arquivo. Se a foto chegar,
-// quem resolve é o handler de 'change' (com a foto).
-      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (!isIOS) {
-        window.addEventListener('focus', function onFocus() {
-          window.removeEventListener('focus', onFocus);
-          let tentativas = 0;
-          const iv = setInterval(function () {
-            // Foto chegou (ou está chegando) -> para de checar e deixa o 'change' resolver com ela.
-            if (resolved || gotFile || (input.files && input.files.length)) { clearInterval(iv); return; }
-            if (++tentativas >= 16) { // ~8s sem nenhum arquivo -> assume que cancelou
-              clearInterval(iv);
-              if (!resolved) {
-                resolved = true;
-                if (input.parentNode) document.body.removeChild(input);
-                resolve(null);
-              }
-            }
-          }, 500);
-        });
+      // CANCELOU de verdade (voltou da câmera sem arquivo): o navegador avisa. Se por acaso o
+      // `cancel` vier com arquivo já recebido (não deveria), a foto vence.
+      input.addEventListener('cancel', function () {
+        if (!gotFile && !(input.files && input.files.length)) encerrar(null);
+      });
+
+      // REDE DE SEGURANÇA (WebView sem `cancel`): quando o app volta a ficar visível/focado sem
+      // arquivo, espera 30s antes de concluir "sem foto" — bem mais que qualquer câmera demora
+      // pra entregar o arquivo. Numa WebView moderna o `cancel` resolve antes e isto nunca dispara.
+      function aoVoltar() {
+        if (document.visibilityState === 'hidden' || resolved || redeArmada) return;
+        redeArmada = true;
+        redeTimer = setTimeout(function () {
+          if (resolved || gotFile || (input.files && input.files.length)) return;
+          encerrar(null);
+        }, 30000);
       }
+      window.addEventListener('focus', aoVoltar);
+      document.addEventListener('visibilitychange', aoVoltar);
 
       input.click();
     });
@@ -678,7 +708,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
     if (km === null) return; // cancelou o KM -> aborta
 
-    const foto = await pedirFotoObrigatoria();
+    let foto = await pedirFotoObrigatoria();
+    if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
 
     if (foto) {
       // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
@@ -695,6 +726,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Iniciar sem foto', textoCancelar: 'Tirar foto',
       });
       if (!segue) return;
+      // A foto pode ter chegado ENQUANTO a pergunta estava na tela (câmera muito lenta). Se veio e
+      // o KM foi digitado, usa ela em vez de iniciar sem foto. (Sem KM a foto exigiria KM — aí
+      // respeita a escolha "sem foto" que a pessoa acabou de fazer.)
+      const tardia = pegarFotoAtrasada();
+      if (tardia && km) foto = tardia;
     }
 
     state.sendingRouteAction = true;
@@ -770,7 +806,8 @@ async function handleFinalizarRota() {
   let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
   if (km === null) return; // cancelou o KM -> aborta
 
-  const foto = await pedirFotoObrigatoria();
+  let foto = await pedirFotoObrigatoria();
+  if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
 
   if (foto) {
     // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
@@ -787,6 +824,9 @@ async function handleFinalizarRota() {
       titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
     });
     if (!segue) return;
+    // Mesma proteção do iniciar: foto que chegou enquanto a pergunta estava na tela não se perde.
+    const tardia = pegarFotoAtrasada();
+    if (tardia && km) foto = tardia;
   }
 
   state.sendingRouteAction = true;
