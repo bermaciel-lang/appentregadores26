@@ -20,10 +20,22 @@
   // deixa passar diferenca de verdade (pedido mudou na porta, cliente levou mais um item).
   var FATOR_TRAVA = 10;
 
+  // Troco plausivel. Serve de TETO para a isencao do dinheiro (ver `valorDivergente`).
+  var TROCO_MAX_CENTAVOS = 20000; // R$ 200
+
+  // Dinheiro em CENTAVOS INTEIROS. Comparar em reais com ponto flutuante abria um buraco medido
+  // pela revisao: 166.83 * 10 = 1668.3000000000002, entao "1668,30" (a virgula andando uma casa,
+  // que e o erro real) ficava ABAIXO da trava e passava. Em centavos, 16683 * 10 = 166830 e o
+  // mesmo valor trava. Nunca voltar a comparar reais aqui.
+  function centavos(v) {
+    var n = Number(v);
+    return isFinite(n) ? Math.round(n * 100) : NaN;
+  }
+
   // Fora desta faixa o app RECUSA e manda conferir - nao e confirmacao, e trava.
-  // `pedido <= 0` (ou nao confirmado) = nao ha com o que comparar: nada trava.
+  // `pedido <= 0` = nao ha com o que comparar: nada trava.
   function discrepante(informado, pedido) {
-    var i = Number(informado), p = Number(pedido);
+    var i = centavos(informado), p = centavos(pedido);
     if (!isFinite(i) || !isFinite(p) || p <= 0 || i < 0) return false;
     return i >= p * FATOR_TRAVA || i * FATOR_TRAVA <= p;
   }
@@ -33,10 +45,14 @@
   // propria tela do painel diz que "diferencas em dinheiro podem incluir troco e nao exigem
   // aprovacao de valor". Cobrar confirmacao ai seria alarde em cima do caso mais comum do dia.
   function valorDivergente(informado, pedido, forma) {
-    var i = Number(informado), p = Number(pedido);
+    var i = centavos(informado), p = centavos(pedido);
     if (!isFinite(i) || !isFinite(p) || p <= 0) return false;
-    if (Math.abs(i - p) < 0.01) return false;
-    if (ehDinheiro(forma) && i > p) return false;
+    if (Math.abs(i - p) < 1) return false;
+    // A isencao do dinheiro tem TETO. Sem ele (revisao 09/09) "1668" num pedido de R$ 166,83
+    // passava calado, porque era "dinheiro a mais": ninguem entrega R$ 1.501 de troco. Ate
+    // R$ 200 de troco e nota grande em pedido pequeno (R$ 200 num pedido de R$ 21,20); acima
+    // disso e virgula errada, e vai pro modal.
+    if (ehDinheiro(forma) && i > p && (i - p) <= TROCO_MAX_CENTAVOS) return false;
     return true;
   }
 
@@ -110,6 +126,18 @@
       vistas[r] = 1; out.push(x);
     });
     return out;
+  }
+
+  // Valor do pedido que serve de REFERENCIA para a TRAVA de 10x.
+  // ⚠️ Diferente de `valorConfirmado`: aqui aceita valor NAO conferido (offline, cache, falha do
+  // conferirValores). A revisao de 09/09 mostrou que era exatamente no modo degradado que a trava
+  // sumia — e e nele que o entregador e OBRIGADO a digitar, porque a tela nem oferece "Pagou R$ X".
+  // Valor velho serve de referencia para 10x sem risco: pedido nenhum muda dez vezes de tamanho.
+  // O MODAL de diferenca continua exigindo `valorConfirmado` — com valor possivelmente velho,
+  // perguntar "esta diferente" a cada entrega seria alarde em cima de dado que a casa nao garante.
+  function valorReferencia(item) {
+    var n = item && item.valor != null && item.valor !== '' ? Number(item.valor) : NaN;
+    return isFinite(n) && n > 0 ? n : null;
   }
 
   function valorConfirmado(item) {
@@ -343,12 +371,13 @@
       if (n == null || n >= 10000000000) { atual = String(raw); await ui.alerta('Informe um valor válido para salvar, igual no comprovante.', { tom: 'warn' }); continue; }
 
       // TRAVA: 10x pra mais ou pra menos nao e diferenca, e virgula errada. Nao da pra confirmar.
-      if (valorConfirmado(item) && discrepante(n, item.valor)) {
+      var refTrava = valorReferencia(item);
+      if (refTrava != null && discrepante(n, refTrava)) {
         atual = String(raw);
         await ui.alerta(
           'Esse valor está MUITO longe do pedido e não pode ser salvo.' + '\n\n' +
           'Você digitou: ' + fmtBRL(n) + '\n' +
-          'Pedido: ' + fmtBRL(item.valor) + '\n\n' +
+          'Pedido: ' + fmtBRL(refTrava) + '\n\n' +
           'Confira a vírgula e digite de novo, igual no comprovante.',
           { titulo: 'Valor não confere', tom: 'danger' }
         );
@@ -374,6 +403,13 @@
 
       return { valor: n, digitado: true };
     }
+    // Esgotou as tentativas. Sair calado aqui derrubava a entrega INTEIRA sem uma palavra (a
+    // revisao mediu: 6 travas seguidas e `page-entregas` so dava return). Avisa antes de desistir.
+    try {
+      await ui.alerta('Não deu pra confirmar o valor do pagamento.' + '\n\n' +
+        'A entrega NÃO foi salva. Abra o pedido de novo e informe o pagamento com calma.',
+        { titulo: 'Pagamento não salvo', tom: 'warn' });
+    } catch (e) {}
     return null;
   }
 
@@ -394,5 +430,6 @@
     respostaCompleta: respostaCompleta, formasPermitidas: formasPermitidas,
     // Regras puras da conferencia de valor - expostas para a regua testar sem simular tela.
     discrepante: discrepante, valorDivergente: valorDivergente, FATOR_TRAVA: FATOR_TRAVA,
+    TROCO_MAX_CENTAVOS: TROCO_MAX_CENTAVOS,
   };
 });
