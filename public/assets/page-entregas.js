@@ -28,6 +28,7 @@
   const state = {
     driver: savedDriver,
     refreshTimer: null,
+    cancelTimer: null,
     items: [],
     rotaInfo: {}, // { kmInicial, kmFinal, fotoInicio, fotoFim, inicio, fim }
     sendingAction: false,
@@ -375,7 +376,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const btnEntregue = '<button type="button" class="dc-b ok sm" data-act="done" data-row="' + row + '" ' + dis + '>' + ic('check', 16) + (enviandoEsta && state.enviando.act === 'done' ? '…' : 'Entregue') + '</button>';
     const btnNao = '<button type="button" class="dc-b no sm" data-act="naoentregue" data-row="' + row + '" ' + dis + '>' + ic('x', 15) + 'Não entregue</button>';
     // Desfazer (apertou errado): só aparece se já foi INICIADA ou marcada — volta pra pendente.
-    const btnDesfazer = (emAndamento || resolvida) ? '<button type="button" class="dc-b desf sm" data-act="desfazer" data-row="' + row + '" ' + dis + '>↩ Desfazer</button>' : '';
+    const btnDesfazer = key !== 'cancel' && (emAndamento || resolvida) ? '<button type="button" class="dc-b desf sm" data-act="desfazer" data-row="' + row + '" ' + dis + '>↩ Desfazer</button>' : '';
 
     // EXPANDIDA: tudo do pedido (pagamento → obs → congelado + ovos → produtos que rolam).
     if (expandido) {
@@ -1310,6 +1311,35 @@ async function handleFinalizarRota() {
     state.refreshTimer = null;
   }
 
+  async function verificarCancelamentos() {
+    if (!state.driver || document.visibilityState !== 'visible') return;
+    try {
+      var avisos = await api.carregarCancelamentosDaRota(state.driver);
+      for (var i = 0; i < avisos.length; i++) {
+        var a = avisos[i], chave = 'cancelamento-entregador:' + a.id + ':' + a.canceladoEm;
+        if (sessionStorage.getItem(chave)) continue;
+        sessionStorage.setItem(chave, '1');
+        var item = state.items.find(function (x) { return Number(x.row) === Number(a.id); });
+        if (item) item.status = 'Cancelado';
+        api.saveEntregasCache(state.driver, state.items); renderList();
+        var titulo = 'PEDIDO CANCELADO NA RUA';
+        var corpo = (a.pedido || '') + ' · ' + (a.cliente || '') + '. Não entregue. Leve o pedido de volta ao depósito; ele entra em PEDIDOS QUE VOLTARAM e esta entrega continua no seu pagamento.';
+        try {
+          var LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+          if (LN && LN.schedule) await LN.schedule({ notifications: [{ id: 700000 + (Number(a.id) % 200000), title: titulo, body: corpo, schedule: { at: new Date(Date.now() + 300) } }] });
+        } catch (e) {}
+        await AppUI.alerta(corpo, { titulo: titulo, tom: 'danger' });
+        break;
+      }
+    } catch (e) { /* rede/Instabuy: tenta no próximo ciclo sem mexer na rota */ }
+  }
+
+  function startCancelRefresh() {
+    if (state.cancelTimer) clearInterval(state.cancelTimer);
+    verificarCancelamentos();
+    state.cancelTimer = window.setInterval(verificarCancelamentos, 15000);
+  }
+
   document.getElementById('btnTrocar').addEventListener('click', function () {
     sessionStorage.removeItem('rota_iniciada_' + state.driver);
     sessionStorage.removeItem('rota_finalizada_' + state.driver);
@@ -1385,6 +1415,7 @@ async function handleFinalizarRota() {
 
   window.addEventListener('beforeunload', function () {
     stopAutoRefresh();
+    if (state.cancelTimer) clearInterval(state.cancelTimer);
   });
 
   // ---- Gate de permissões (SÓ no app .apk / nativo): exige NOTIFICAÇÕES + LOCALIZAÇÃO antes de abrir
@@ -1565,5 +1596,6 @@ async function handleFinalizarRota() {
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
     carregarTudo(true);
     startAutoRefresh();
+    startCancelRefresh();
   })();
 })();

@@ -65,6 +65,7 @@
     if (st === 'indo para entrega') return 'start';
     if (st === 'entregue') return 'done';
     if (st === 'não entregue' || st === 'nao entregue') return 'fail';
+    if (st.indexOf('cancel') >= 0) return 'cancel';
     return 'pending';
   }
 
@@ -508,6 +509,15 @@ async function carregarEntregasPorEntregador(entregador) {
   }
 }
 
+// Poll leve e separado da lista: cancelamento urgente não espera o refresh de 60 s
+// e uma Instabuy lenta não congela os cards nem o envio da fila offline.
+async function carregarCancelamentosDaRota(entregador) {
+  const res = await apiGet({ action: 'cancelamentos', entregador, turno: getTurno() });
+  if (res && res.precisaLogin) throw erroLogin(res);
+  if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar cancelamentos');
+  return Array.isArray(res.avisos) ? res.avisos : [];
+}
+
   // Posição instantânea do celular (best-effort). Aceita um fix recente (maximumAge) pra NÃO travar
   // a marcação esperando GPS. Tenta o nativo (Capacitor) e cai no navegador. Devolve {lat,lng,precisao} ou null.
   async function posicaoAtual() {
@@ -866,7 +876,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     lista.forEach((item) => {
       const key = statusKey(item.status);
       if (key === 'start') emRota.push(item);
-      else if (key === 'done' || key === 'fail') concluidas.push(item);
+      else if (key === 'done' || key === 'fail' || key === 'cancel') concluidas.push(item);
       else pendentes.push(item);
     });
 
@@ -907,6 +917,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     verificarMontagem,
     manterValorMaisRecente,
     carregarEntregasPorEntregador,
+    carregarCancelamentosDaRota,
     apiIniciarEntrega,
     apiMarcarEntregue,
     apiMarcarNaoEntregue,
