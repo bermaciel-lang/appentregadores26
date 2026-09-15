@@ -360,7 +360,25 @@ function espelharNoPainel(body) {
   } catch (e) {}
 }
 
-  async function apiGet(params, options) {
+  // 🕛 Quando o app NÃO manda `turno`, o painel CHUTA pelo relógio dele — e ele vira TARDE às
+  // 12:00 enquanto o app só vira às 14:00 (`turnoPadrao`, linha 6). Nessas 2 horas a marcação de
+  // uma rota da MANHÃ batia no portão que procura a rota da TARDE, era RECUSADA, o app dizia
+  // "sem conexão" (page-entregas), a fila congelava atrás dela (o `else break` do consumirFila) e
+  // no dia seguinte o item saía como `naoEncontrado` e era DESCARTADO calado.
+  // 📏 Medido em 15/09/2026: 73 entregas de 5 entregadores sem nenhum registro. A prova foi a
+  // própria rota da Ana Carolina — o `finalizarRota` das 13:45 gravou normal porque MANDA o turno,
+  // enquanto as entregas dela desde 11:07 sumiram porque não mandavam.
+  // A lista é exatamente a que o painel filtra por turno (portão `alvo` do route.ts).
+  // Entra no `apiGet` E no `enfileirarLote` — os dois acontecem no instante do toque, então a fila
+  // guarda o turno em que a entrega REALMENTE foi feita, não o de quando ela conseguir subir.
+  const ACOES_QUE_PRECISAM_DO_TURNO = ['iniciarEntrega', 'marcarEntregue', 'marcarNaoEntregue', 'marcarCancelado', 'desfazer'];
+  function comTurno(params) {
+    if (!params || !ACOES_QUE_PRECISAM_DO_TURNO.includes(params.action) || params.turno) return params;
+    return Object.assign({}, params, { turno: getTurno() });
+  }
+
+  async function apiGet(paramsOriginais, options) {
+    const params = comTurno(paramsOriginais);
     const opt = options || {};
     const url = buildApiUrl(params);
     // Um recebimento coletivo consulta até 20 pedidos antes da primeira gravação.
@@ -618,7 +636,12 @@ async function apiMarcarCancelado(row, obs) {
     await bancoFila.pronta();
   }
   function filaEstado() { return bancoFila ? bancoFila.estado() : { pronta: false, erro: 'Armazenamento indisponível' }; }
-  async function enfileirarLote(entradas) { await filaPronta(); return bancoFila.adicionar(entradas); }
+  // `comTurno` aqui (e não na hora de enviar) é o que faz a fila carimbar o turno do TOQUE: um item
+  // que só conseguir subir às 15h continua dizendo que a entrega foi da MANHÃ. Ver `comTurno`.
+  async function enfileirarLote(entradas) {
+    await filaPronta();
+    return bancoFila.adicionar((entradas || []).map(e => Object.assign({}, e, { params: comTurno(e && e.params) })));
+  }
   async function enfileirar(params, meta) { return (await enfileirarLote([{ params, meta }]))[0]; }
   async function filaPorIds(ids) {
     await filaPronta();const alvo = new Set(ids);return (await bancoFila.ler()).filter(x => alvo.has(x.id));
