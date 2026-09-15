@@ -168,6 +168,25 @@ function buildMapsUrl(item) {
     return C.STORAGE_CACHE_PREFIX + key;
   }
 
+  // 🧹 Contrapeso de `chaveCacheEntregas`: pôr o dia na chave (e908924) parou o vazamento da rota
+  // de ontem, mas passou a criar uma entrada NOVA por dia — e nada apagava as velhas. Antes a
+  // chave era reaproveitada e se sobrescrevia sozinha; sem esta limpeza o aparelho acumularia
+  // rota antiga até estourar o localStorage, e `writeCache` não tem proteção contra estouro.
+  // Só casa a rota: `entregadores_` e `fila_transacional_v1` NÃO começam com `entregas_`, então
+  // a lista de nomes, a FILA OFFLINE e o KM+foto pendentes ficam intocados.
+  function limparCacheEntregasDeOutrosDias() {
+    try {
+      const base = cacheKey('entregas_');
+      const deHoje = base + diaSP() + '_';
+      const velhas = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf(base) === 0 && k.indexOf(deHoje) !== 0) velhas.push(k);
+      }
+      for (const k of velhas) { try { localStorage.removeItem(k); } catch (e) {} }
+    } catch (e) {}
+  }
+
   function writeCache(key, value) {
     localStorage.setItem(cacheKey(key), JSON.stringify({
       ts: Date.now(),
@@ -865,6 +884,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
 
 
   function saveEntregasCache(entregador, items) {
+    limparCacheEntregasDeOutrosDias();
     const cacheName = chaveCacheEntregas(entregador);
     writeCache(cacheName, Array.isArray(items) ? items : []);
   }
