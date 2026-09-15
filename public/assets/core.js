@@ -15,6 +15,17 @@
   // Agora o turno é lembrado em `localStorage` POR DIA: sobrevive ao kill, e não vaza para amanhã.
   function diaSP() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()); }
   function chaveTurno() { return 'app_turno_v1_' + diaSP(); }
+  // 🗓️ MESMO vazamento do turno acima, na chave do cache da ROTA — e esta tinha ficado de fora.
+  // Sem o dia, `entregas_MANHÃ_<nome>` de ontem sobrevive à virada. O plano B offline (linha ~496)
+  // lê com `readCache`, que IGNORA a validade de 5 min, então qualquer idade serve: quem já tinha
+  // iniciado a rota de HOJE (a trava `inicioConfirmado` deixa passar) e cuja chamada falhava
+  // recebia a ROTA DE ONTEM. Foi o que pegou o Daniel e Heloisa e o Cristiano em 15/09/2026.
+  // Com o dia na chave o vazamento fica impossível por construção, não por vigilância.
+  // Uma função só porque os dois lados tinham se separado: quem lia fazia `.trim()` e quem
+  // gravava não — nome com espaço sobrando gravava numa chave e lia de outra.
+  function chaveCacheEntregas(entregador) {
+    return 'entregas_' + diaSP() + '_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase();
+  }
   function getTurno() {
     try {
       var doDia = localStorage.getItem(chaveTurno());
@@ -449,7 +460,7 @@ function manterValorMaisRecente(item, anteriores) {
 }
 
 async function carregarEntregasPorEntregador(entregador) {
-  const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase();
+  const cacheName = chaveCacheEntregas(entregador);
 
   try {
     const res = await apiGet({
@@ -854,7 +865,7 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
 
 
   function saveEntregasCache(entregador, items) {
-    const cacheName = 'entregas_' + getTurno() + '_' + String(entregador || '').toLowerCase();
+    const cacheName = chaveCacheEntregas(entregador);
     writeCache(cacheName, Array.isArray(items) ? items : []);
   }
 
