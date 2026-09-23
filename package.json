@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "npx serve public -l 3000",
-    "start": "npx serve public -l 3000"
+    "start": "npx serve public -l 3000",
+    "test": "node scripts/_t-pagamento-porta.mjs && node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/test-valor-atual.mjs && node scripts/test-bloqueio-montagem.cjs && node scripts/test-fila-pagamento.mjs && node scripts/_t-toque-instantaneo.mjs",
+    "test:mutacao": "node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs"
   },
   "dependencies": {
     "googleapis": "^171.4.0",

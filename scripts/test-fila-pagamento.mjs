@@ -88,11 +88,17 @@ async function harness({store=new Map(),handler=async()=>accepted}={}){
   });window.AppUI=ui;
   ui.escolher=async()=>ctx.choice||'maos';
   ui.perguntar=async()=>'';
-  const page=vm.runInContext(pageFunction('pgRespostaAnterior')+'\n'+pageFunction('guardarRecebimento')+'\n'+pageFunction('enviarRecebimentoGuardado')+'\n'+pageFunction('enviarConfirmacao')+'\n'+pageFunction('handleAction')+
-    '\n({pgRespostaAnterior,enviarConfirmacao,guardarRecebimento,enviarRecebimentoGuardado,handleAction});',ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
+  // ⚠️ Toda função REAL que handleAction usa entra aqui. Esquecer uma não dá "teste fraco": dá
+  // ReferenceError no meio do cenário — e foi assim que o toque instantâneo (23/09) foi integrado.
+  const nomes=['pgRespostaAnterior','metaDeStatus','itensComFila','guardarNaFila','agendarEnvio',
+    'avisarArmazenamento','guardarRecebimento','enviarRecebimentoGuardado','acompanharEnvio',
+    'enviarConfirmacao','handleAction'];
+  const page=vm.runInContext(nomes.map(pageFunction).join('\n')+'\n({'+nomes.join(',')+'});',
+    ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
   await api.filaPronta();
   return {api,Pg:window.PgPorta,state,calls,alerts,store,storageWrites,statusUpdates,
     timeouts,send:page.enviarConfirmacao,previous:page.pgRespostaAnterior,
+    vista:page.itensComFila,
     stage:async(...args)=>copy(await page.guardarRecebimento(...args)),flush:page.enviarRecebimentoGuardado,action:page.handleAction,
     setStorageFailure:yes=>{storageFailure=yes;},abortAckOn:predicate=>{abortAckPut=predicate;},withoutLocks:()=>{delete ctx.navigator.locks;},setReadHook:hook=>{readHook=hook;},
     setAnswer:answer=>{ctx.paymentAnswer=answer;},setChoice:choice=>{ctx.choice=choice;},
@@ -171,11 +177,21 @@ test('pendência antiga não expira e erro transitório do pagamento não bloque
   await h.api.processarFila();assert.equal(h.queue().length,1);assert.equal(h.queue()[0].params.row,1);
   assert.equal(h.queue()[0].precisaCorrigir,false);assert.deepEqual(h.calls.map(x=>x.action),['confirmarPagamento','marcarEntregue']);
 });
-test('entrega não encontrada retém pagamento como recusa, mas remove marcação sem destino',async()=>{
-  const h=await harness({handler:async()=>({ok:false,naoEncontrado:true})});
+// ⛔ MUDANÇA DELIBERADA DE GARANTIA — 23/09/2026. Este cenário existia como "remove marcação sem
+// destino": um `naoEncontrado` numa MARCAÇÃO virava `ack` e a declaração sumia EM SILÊNCIO, com a
+// tela continuando VERDE para uma parada que o servidor tinha recusado. O diário de 09/09 já
+// registrava o estrago ("descartada em 7 dias, em silêncio"). O pedido do dono em 23/09 é o oposto:
+// o que o servidor recusa não pode ficar verde, e a tela desfaz SÓ aquele item. O pagamento
+// continua exatamente como era (recusa que exige correção).
+test('naoEncontrado vira recusa VISÍVEL na marcação — nunca mais descarte silencioso',async()=>{
+  const h=await harness({handler:async()=>({ok:false,naoEncontrado:true,error:'Entrega não pertence a esta rota/turno.'})});
   await h.enqueue(1,T1);await h.enqueue(2,T2,{action:'marcarEntregue'});await h.api.processarFila();
-  assert.equal(h.queue().length,1);assert.equal(h.queue()[0].precisaCorrigir,true);
+  assert.equal(h.queue().length,2,'a marcação recusada NÃO some: fica como recusa para a tela desfazer');
   assert.match(h.previous(1,{}).erro,/Entrega não encontrada/);
+  const marcacao=h.queue().find(x=>x.params.action==='marcarEntregue');
+  assert.equal(marcacao.precisaCorrigir,true);assert.match(marcacao.erro,/rota\/turno/);
+  // Recusada = não é mais reenviada (não fica batendo no servidor para levar não de novo).
+  const antes=h.calls.length;await h.api.processarFila();assert.equal(h.calls.length,antes);
 });
 test('recusa direta preserva valor e mostra aviso; correção nova aceita deixa de mostrá-la',async()=>{
   const h=await harness({handler:async()=>denied});await h.send(1,paid,T1,false);
@@ -289,14 +305,38 @@ test('correção também está persistida quando o fetch não terminou',async()=
   await x.api.processarFila();assert.equal(x.queue().length,0);
 });
 test('porta do menu de entrega em andamento guarda todo o grupo antes da rede',async()=>{
-  let started;const entered=new Promise(r=>{started=r;});
-  const h=await harness({handler:async()=>{started();return new Promise(()=>{});}});
+  // A rede NUNCA responde aqui. Antes de 23/09 o `handleAction` ficava preso nela; agora ele tem de
+  // terminar mesmo assim, com tudo já gravado — inclusive o INICIAR da próxima entrega.
+  const h=await harness({handler:async()=>new Promise(()=>{})});
   h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true},{row:2,numero:1,status:'Indo para entrega',naEntrega:true},
     {row:3,numero:2,status:'',naEntrega:false}];
   h.setChoice('done');h.setAnswer({porRow:{1:paid,2:paid}});
-  h.action('start',3);await entered;
-  assert.equal(h.queue().length,4);assert.deepEqual(h.queue().map(x=>x.params.action),['marcarEntregue','marcarEntregue','confirmarPagamento','confirmarPagamento']);
-  assert.equal(h.storageWrites.filter(x=>x.key===QUEUE).length,1);
+  await h.action('start',3); // não pendura: o toque não espera a rede
+  assert.deepEqual(h.queue().map(x=>x.params.action),
+    ['marcarEntregue','marcarEntregue','confirmarPagamento','confirmarPagamento','iniciarEntrega']);
+  assert.deepEqual(h.queue().map(x=>Number(x.params.row)),[1,2,1,2,3]);
+  // Dois ATOS distintos = dois commits: o grupo da entrega pendente num só, e o início da próxima
+  // no seu. O que não pode é um ato sair partido em vários commits.
+  assert.equal(h.storageWrites.filter(x=>x.key===QUEUE).length,2);
+});
+test('o toque não espera rede nem para pintar nem para liberar o próximo',async()=>{
+  // Rede pendurada para sempre: se qualquer `await` de envio tivesse ficado no caminho do dedo,
+  // nenhuma destas chamadas voltaria e o teste travaria no timeout.
+  const h=await harness({handler:async()=>new Promise(()=>{})});
+  h.state.items=[{row:1,numero:1,status:'',naEntrega:false},{row:2,numero:2,status:'',naEntrega:false},
+    {row:3,numero:3,status:'',naEntrega:false}];
+  h.setAnswer(null);h.setChoice('maos');
+  await h.action('done',1);
+  await h.action('start',2);
+  await h.action('done',2);
+  await h.action('naoentregue',3); // o modal responde 'maos' -> cai no ramo de cancelado
+  assert.equal(h.queue().length,4,'quatro toques, quatro itens — um por toque, sem duplicar');
+  assert.deepEqual(h.queue().map(x=>x.params.action),['marcarEntregue','iniciarEntrega','marcarEntregue','marcarCancelado']);
+  // E a tela já mostra os quatro resolvidos/iniciados SEM nenhuma resposta do servidor.
+  const vista=h.vista();
+  assert.equal(vista.find(x=>x.row===1).status,'Entregue');
+  assert.equal(vista.find(x=>x.row===2).status,'Entregue');
+  assert.equal(vista.find(x=>x.row===3).status,'Cancelado');
 });
 test('falha de armazenamento aborta antes da rede e de mostrar entrega concluída',async()=>{
   const h=await harness();h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true}];
