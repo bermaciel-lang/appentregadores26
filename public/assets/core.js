@@ -39,6 +39,15 @@
   }
   function usandoPainel() { try { return !!localStorage.getItem('app_api_url_override'); } catch (e) { return false; } }
 
+  // ⏱️ Orçamento da conferência de valor do pagamento na porta (`conferirValores`). É a ÚNICA
+  // chamada de rede que ainda acontece ANTES de um diálogo do entregador — é ela que decide o valor
+  // oferecido no modal de dinheiro. Com o timeout geral (15 s) ela virava tela morta no meio da rua:
+  // o "Como foi a entrega?" fechava e nada aparecia. Aqui ela é curta E sai adiantada, em paralelo
+  // com o diálogo que o entregador está lendo (ver `adiantarConferenciaPg` em page-entregas.js).
+  // Se não der tempo, o modal abre no modo degradado: o entregador DIGITA o valor, com a trava de
+  // 10x sobre o valor de referência. Nada de dinheiro afrouxa; só a espera é que tem limite.
+  const TEMPO_CONFERIR_MS = Number(C.API_CONFERIR_TIMEOUT_MS) > 0 ? Number(C.API_CONFERIR_TIMEOUT_MS) : 6000;
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -383,7 +392,11 @@ function espelharNoPainel(body) {
     const url = buildApiUrl(params);
     // Um recebimento coletivo consulta até 20 pedidos antes da primeira gravação.
     // A fila conserva o mesmo ato; não iniciar retries enquanto a conferência ainda roda.
-    const timeoutMs = params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS;
+    // `opt.timeoutMs` existe para a ÚNICA chamada que ainda precede um diálogo do entregador (a
+    // conferência de valor do pagamento na porta): lá 15 s de espera é tela morta na rua, e o
+    // modal sabe seguir sem o valor conferido (o entregador digita). Ver TEMPO_CONFERIR_MS.
+    const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
+      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);
     const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
     let lastError = null;
 
@@ -704,13 +717,21 @@ async function apiMarcarCancelado(row, obs) {
         anterior: Object.prototype.hasOwnProperty.call(meta, 'statusAnterior') ? meta.statusAnterior : undefined,
         obsAnterior: meta.obsAnterior,
         recusado: !!x.precisaCorrigir,
-        erro: x.erro || null
+        erro: x.erro || null,
+        // Quantos ciclos seguidos este item tentou subir e o servidor devolveu `ok:false` ambíguo.
+        // NÃO é recusa e NÃO desfaz nada: serve só para o selo do cartão parar de dizer
+        // "enviando…" e passar a dizer a verdade ("ainda não enviou"). Ver `consumirFila`.
+        tentativas: tentativasDoItem(x.id)
       });
     });
     return mapa;
   }
   // Tira da fila um item de STATUS que o servidor recusou, depois que o entregador leu o motivo.
   // Só de status: uma recusa de PAGAMENTO continua exigindo correção (regra de dinheiro intocada).
+  // ⛔ ISTO APAGA A MARCAÇÃO DO APARELHO. Por isso só pode alcançar uma recusa DETERMINÍSTICA —
+  // `naoEncontrado`, em que o servidor DISSE que aquela parada não é desta rota/turno. Um
+  // `ok:false` ambíguo (servidor engasgado) NUNCA chega aqui: ele não marca `precisaCorrigir`,
+  // continua na fila e continua sendo reenviado. Ver `consumirFila`.
   async function filaDescartarStatus(id) {
     await filaPronta();
     const item = (await bancoFila.ler()).find(x => x.id === id);
@@ -729,18 +750,39 @@ async function apiMarcarCancelado(row, obs) {
     }).finally(() => { _processamentoFila = null; });
     return _processamentoFila;
   }
-  // Quantas respostas AMBÍGUAS (`ok:false` sem `naoEncontrado`) um item de status aguenta antes de
-  // virar recusa visível. O catch de topo do painel devolve exceção como `{ok:false, error:<técnico>}`
-  // com HTTP 200 — indistinguível de "o servidor disse não" pelo texto. Então a gente NÃO trata a
-  // primeira como definitiva: tenta, e só depois de N ciclos mostra o motivo ao entregador em vez
-  // de reenviar para sempre em silêncio. Contagem em memória (o poll é de 60 s, ~12 min): reabrir o
-  // app zera o contador de propósito — a recusa, quando acontece, aí sim é gravada de forma durável.
-  const MAX_AMBIGUAS_STATUS = 12;
-  const _ambiguas = new Map();
+  // ⛔ 23/09/2026 (2ª volta) — AQUI EXISTIA `MAX_AMBIGUAS_STATUS = 12`: depois de 12 ciclos sem
+  // passar, um `ok:false` AMBÍGUO virava RECUSA DURÁVEL, a tela desfazia a marcação e o único botão
+  // oferecido ("Entendi") APAGAVA a declaração do aparelho. Só que o catch de topo do painel devolve
+  // QUALQUER exceção como `{ok:false, error:<técnico>}` com HTTP 200: "o servidor disse não" e "o
+  // servidor engasgou" são o MESMO texto. Uma janela de deploy/banco fora transformava a entrega
+  // REAL do entregador em "o sistema não aceitou", ele tocava Entendi e a informação morria — o
+  // oposto do "nunca perder". E o contador era por CICLO de dreno, não por tempo: todo toque dispara
+  // um dreno, então "12 ciclos" eram 12 paradas de rota, não os ~12 min que o comentário prometia.
+  //
+  // Agora ambíguo NUNCA vira recusa. Ele continua na fila, continua sendo reenviado para sempre, e
+  // a única coisa que muda é o SELO do cartão: depois de N ciclos ele para de dizer "enviando…" e
+  // passa a dizer "ainda não enviou". Quem desfaz a tela é só a recusa DETERMINÍSTICA do servidor
+  // (`naoEncontrado`). Contagem em memória, por item; reabrir o app zera — é só texto de selo.
+  const AVISAR_NAO_PASSOU = 3;
+  const _naoPassaram = new Map();
+  function tentativasDoItem(id) { return _naoPassaram.get(id) || 0; }
   async function consumirFila(continua) {
     const tentados = new Set();
+    // ⛔ 23/09/2026 (2ª volta) — A ORDEM DENTRO DA MESMA PARADA É SAGRADA. O `continue` que
+    // consertou o CONGELAMENTO da fila (um item envenenado travava todos os de trás) deixava o item
+    // SEGUINTE DA MESMA row passar na frente do que falhou; no ciclo seguinte o pulado subia por
+    // cima e o efeito final no servidor virava a intenção ANTIGA. Em português de rua: o entregador
+    // aperta Entregue sem querer, toca DESFAZER, vê a tela certa — e o escritório recebe "Entregue",
+    // com o pagamento já anulado pelo desfazer. O mesmo pulo mandava o `confirmarPagamento` na
+    // frente do `marcarEntregue` do mesmo pedido, contra o que o painel documenta por escrito
+    // (erp-pagamento-na-entrega.ts: "a fila é FIFO e PARA no primeiro ok:false").
+    // Conserto: o pulo vale só para OUTRAS paradas. A row do item que não passou fica bloqueada
+    // até o próximo ciclo, então dentro de uma parada a fila continua estritamente FIFO.
+    const rowsBloqueadas = new Set();
+    const bloquearRow = it => { const r = Number(it.params && it.params.row); if (r) rowsBloqueadas.add(r); };
     for (;;) {
-      const item = (await bancoFila.ler()).find(x => !x.precisaCorrigir && !tentados.has(x.id));
+      const item = (await bancoFila.ler()).find(x => !x.precisaCorrigir && !tentados.has(x.id) &&
+        !rowsBloqueadas.has(Number(x.params && x.params.row)));
       if (!item || !await continua()) break;
       tentados.add(item.id);
       const pagamento = item.params.action === 'confirmarPagamento';
@@ -756,36 +798,37 @@ async function apiMarcarCancelado(row, obs) {
         await bancoFila.recusar(item.id, res.pagamento.porque || 'Pagamento precisa de correção.');
       } else if (res && res.ok) {
         if (pagamento && (!res.pagamento || res.pagamento.gravado !== true)) {
-          await bancoFila.marcarReenvio(item.id);continue;
+          await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
         }
-        _ambiguas.delete(item.id);
+        _naoPassaram.delete(item.id);
         await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
+        _naoPassaram.delete(item.id);
         await bancoFila.recusar(item.id, 'Entrega não encontrada. A equipe precisa conferir este pagamento.');
       } else if (res && res.naoEncontrado) {
         // ⛔ 23/09/2026 — ATÉ HOJE ISTO ERA `ack`: a marcação era DESCARTADA EM SILÊNCIO e a tela
         // continuava VERDE para uma parada que o servidor tinha recusado (tirada da rota, refeita,
         // ou de outro turno). O entregador nunca sabia; o escritório também não. Agora vira recusa
         // durável: a tela desfaz SÓ aquele item e mostra o motivo, sem modal que trave a rua.
+        // É a ÚNICA recusa de status que existe — e por ser DETERMINÍSTICA (o servidor procurou e
+        // disse que a parada não é desta rota/turno) é a única que o "Entendi" pode descartar.
+        _naoPassaram.delete(item.id);
         await bancoFila.recusar(item.id, (res.error && String(res.error)) ||
           'Esta parada não está mais na sua rota. Se você entregou, avise o escritório.');
       } else if (pagamento) {
-        await bancoFila.marcarReenvio(item.id);continue;
+        await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
       } else if (res && (res.precisaLogin || res.montagemBloqueada || res.montagemIndisponivel)) {
         // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato e vale para a
         // fila inteira. Guarda tudo como está e para — o próximo ciclo tenta de novo.
         break;
       } else {
-        // `ok:false` ambíguo. O `continue` (em vez do `break` de antes) é o conserto do
-        // CONGELAMENTO DA FILA: um item envenenado travava TODOS os de trás, e no dia seguinte eles
-        // saíam como `naoEncontrado` e sumiam. Agora ele sai da frente e os outros passam.
-        const n = (_ambiguas.get(item.id) || 0) + 1;
-        _ambiguas.set(item.id, n);
-        if (n >= MAX_AMBIGUAS_STATUS) {
-          _ambiguas.delete(item.id);
-          await bancoFila.recusar(item.id, (res && res.error && String(res.error)) ||
-            'O sistema não aceitou esta marcação. Avise o escritório.');
-        }
+        // `ok:false` AMBÍGUO — pode ser recusa e pode ser o servidor engasgado; o painel devolve os
+        // dois com o mesmo formato. Então: não descarta, não recusa, não desfaz a tela. Conta a
+        // tentativa (só para o selo do cartão ficar honesto), bloqueia ESTA parada até o próximo
+        // ciclo e segue para as OUTRAS — que é o conserto do congelamento da fila sem inverter a
+        // ordem dentro da parada. O item continua guardado e continua sendo reenviado para sempre.
+        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
         continue;
       }
     }
@@ -1122,6 +1165,8 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     filaDescartarStatus,
     enviarPendentesNoFechamento,
     ACOES_DE_STATUS,
+    AVISAR_NAO_PASSOU,
+    TEMPO_CONFERIR_MS,
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
