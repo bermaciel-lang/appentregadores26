@@ -727,6 +727,18 @@ button, select, input, textarea {
 .dc-navb:active { transform: scale(.97); }
 .dc-min { margin-left: auto; font-size: 13px; font-weight: 800; color: #475569; background: #f1f5f9; border: 1.5px solid #c3cede; border-radius: 9px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .dc-envio { font-size: 12.5px; font-weight: 700; color: #92400e; margin-top: 8px; }
+/* 23/09/2026 — selo DISCRETO de "já está guardado no aparelho, o envio corre atrás". Substitui o
+   "⏳ Enviando, aguarde…" que vinha junto com os botões desabilitados. Não ocupa linha nova de
+   destaque, não pisca e, principalmente, não impede tocar em nada. */
+.dc-envio.guardado { color: #64748b; font-weight: 600; font-size: 11.5px; margin-top: 6px; }
+.dc-selo { margin-left: 6px; color: #94a3b8; font-size: 12px; font-weight: 700; }
+/* O servidor RECUSOU esta marcação (parada tirada da rota, outro turno, rota refeita). A tela já
+   desfez só este item; aqui vai o motivo e o "Entendi". Inline de propósito: modal na rua trava. */
+.dc-recusa { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700;
+  color: #b91c1c; background: #fef2f2; border: 1.5px solid #fecaca; border-radius: 10px; padding: 8px 10px; }
+.dc-recusa span { flex: 1; min-width: 0; }
+.dc-recusa-ok { flex: none; min-height: 34px; padding: 0 12px; border-radius: 9px; border: 1.5px solid #b91c1c;
+  background: #fff; color: #b91c1c; font-size: 12.5px; font-weight: 800; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 /* ===== Painel "o que foi registrado" (KM/foto) embaixo dos botões de rota ===== */
 .info-rota { margin-top: 12px; display: grid; gap: 8px; }
