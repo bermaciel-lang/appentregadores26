@@ -26,6 +26,12 @@ const antes = Object.fromEntries(ARQUIVOS.map(f => [f, readFileSync(path.join(as
 // (foi o primeiro resultado desta própria régua, em 23/09). A cópia mutada pode ficar em \n: o
 // JavaScript não se importa, e o original não é tocado.
 const texto = f => antes[f].toString('utf8').replace(/\r\n/g, '\n');
+// ⛔ E OS TRECHOS DESTE ARQUIVO TAMBÉM. `core.autocrlf=true` e sem .gitattributes: num checkout
+// limpo ESTE .mjs vem em CRLF, e aí todo `de` de mais de uma linha carregaria \r\n e não bateria
+// com o asset normalizado — os 17 defeitos sairiam como "trecho velho" e o `npm test` ficaria
+// vermelho por motivo nenhum. Normalizar OS DOIS LADOS é o que impede a régua de depender de como
+// o git resolveu entregar os arquivos nesta máquina.
+const semCR = x => String(x).replace(/\r\n/g, '\n');
 
 const defeitos = [
   // ── core.js: a FILA ────────────────────────────────────────────────────────────────────────
@@ -194,8 +200,9 @@ try {
       const src = texto(d.arquivo);
       // "trecho não existe mais" = lista VELHA. É falha, mas pede refazer o trecho — não é a mesma
       // coisa que a régua mentir. Somar as duas esconderia qual das duas aconteceu.
-      if (!src.includes(d.de)) { console.log('🟡 RÉGUA VELHA (refazer o trecho) — ' + d.nome); velhos++; continue; }
-      montar(d.arquivo, src.replace(d.de, d.para));
+      const de = semCR(d.de), para = semCR(d.para);
+      if (!src.includes(de)) { console.log('🟡 RÉGUA VELHA (refazer o trecho) — ' + d.nome); velhos++; continue; }
+      montar(d.arquivo, src.replace(de, para));
       const r = rodar();
       const saida = (r.stdout || '') + (r.stderr || '');
       // Vermelho SÓ por reprovação de cenário. Crash ou timeout não contam: um erro de sintaxe
