@@ -660,15 +660,83 @@ async function apiMarcarCancelado(row, obs) {
     });
     return achado;
   }
+
+  // ===== 23/09/2026 — A FILA VIROU O CAMINHO NORMAL DO TOQUE =====
+  // Até hoje o dedo do entregador esperava a REDE: `handleAction` desabilitava os botões, mandava
+  // `apiGet(..., {retries:3})` POR LINHA em série e só caía na fila quando a chamada FALHAVA — com
+  // sinal ruim, 3 tentativas × 15 s de timeout = dezenas de segundos de botão morto. Era a queixa
+  // do dono: "clica em ENTREGUE, demora, às vezes não vai, aí tem que clicar de novo depois".
+  // Agora o toque grava na fila durável (IndexedDB) e a TELA É PINTADA A PARTIR DA FILA. Nenhuma
+  // chamada de rede fica no caminho do dedo.
+  //
+  // Estas são as ações que MUDAM O STATUS de uma parada (as do cartão). O pagamento na porta NÃO
+  // entra aqui: ele tem estado próprio (`filaParamsPendentes`) e regras de dinheiro próprias.
+  const ACOES_DE_STATUS = Object.freeze({
+    iniciarEntrega: 'Indo para entrega',
+    marcarEntregue: 'Entregue',
+    marcarNaoEntregue: 'Não entregue',
+    marcarCancelado: 'Cancelado',
+    desfazer: ''
+  });
+  // Projeção da fila sobre a lista que veio do servidor: row -> o que o aparelho JÁ registrou.
+  // `alvo` = status que o toque declarou (a tela pinta ele na hora, sem rede).
+  // `anterior` = status que a parada tinha ANTES do toque, congelado no meta do item no instante da
+  //   gravação. É com ele que a tela DESFAZ só aquele item quando o servidor recusa.
+  // Vale a ÚLTIMA declaração de cada row (a fila é lida em ordem transacional), que é o que o
+  // entregador tocou por último. Devolve `null` — e não um mapa vazio — enquanto a fila não
+  // hidratou: "não sei" não pode virar "não tem nada guardado".
+  function filaStatusPendentes() {
+    const fila = bancoFila && bancoFila.snapshot();
+    if (!bancoFila || fila === null) return null;
+    const mapa = new Map();
+    fila.forEach(x => {
+      const acao = x.params && x.params.action;
+      if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
+      const row = Number(x.params.row);
+      if (!row) return;
+      const meta = x.meta || {};
+      mapa.set(row, {
+        id: x.id, row, action: acao,
+        alvo: ACOES_DE_STATUS[acao],
+        obsAlvo: x.params.obs || '',
+        // Item legado (gravado antes deste commit) não tem `statusAnterior`: aí a tela não inventa
+        // um estado anterior — devolve undefined e quem lê cai no status do servidor.
+        anterior: Object.prototype.hasOwnProperty.call(meta, 'statusAnterior') ? meta.statusAnterior : undefined,
+        obsAnterior: meta.obsAnterior,
+        recusado: !!x.precisaCorrigir,
+        erro: x.erro || null
+      });
+    });
+    return mapa;
+  }
+  // Tira da fila um item de STATUS que o servidor recusou, depois que o entregador leu o motivo.
+  // Só de status: uma recusa de PAGAMENTO continua exigindo correção (regra de dinheiro intocada).
+  async function filaDescartarStatus(id) {
+    await filaPronta();
+    const item = (await bancoFila.ler()).find(x => x.id === id);
+    if (!item || !item.precisaCorrigir) return false;
+    if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, item.params && item.params.action)) return false;
+    await bancoFila.ack(id);
+    return true;
+  }
   let _processamentoFila = null;
   function processarFila() {
     if (_processamentoFila) return _processamentoFila;
+    _keepaliveFeito = false; // o app voltou a viver: o disparo de fechamento pode acontecer de novo
     _processamentoFila = filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
       console.error('[fila]', error);
       return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
     }).finally(() => { _processamentoFila = null; });
     return _processamentoFila;
   }
+  // Quantas respostas AMBÍGUAS (`ok:false` sem `naoEncontrado`) um item de status aguenta antes de
+  // virar recusa visível. O catch de topo do painel devolve exceção como `{ok:false, error:<técnico>}`
+  // com HTTP 200 — indistinguível de "o servidor disse não" pelo texto. Então a gente NÃO trata a
+  // primeira como definitiva: tenta, e só depois de N ciclos mostra o motivo ao entregador em vez
+  // de reenviar para sempre em silêncio. Contagem em memória (o poll é de 60 s, ~12 min): reabrir o
+  // app zera o contador de propósito — a recusa, quando acontece, aí sim é gravada de forma durável.
+  const MAX_AMBIGUAS_STATUS = 12;
+  const _ambiguas = new Map();
   async function consumirFila(continua) {
     const tentados = new Set();
     for (;;) {
@@ -679,6 +747,8 @@ async function apiMarcarCancelado(row, obs) {
       let res;
       try { res = await apiGet(item.params, { retries: 1 }); }
       catch (error) {
+        // Exceção = sem resposta (sem sinal, timeout, proxy fora). Não é recusa: nada é perdido,
+        // nada é marcado, e parar aqui é certo — se a rede caiu, os itens de trás também não vão.
         if (pagamento) await bancoFila.marcarReenvio(item.id);
         break;
       }
@@ -688,17 +758,75 @@ async function apiMarcarCancelado(row, obs) {
         if (pagamento && (!res.pagamento || res.pagamento.gravado !== true)) {
           await bancoFila.marcarReenvio(item.id);continue;
         }
+        _ambiguas.delete(item.id);
         await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
         await bancoFila.recusar(item.id, 'Entrega não encontrada. A equipe precisa conferir este pagamento.');
       } else if (res && res.naoEncontrado) {
-        await bancoFila.ack(item.id);
+        // ⛔ 23/09/2026 — ATÉ HOJE ISTO ERA `ack`: a marcação era DESCARTADA EM SILÊNCIO e a tela
+        // continuava VERDE para uma parada que o servidor tinha recusado (tirada da rota, refeita,
+        // ou de outro turno). O entregador nunca sabia; o escritório também não. Agora vira recusa
+        // durável: a tela desfaz SÓ aquele item e mostra o motivo, sem modal que trave a rua.
+        await bancoFila.recusar(item.id, (res.error && String(res.error)) ||
+          'Esta parada não está mais na sua rota. Se você entregou, avise o escritório.');
       } else if (pagamento) {
         await bancoFila.marcarReenvio(item.id);continue;
-      } else break;
+      } else if (res && (res.precisaLogin || res.montagemBloqueada || res.montagemIndisponivel)) {
+        // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato e vale para a
+        // fila inteira. Guarda tudo como está e para — o próximo ciclo tenta de novo.
+        break;
+      } else {
+        // `ok:false` ambíguo. O `continue` (em vez do `break` de antes) é o conserto do
+        // CONGELAMENTO DA FILA: um item envenenado travava TODOS os de trás, e no dia seguinte eles
+        // saíam como `naoEncontrado` e sumiam. Agora ele sai da frente e os outros passam.
+        const n = (_ambiguas.get(item.id) || 0) + 1;
+        _ambiguas.set(item.id, n);
+        if (n >= MAX_AMBIGUAS_STATUS) {
+          _ambiguas.delete(item.id);
+          await bancoFila.recusar(item.id, (res && res.error && String(res.error)) ||
+            'O sistema não aceitou esta marcação. Avise o escritório.');
+        }
+        continue;
+      }
     }
     try { await reenviarRotaPendente(); } catch (e) {}
     return { erroArmazenamento: null };
+  }
+
+  // ===== FECHOU O APP COM COISA NA FILA =====
+  // `keepalive` deixa o navegador terminar a requisição depois que a página morre. É o último
+  // recurso do "nunca perder": a fila já garante o reenvio ao reabrir, isto só encurta a espera.
+  // Regras para não virar fonte de erro:
+  //  - só ações de STATUS (marcar a mesma linha de novo grava o mesmo valor; é idempotente);
+  //  - só rows com UMA única declaração pendente — duas (ex.: Entregue depois Desfazer) chegariam
+  //    sem ordem garantida e o resultado final poderia ficar invertido;
+  //  - NENHUM ack é escrito: sem resposta não há prova de gravação, então o item continua na fila
+  //    e sobe de novo no próximo ciclo (o servidor aguenta, é update).
+  const MAX_KEEPALIVE = 6;
+  let _keepaliveFeito = false;
+  function enviarPendentesNoFechamento() {
+    try {
+      if (_keepaliveFeito || C.API_MODE !== 'json') return 0;
+      const fila = bancoFila && bancoFila.snapshot();
+      if (!fila || !fila.length) return 0;
+      const porRow = new Map();
+      fila.forEach(x => {
+        const acao = x.params && x.params.action;
+        if (x.precisaCorrigir || !Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
+        const row = Number(x.params.row);
+        if (!row) return;
+        porRow.set(row, (porRow.get(row) || []).concat([x]));
+      });
+      let enviados = 0;
+      for (const itens of porRow.values()) {
+        if (enviados >= MAX_KEEPALIVE) break;
+        if (itens.length !== 1) continue; // ambíguo na ordem → deixa para o consumidor serial
+        try { fetch(buildApiUrl(itens[0].params), { method: 'GET', keepalive: true, cache: 'no-store' }).catch(function () {}); enviados++; }
+        catch (e) { /* o item continua na fila */ }
+      }
+      if (enviados) _keepaliveFeito = true;
+      return enviados;
+    } catch (e) { return 0; }
   }
 
   async function abrirWhatsapp(row) {
@@ -990,6 +1118,10 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
     processarFila,
     filaRowsPendentes,
     filaParamsPendentes,
+    filaStatusPendentes,
+    filaDescartarStatus,
+    enviarPendentesNoFechamento,
+    ACOES_DE_STATUS,
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
