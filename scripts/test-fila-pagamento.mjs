@@ -85,14 +85,15 @@ async function harness({store=new Map(),handler=async()=>accepted}={}){
   Object.assign(ctx,{api,state,AppUI:ui,renderList:()=>{},carregarTudo:()=>{},
     updateLocalStatus:(row,status,obs)=>{statusUpdates.push({row,status,obs});const item=state.items.find(x=>Number(x.row)===Number(row));if(item)item.status=status;},
     conferirGrupoValores:async x=>x,coletarPagamento:async()=>ctx.paymentAnswer,
+    adiantarConferenciaPg:()=>null,
   });window.AppUI=ui;
   ui.escolher=async()=>ctx.choice||'maos';
   ui.perguntar=async()=>'';
   // ⚠️ Toda função REAL que handleAction usa entra aqui. Esquecer uma não dá "teste fraco": dá
   // ReferenceError no meio do cenário — e foi assim que o toque instantâneo (23/09) foi integrado.
   const nomes=['pgRespostaAnterior','metaDeStatus','itensComFila','guardarNaFila','agendarEnvio',
-    'avisarArmazenamento','guardarRecebimento','enviarRecebimentoGuardado','acompanharEnvio',
-    'enviarConfirmacao','handleAction'];
+    'avisarSemSincronizacao','comEspera','avisarArmazenamento','guardarRecebimento',
+    'enviarRecebimentoGuardado','acompanharEnvio','enviarConfirmacao','handleAction','executarAcao'];
   const page=vm.runInContext(nomes.map(pageFunction).join('\n')+'\n({'+nomes.join(',')+'});',
     ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
   await api.filaPronta();

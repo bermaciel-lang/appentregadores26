@@ -28,6 +28,7 @@ const antes = Object.fromEntries(ARQUIVOS.map(f => [f, readFileSync(path.join(as
 const texto = f => antes[f].toString('utf8').replace(/\r\n/g, '\n');
 
 const defeitos = [
+  // ── core.js: a FILA ────────────────────────────────────────────────────────────────────────
   {
     nome: 'naoEncontrado volta a ser DESCARTE SILENCIOSO (tela fica verde no que o servidor recusou)',
     arquivo: 'core.js',
@@ -38,14 +39,31 @@ const defeitos = [
   {
     nome: 'um item envenenado volta a CONGELAR a fila inteira atrás dele',
     arquivo: 'core.js',
-    de: `        const n = (_ambiguas.get(item.id) || 0) + 1;`,
-    para: `        break; const n = (_ambiguas.get(item.id) || 0) + 1;`
+    de: `        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
+        continue;`,
+    para: '        break;'
   },
   {
-    nome: 'erro ambíguo reenvia para SEMPRE, sem nunca avisar o entregador',
+    // ⛔ O defeito da 1ª volta: o pulo consertou o congelamento e, no mesmo movimento, deixou o
+    // toque SEGUINTE da mesma parada passar na frente do que falhou.
+    nome: 'pular o item ambíguo volta a INVERTER a ordem dentro da MESMA parada',
     arquivo: 'core.js',
-    de: 'const MAX_AMBIGUAS_STATUS = 12;',
-    para: 'const MAX_AMBIGUAS_STATUS = Infinity;'
+    de: `        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
+        continue;`,
+    para: `        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        continue;`
+  },
+  {
+    // ⛔ O outro defeito da 1ª volta: erro TRANSITÓRIO virando recusa durável que o "Entendi" apaga.
+    nome: 'erro ambíguo volta a virar RECUSA DURÁVEL (e o Entendi apaga a marcação do aparelho)',
+    arquivo: 'core.js',
+    de: `        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
+        continue;`,
+    para: `        await bancoFila.recusar(item.id, (res && res.error && String(res.error)) || 'O sistema não aceitou.');
+        continue;`
   },
   {
     nome: 'porteiro fechado (login/montagem) tratado como recusa do ato',
@@ -59,6 +77,14 @@ const defeitos = [
     de: 'if (itens.length !== 1) continue; // ambíguo na ordem → deixa para o consumidor serial',
     para: 'if (itens.length < 1) continue; // ambíguo na ordem → deixa para o consumidor serial'
   },
+  {
+    nome: 'a conferência de valor volta ao timeout geral de 15 s (orçamento próprio ignorado)',
+    arquivo: 'core.js',
+    de: `    const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
+      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`,
+    para: `    const timeoutMs = (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`
+  },
+  // ── page-entregas.js: a TELA ───────────────────────────────────────────────────────────────
   {
     nome: 'a tela volta a ser pintada só pelo servidor (a fila não projeta nada)',
     arquivo: 'page-entregas.js',
@@ -102,6 +128,35 @@ const defeitos = [
       await AppUI.alerta('Pagamento precisa de conferência: '`,
     para: `    if (false) {
       await AppUI.alerta('Pagamento precisa de conferência: '`
+  },
+  {
+    nome: 'a conferência de valor volta para DEPOIS dos diálogos (tela morta entre eles)',
+    arquivo: 'page-entregas.js',
+    de: '      conferenciaPg = adiantarConferenciaPg(item, irmasPg);',
+    para: '      conferenciaPg = null;'
+  },
+  {
+    nome: 'a espera deliberada de dinheiro volta a ser INVISÍVEL (o toque some em silêncio)',
+    arquivo: 'page-entregas.js',
+    de: `  async function comEspera(texto, trabalho) {
+    state.aguardando = texto;`,
+    para: `  async function comEspera(texto, trabalho) {
+    state.aguardando = null;`
+  },
+  {
+    nome: 'agendarEnvio volta a DESCARTAR o resultado (sem Web Locks a tela fica verde mentindo)',
+    arquivo: 'page-entregas.js',
+    de: '      if (p && p.then) p.then(function (r) { if (r && r.sincronizacaoIndisponivel) avisarSemSincronizacao(); }, function () {});',
+    para: '      if (p && p.catch) p.catch(function () {});'
+  },
+  {
+    nome: 'a trava de reentrância volta a NÃO cobrir os diálogos (dois toques, dois atos)',
+    arquivo: 'page-entregas.js',
+    de: `    state.sendingAction = true;
+    try { await executarAcao(act, row); }
+    finally { state.sendingAction = false; renderList(); }`,
+    para: `    try { await executarAcao(act, row); }
+    finally { renderList(); }`
   },
 ];
 

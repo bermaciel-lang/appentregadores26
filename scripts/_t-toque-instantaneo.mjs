@@ -45,8 +45,13 @@ function funcaoDaPagina(nome) {
   return m[0];
 }
 const FUNCOES = ['pgRespostaAnterior', 'metaDeStatus', 'itensComFila', 'guardarNaFila', 'agendarEnvio',
-  'avisarArmazenamento', 'guardarRecebimento', 'enviarRecebimentoGuardado', 'acompanharEnvio',
-  'enviarConfirmacao', 'handleAction'];
+  'avisarSemSincronizacao', 'comEspera', 'avisarArmazenamento', 'guardarRecebimento',
+  'enviarRecebimentoGuardado', 'acompanharEnvio', 'enviarConfirmacao', 'estadoDoEnvio',
+  'handleAction', 'executarAcao'];
+// Só nos cenários que provam a CONFERÊNCIA DE VALOR (a última rede que precede um diálogo). Nos
+// outros, `coletarPagamento`/`conferirGrupoValores` continuam fictícios — senão todo cenário
+// passaria a depender do modal de dinheiro, que tem régua própria (_t-pagamento-porta.mjs).
+const FUNCOES_PG = ['conferirGrupoValores', 'adiantarConferenciaPg', 'coletarPagamento'];
 
 const PREFIXO = 'toque_';
 const FILA_LEGADA = PREFIXO + 'fila_v1';
@@ -69,7 +74,8 @@ function relogio(inicio) {
   return { Data: DataFake, avancar: ms => { agora += ms; }, iso: () => new Date(agora).toISOString() };
 }
 
-async function app({ store = new Map(), responder = async () => aceito, inicio = '2026-09-23T10:20:00.000Z' } = {}) {
+async function app({ store = new Map(), responder = async () => aceito, inicio = '2026-09-23T10:20:00.000Z',
+  pgReal = false, semLocks = false, conferirMs = 0 } = {}) {
   const calls = [], avisos = [], keepalive = [];
   let transporte = responder, semRede = false, falhaArmazenamento = false, banco;
   const rel = relogio(inicio);
@@ -82,6 +88,7 @@ async function app({ store = new Map(), responder = async () => aceito, inicio =
     APP_CONFIG: {
       API_URL: 'https://app.ficticio.invalid/api', API_MODE: 'json', API_RETRY_COUNT: 0,
       API_TIMEOUT_MS: 15000, STORAGE_CACHE_PREFIX: PREFIXO, STORAGE_DRIVER_KEY: PREFIXO + 'driver',
+      ...(conferirMs ? { API_CONFERIR_TIMEOUT_MS: conferirMs } : {}),
       STORAGE_TOKEN_KEY: PREFIXO + 'token', REFRESH_INTERVAL_MS: 60000
     },
     location: { origin: 'https://app.ficticio.invalid' },
@@ -96,7 +103,9 @@ async function app({ store = new Map(), responder = async () => aceito, inicio =
     sessionStorage: memoria(new Map()),
     navigator: {
       userAgent: 'teste-node', onLine: true,
-      locks: { request: async (nome, opc, fn) => {
+      // `semLocks` = navegador antigo sem Web Locks. A fila devolve `sincronizacaoIndisponivel`
+      // e NÃO envia nada; o que importa é que a tela não minta sobre isso.
+      locks: semLocks ? undefined : { request: async (nome, opc, fn) => {
         if (store.locks.has(nome)) return fn(null);
         store.locks.set(nome, true);
         try { return await fn({ name: nome }); } finally { store.locks.delete(nome); }
@@ -116,7 +125,16 @@ async function app({ store = new Map(), responder = async () => aceito, inicio =
       // "quantas vezes o servidor foi tocado", e é sobre isso que os cenários de duplicação falam.
       if (semRede) throw Error('Sem rede fictícia');
       calls.push(copiar(params));
-      return Response.json(await transporte(params, calls.length));
+      // O fetch de verdade ABORTA quando o sinal dispara; o fictício ignorava o sinal, então
+      // nenhum cenário conseguia provar que um ORÇAMENTO de tempo é mesmo cumprido. Agora ele
+      // corre a resposta contra o abort, igual ao navegador.
+      const resposta = transporte(params, calls.length);
+      const sinal = opcoes && opcoes.signal;
+      if (!sinal) return Response.json(await resposta);
+      return Response.json(await Promise.race([resposta, new Promise((_, rejeitar) => {
+        if (sinal.aborted) return rejeitar(Error('AbortError fictício'));
+        sinal.addEventListener('abort', () => rejeitar(Error('AbortError fictício')));
+      })]));
     }
   });
 
@@ -137,18 +155,40 @@ async function app({ store = new Map(), responder = async () => aceito, inicio =
       if (i) { i.status = status; if (obs !== undefined) i.observacaoPedido = obs; }
     },
     conferirGrupoValores: async x => x,
+    adiantarConferenciaPg: () => null,
     coletarPagamento: async () => ctx.respostaPagamento
   });
   window.AppUI = ui;
-  ui.escolher = async () => (ctx.escolha === undefined ? 'maos' : ctx.escolha);
-  ui.perguntar = async () => '';
+  const dialogos = [];
+  // `aoDialogo` deixa o cenário olhar o mundo NO INSTANTE em que um diálogo abre — é assim que se
+  // prova que a conferência de valor saiu ANTES dele, e não entre ele e o modal de dinheiro.
+  // O `await` deixa o cenário SEGURAR um diálogo aberto — é assim que se prova que a trava de
+  // reentrância cobre mesmo o tempo em que o entregador está lendo a pergunta.
+  ui.escolher = async (...a) => { dialogos.push(a[0]); if (ctx.aoDialogo) await ctx.aoDialogo(a[0]); return (ctx.escolha === undefined ? 'maos' : ctx.escolha); };
+  ui.perguntar = async (...a) => { dialogos.push(a[0]); if (ctx.aoDialogo) await ctx.aoDialogo(a[0]); return ''; };
 
-  const pagina = vm.runInContext(FUNCOES.map(funcaoDaPagina).join('\n') + '\n({' + FUNCOES.join(',') + '});',
+  if (pgReal) {
+    // O MODAL tem régua própria; aqui o que está sob prova é a CONFERÊNCIA DE VALOR que o precede.
+    window.PgPorta.perguntar = async () => ctx.respostaPagamento;
+    local.setItem('app_api_url_override', 'https://app.ficticio.invalid/api'); // usandoPainel() = true
+    state.pgCfg = { perguntar: true, formas: [{ id: 'dinheiro', rotulo: 'Dinheiro' }] };
+  }
+  const nomes = FUNCOES.concat(pgReal ? FUNCOES_PG : []);
+  const pagina = vm.runInContext(nomes.map(funcaoDaPagina).join('\n') + '\n({' + nomes.join(',') + '});',
     ctx, { filename: 'page-entregas.js (funções reais)' });
   await api.filaPronta();
 
   return {
-    api, state, calls, avisos, keepalive, store, recarregadas, relogio: rel,
+    api, state, calls, avisos, keepalive, store, recarregadas, relogio: rel, dialogos,
+    definirAoDialogo: fn => { ctx.aoDialogo = fn; },
+    // O selo REAL do cartão (mesma função que o `renderEntregaCard` chama), para os cenários
+    // poderem afirmar o que o entregador LÊ e se o botão aceita o dedo.
+    selo: row => {
+      const pend = api.filaRowsPendentes();
+      const disp = pend !== null;
+      const naFila = (pagina.itensComFila().find(x => Number(x.row) === Number(row)) || {})._fila || null;
+      return pagina.estadoDoEnvio(naFila, disp && pend.has(Number(row)), disp, state.aguardando, state.semSincronizacao);
+    },
     vista: () => copiar(pagina.itensComFila()),
     statusNaTela: row => (pagina.itensComFila().find(x => Number(x.row) === Number(row)) || {}).status,
     filaDoItem: row => (pagina.itensComFila().find(x => Number(x.row) === Number(row)) || {})._fila || null,
@@ -341,18 +381,110 @@ teste('um item recusado não congela os de trás na fila', async () => {
   assert.equal(h.filaDoItem(1).recusado, false, 'ainda não é recusa: pode ser erro passageiro');
 });
 
-teste('erro ambíguo que não passa NUNCA vira recusa visível em vez de reenviar para sempre', async () => {
-  const h = await app({ responder: async () => ({ ok: false, error: 'o sistema não aceitou' }) });
+// ⛔ 23/09/2026 (2ª volta) — ESTE CENÁRIO FIXAVA O DEFEITO. Ele exigia que 12 respostas ambíguas
+// virassem RECUSA DURÁVEL; só que o painel devolve QUALQUER exceção como {ok:false,error:<técnico>}
+// com HTTP 200 (route.ts:906, e route.ts:620 no marcar), então "o servidor disse não" e "o servidor
+// engasgou" chegam IGUAIS. Com isso, uma janela de deploy/banco fora transformava a entrega REAL do
+// entregador em faixa vermelha, a tela desfazia, e o botão "Entendi" APAGAVA a declaração do
+// aparelho (filaDescartarStatus → bancoFila.ack). Era o contrário do "nunca perder" que o dono
+// pediu. E o contador era por CICLO de dreno, e todo toque dispara um dreno: "12 ciclos" eram 12
+// paradas de rota, não os ~12 min que o comentário prometia. O cenário agora exige o OPOSTO.
+teste('erro ambíguo do servidor NUNCA vira recusa nem deixa apagar a marcação do aparelho', async () => {
+  const h = await app({ responder: async () => ({ ok: false, error: 'TypeError: fetch failed' }) });
   h.state.items = paradas();
   h.state.items[0].status = 'Indo para entrega';
   await h.tocar('done', 1);
-  for (let i = 0; i < 12; i++) await h.enviar();
-  assert.equal(h.filaDoItem(1).recusado, true, 'depois de insistir, o entregador precisa SABER');
-  assert.match(h.filaDoItem(1).erro, /não aceitou/);
-  assert.equal(h.statusNaTela(1), 'Indo para entrega', 'e a tela desfaz aquele item');
-  const antes = h.calls.length;
+  for (let i = 0; i < 30; i++) await h.enviar();
+  assert.equal(h.filaDoItem(1).recusado, false, 'por mais que insista, ambíguo não é recusa');
+  assert.equal(h.statusNaTela(1), 'Entregue', 'e a tela NÃO desfaz o que o entregador fez');
+  assert.equal(h.fila().length, 1, 'a marcação continua guardada no aparelho');
+  assert.equal(h.avisos.length, 0, 'sem modal de erro técnico no meio da rua');
+  // O selo PARA de dizer "enviando…" (que soa resolvido) e passa a dizer a verdade.
+  assert.match(h.selo(1).texto, /ainda não enviou/);
+  assert.equal(h.selo(1).recusa, null, 'e não é faixa de recusa: não há nada para o entregador resolver');
+  assert.equal(h.selo(1).podeTocar, true, 'o cartão continua aceitando o dedo');
+  // E não existe caminho de DESCARTE: o "Entendi" só alcança recusa determinística.
+  await h.tocar('okrecusa', 1);
+  assert.equal(h.fila().length, 1, 'nada pode APAGAR uma marcação que o servidor nunca recusou');
+  // Quando o servidor volta, ela sobe sozinha. Nada se perdeu.
+  h.definirTransporte(async () => aceito);
   await h.enviar();
-  assert.equal(h.calls.length, antes, 'recusado não fica batendo no servidor');
+  assert.equal(h.fila().length, 0);
+  assert.equal(h.statusNaTela(1), 'Entregue');
+  assert.equal(h.calls.filter(x => x.action === 'marcarEntregue').length > 1, true, 'insistiu até passar');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 3.b ORDEM DENTRO DA MESMA PARADA (pular um item não pode inverter o que o entregador tocou)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+teste('falha passageira não deixa o toque seguinte da MESMA parada passar na frente', async () => {
+  // O `continue` que consertou o congelamento da fila também deixava o item SEGUINTE da mesma
+  // parada subir antes do que falhou — e no ciclo seguinte o pulado subia POR CIMA. O entregador
+  // apertava errado, corrigia com Desfazer, via a tela certa, e o escritório recebia "Entregue"
+  // (com o pagamento já anulado pelo desfazer, que o painel não reverte: anularPorDesfazer).
+  for (const correcao of ['desfazer', 'naoentregue']) {
+    let quebrado = true;
+    const h = await app({ responder: async p => (quebrado && p.action === 'marcarEntregue'
+      ? { ok: false, error: 'falha transitória fictícia no banco' } : aceito) });
+    h.state.items = paradas();
+    await h.tocar('done', 1);            // apertou errado
+    h.definirEscolha(correcao === 'desfazer' ? 'sim' : 'fail');
+    await h.tocar(correcao, 1);          // e corrigiu, na MESMA parada
+    await h.enviar();
+    await h.enviar();
+    const noMeio = h.calls.filter(x => Number(x.row) === 1).map(x => x.action);
+    assert.equal(new Set(noMeio).size, 1,
+      'enquanto o 1º não passa, o 2º da MESMA parada espera atrás: ' + noMeio.join(' -> '));
+    quebrado = false;
+    await h.enviar();
+    await h.enviar();
+    const ordem = h.calls.filter(x => Number(x.row) === 1).map(x => x.action);
+    const esperado = correcao === 'desfazer' ? 'desfazer' : 'marcarNaoEntregue';
+    assert.equal(ordem[ordem.length - 1], esperado,
+      'o ÚLTIMO efeito no servidor tem de ser o ÚLTIMO toque do entregador: ' + ordem.join(' -> '));
+    assert.equal(h.fila().length, 0, 'e a fila esvaziou');
+    h.definirEscolha(undefined);
+  }
+});
+
+teste('um item envenenado NÃO congela as OUTRAS paradas (o conserto que motivou tudo)', async () => {
+  // O outro lado da mesma moeda: bloquear a PARADA não pode voltar a bloquear a FILA.
+  const h = await app({ responder: async p => (Number(p.row) === 1 ? { ok: false, error: 'boom fictício' } : aceito) });
+  h.state.items = paradas();
+  await h.tocar('done', 1);
+  await h.tocar('done', 2);
+  await h.tocar('done', 3);
+  await h.enviar();
+  assert.deepEqual(h.fila().map(x => Number(x.params.row)), [1], 'só a parada envenenada ficou');
+  assert.equal(h.statusNaTela(2), 'Entregue');
+  assert.equal(h.statusNaTela(3), 'Entregue');
+});
+
+teste('o pagamento não sobe antes da entrega da MESMA parada', async () => {
+  // O painel desenha as respostas em cima desta premissa, por escrito
+  // (erp-pagamento-na-entrega.ts: "a fila é FIFO e PARA no primeiro ok:false"): com `nao-pagou` e
+  // status != 'entregue' ele devolve tentarDepois, que no consumidor vira `marcarReenvio` — e
+  // `marcarReenvio` projeta pg_fila=1, que o painel grava no livro do dinheiro como
+  // "enviado_da_fila". Uma declaração que subiu de PRIMEIRA ficaria registrada como vinda de fila.
+  let quebrado = true;
+  const h = await app({ responder: async p => {
+    if (p.action === 'marcarEntregue' && quebrado) return { ok: false, error: 'boom fictício' };
+    return p.action === 'confirmarPagamento' ? pagoAceito : aceito;
+  } });
+  h.state.items = paradas();
+  h.state.items[0].naEntrega = true;
+  h.definirResposta({ porRow: { 1: pagamento } });
+  await h.tocar('done', 1);
+  await h.enviar();
+  await h.enviar();
+  assert.deepEqual(h.calls.map(x => x.action), ['marcarEntregue', 'marcarEntregue'],
+    'a declaração de dinheiro espera ATRÁS da entrega da mesma parada');
+  quebrado = false;
+  await h.enviar();
+  assert.deepEqual(h.calls.map(x => x.action).slice(-2), ['marcarEntregue', 'confirmarPagamento']);
+  assert.equal(h.fila().length, 0);
+  const decl = h.calls.find(x => x.action === 'confirmarPagamento');
+  assert.equal(String(decl.pg_fila), '0', 'subiu de primeira: o livro não pode registrar como vinda da fila');
 });
 
 teste('porteiro fechado (login/montagem) NÃO é recusa: guarda tudo e tenta depois', async () => {
@@ -365,6 +497,14 @@ teste('porteiro fechado (login/montagem) NÃO é recusa: guarda tudo e tenta dep
     assert.equal(h.fila().length, 2, 'nada foi descartado nem marcado como recusa');
     assert.equal(h.fila().every(x => !x.precisaCorrigir), true);
     assert.equal(h.statusNaTela(1), 'Entregue', 'e o que o entregador fez continua na tela');
+    // ⛔ 23/09/2026 (2ª volta) — sem esta linha o cenário não distinguia mais nada: depois que
+    // "ambíguo" deixou de virar recusa, tratar o porteiro como ambíguo passava VERDE aqui. Só que
+    // porteiro fechado vale para a FILA INTEIRA (login caído, rota não iniciada): o ciclo tem de
+    // PARAR no primeiro, e não bater uma vez por parada enquanto a porta está trancada.
+    await h.assentar();
+    const antes = h.calls.length;
+    await h.enviar();
+    assert.equal(h.calls.length - antes, 1, 'o ciclo para no primeiro: a porta está fechada para todos');
   }
 });
 
@@ -482,6 +622,136 @@ teste('tocar duas vezes não cria dois atos para a mesma coisa nem some com nada
   // Marcar a mesma linha de novo grava o mesmo valor: o efeito no servidor é um só.
   assert.deepEqual(h.calls.map(x => [x.action, x.row]), [['marcarEntregue', '1'], ['marcarEntregue', '1']]);
   assert.equal(h.statusNaTela(1), 'Entregue');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 8. A ÚLTIMA REDE QUE PRECEDE UM DIÁLOGO: a conferência de valor do pagamento na porta
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+teste('a conferência de valor sai ANTES dos diálogos, não entre eles', async () => {
+  // Ela é a única rede que ainda precede um diálogo, porque é ela que decide o valor oferecido no
+  // modal de dinheiro. O defeito era a POSIÇÃO: ela corria DEPOIS do "Como foi a entrega?" e ANTES
+  // do modal de pagamento, com o timeout geral de 15 s — tela morta, sem diálogo, sem selo, sem
+  // botão cinza, justo nas entregas que envolvem dinheiro. Agora ela sai adiantada e corre JUNTO.
+  const marcas = [];
+  const h = await app({ pgReal: true, responder: async p => {
+    if (p.action === 'conferirValores') { marcas.push('conferiu'); return { ok: true, items: [] }; }
+    return p.action === 'confirmarPagamento' ? pagoAceito : aceito;
+  } });
+  h.state.items = paradas();
+  h.state.items[0].naEntrega = true;
+  h.definirResposta({ porRow: { 1: pagamento } });
+  h.definirAoDialogo(() => { marcas.push('dialogo'); });
+  await h.tocar('done', 1);
+  assert.equal(marcas[0], 'conferiu', 'a rede sai PRIMEIRO e corre em paralelo: ' + marcas.join(' -> '));
+  assert.ok(marcas.includes('dialogo'), 'e os diálogos aconteceram mesmo');
+  assert.equal(h.calls.filter(x => x.action === 'conferirValores').length, 1, 'uma conferência só: não repete no modal');
+  assert.deepEqual(h.fila().map(x => x.params.action), ['marcarEntregue', 'confirmarPagamento']);
+  assert.equal(h.statusNaTela(1), 'Entregue');
+  // e o orçamento dela é CURTO — não o geral de 15 s que deixava a tela morta.
+  assert.ok(h.api.TEMPO_CONFERIR_MS > 0 && h.api.TEMPO_CONFERIR_MS * 2 <= 15000,
+    'orçamento próprio e curto, não o timeout geral (é ' + h.api.TEMPO_CONFERIR_MS + ' ms)');
+});
+
+teste('conferência pendurada não trava o ato: estoura o orçamento e o modal abre mesmo assim', async () => {
+  // "O sistema oscila" = navigator.onLine é TRUE e a resposta não vem. O guarda de offline não
+  // salva disso; quem salva é o orçamento. Passa do orçamento → modo degradado (o entregador
+  // digita o valor, com a trava de 10x que a régua do pagamento na porta guarda).
+  const h = await app({ pgReal: true, conferirMs: 1000, responder: async p => {
+    if (p.action === 'conferirValores') return new Promise(() => {}); // nunca responde
+    return p.action === 'confirmarPagamento' ? pagoAceito : aceito;
+  } });
+  h.state.items = paradas();
+  h.state.items[0].naEntrega = true;
+  h.definirResposta({ porRow: { 1: pagamento } });
+  // A corrida é de propósito: sem o orçamento, o ato NÃO termina — e "não termina" tem de virar
+  // cenário VERMELHO, não a régua inteira pendurando (que na prova por mutação leria como crash).
+  const toque = h.tocar('done', 1);
+  const quem = await Promise.race([
+    toque.then(() => 'terminou'),
+    (async () => { for (let i = 0; i < 300; i++) await new Promise(r => setImmediate(r)); return 'pendurou'; })()
+  ]);
+  assert.equal(quem, 'terminou', 'a conferência pendurada não pode segurar o ato do entregador');
+  await toque;
+  assert.equal(h.statusNaTela(1), 'Entregue', 'o ato foi até o fim com a conferência pendurada');
+  assert.deepEqual(h.fila().map(x => x.params.action), ['marcarEntregue', 'confirmarPagamento']);
+  assert.equal(h.state.aguardando, null, 'e a tela foi liberada: nada fica preso em "conferindo"');
+});
+
+teste('a espera deliberada de dinheiro APARECE na tela e não engole o toque em silêncio', async () => {
+  // pgcorrigir espera de propósito (é conferência de dinheiro), mas `enviarConfirmacao` drena a
+  // FILA INTEIRA — e a fila agora é o caminho normal de todos os toques, então com sinal ruim ela
+  // carrega o acúmulo da rota. Antes, durante esses minutos, a trava de reentrância engolia
+  // qualquer toque SEM NADA NA TELA: a queixa do dono voltando por outra porta.
+  let liberar; const presa = new Promise(r => { liberar = r; });
+  const h = await app({ responder: async p => {
+    if (p.action === 'marcarEntregue') { await presa; return aceito; }
+    return p.action === 'confirmarPagamento' ? pagoAceito : aceito;
+  } });
+  h.state.items = paradas();
+  h.state.items[0].naEntrega = true;
+  h.definirResposta(null);
+  await h.tocar('done', 2);               // uma marcação comum fica presa na fila
+  h.definirResposta({ porRow: { 1: pagamento } });
+  const correcao = h.tocar('pgcorrigir', 1);
+  await h.assentar();
+  assert.match(h.selo(1).texto, /conferindo o pagamento/, 'a espera se ANUNCIA');
+  assert.equal(h.selo(1).podeTocar, false, 'e o botão fica cinza COM motivo, em vez de aceitar o dedo e não fazer nada');
+  assert.equal(h.selo(3).podeTocar, false, 'vale para a tela inteira: nenhum cartão finge estar livre');
+  liberar();
+  await correcao;
+  assert.equal(h.state.aguardando, null);
+  assert.equal(h.selo(1).podeTocar, true, 'e libera assim que a conferência termina');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 9. NAVEGADOR SEM WEB LOCKS: guardar sem enviar não pode virar tela verde calada
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+teste('sem Web Locks o app avisa e o selo diz a verdade — nada fica verde mentindo', async () => {
+  // Sem Web Locks a fila devolve `sincronizacaoIndisponivel` e NÃO envia. Só o "Entregue" olhava
+  // essa resposta; Não entregue, Cancelado, Iniciar, Desfazer e o Iniciar do Maps ficavam com o
+  // selo "guardado ✓ enviando…" a rota inteira, sem nada chegar ao painel e sem um aviso sequer.
+  for (const caminho of ['naoentregue', 'start', 'desfazer']) {
+    const h = await app({ semLocks: true });
+    h.state.items = paradas();
+    if (caminho === 'desfazer') { h.state.items[1].status = 'Entregue'; h.definirEscolha('sim'); }
+    if (caminho === 'naoentregue') h.definirEscolha('fail');
+    await h.tocar(caminho, 2);
+    await h.assentar();
+    assert.equal(h.fila().length, 1, caminho + ': guardado no aparelho — nada se perdeu');
+    assert.equal(h.calls.length, 0, caminho + ': e nada subiu, que é justamente o ponto');
+    assert.equal(h.avisos.length, 1, caminho + ': o entregador PRECISA saber que não está subindo');
+    assert.match(h.selo(2).texto, /não envia sozinho/, caminho + ': e o selo para de dizer "enviando…"');
+    h.definirEscolha(undefined);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 10. A TRAVA DE REENTRÂNCIA COBRE OS DIÁLOGOS (o comentário virou verdade)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+teste('dois toques com o diálogo ABERTO não viram dois atos', async () => {
+  // A trava dizia valer "enquanto um diálogo está aberto", mas `state.sendingAction = true` só
+  // rodava DEPOIS de todos eles. Dois toques viravam dois atos — e no pago na porta, DUAS
+  // declarações de dinheiro para a mesma entrega, com ts_device diferentes.
+  let liberar; const preso = new Promise(r => { liberar = r; });
+  const h = await app();
+  h.state.items = paradas();
+  h.semRede(true);
+  let vezes = 0;
+  h.definirAoDialogo(() => { vezes++; return vezes === 1 ? preso : null; });
+  const primeiro = h.tocar('done', 1);
+  await h.assentar();
+  assert.equal(vezes, 1, 'o primeiro diálogo está aberto');
+  await h.tocar('done', 1);   // dedo nervoso, com a pergunta ainda na tela
+  await h.tocar('start', 2);  // e em outro cartão também
+  assert.equal(vezes, 1, 'nenhum SEGUNDO diálogo abriu por cima do primeiro');
+  assert.equal(h.fila().length, 0, 'e nenhum ato foi gravado enquanto o primeiro não terminou');
+  liberar();
+  await primeiro;
+  assert.equal(h.fila().length, 1, 'um toque, um ato');
+  assert.equal(h.statusNaTela(1), 'Entregue');
+  // terminado o ato, a tela volta a aceitar o dedo na hora
+  await h.tocar('start', 2);
+  assert.equal(h.statusNaTela(2), 'Indo para entrega');
 });
 
 let falhas = 0;
