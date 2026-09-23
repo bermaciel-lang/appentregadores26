@@ -734,6 +734,10 @@ button, select, input, textarea {
 .dc-selo { margin-left: 6px; color: #94a3b8; font-size: 12px; font-weight: 700; }
 /* O servidor RECUSOU esta marcação (parada tirada da rota, outro turno, rota refeita). A tela já
    desfez só este item; aqui vai o motivo e o "Entendi". Inline de propósito: modal na rua trava. */
+/* 23/09/2026 (2ª volta) — o selo pára de dizer "enviando…" (que soa resolvido) quando o envio não
+   está passando: nem verde de mentira, nem vermelho de recusa. Nada é desfeito, e o app continua
+   tentando sozinho. */
+.dc-envio.atraso { color: #b45309; font-weight: 700; font-size: 11.5px; margin-top: 6px; }
 .dc-recusa { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700;
   color: #b91c1c; background: #fef2f2; border: 1.5px solid #fecaca; border-radius: 10px; padding: 8px 10px; }
 .dc-recusa span { flex: 1; min-width: 0; }
