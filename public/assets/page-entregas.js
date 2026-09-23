@@ -35,6 +35,10 @@
     // REDE (e havia um `state.enviando` que desabilitava os botões do cartão e escrevia "⏳ Enviando,
     // aguarde…"): era isso que deixava o entregador de mãos atadas por dezenas de segundos.
     sendingAction: false,
+    // Texto do que a tela está ESPERANDO de propósito (conferência de dinheiro). Enquanto não é
+    // null, os botões ficam desabilitados COM ESSE TEXTO no cartão — nunca em silêncio. Rede de
+    // marcação nunca entra aqui: ela não espera ninguém.
+    aguardando: null,
     expandidos: new Set(), // rows com o cartão EXPANDIDO (Iniciar abre; Minimizar/marcar fecha)
     sendingRouteAction: false,
     // ⛔ 10/09/2026 — `sessionStorage` sozinho perdia a rota em andamento quando o Android matava o
@@ -366,6 +370,28 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     return itensComFila().find(function (x) { return Number(x.row) === Number(row); });
   }
 
+  // ⛔ ATÉ 23/09/2026 OS BOTÕES DO CARTÃO FICAVAM `disabled` ESPERANDO A REDE, com o texto
+  // "⏳ Enviando, aguarde…". Com sinal ruim eram dezenas de segundos de cartão morto — a queixa do
+  // dono ("às vezes não vai, aí tem que clicar de novo depois"). A REDE NUNCA MAIS DESABILITA BOTÃO.
+  // Sobraram DUAS situações em que o toque não pode ser aceito, e as duas ficam VISÍVEIS na tela:
+  //  1. armazenamento indisponível — o app não pode prometer que guardou, então não finge;
+  //  2. `aguardando` — uma conferência DELIBERADA de dinheiro está em curso (Corrigir pagamento,
+  //     e a conferência de valor que precede o modal de pagamento). Era aqui que o toque sumia em
+  //     silêncio: a trava existia, mas nada na tela dizia por quê.
+  // O selo "ainda não enviou" é o outro conserto desta volta: quando o servidor não está aceitando,
+  // o cartão para de dizer "enviando…" (que soa resolvido) e diz a verdade — sem desfazer nada,
+  // sem oferecer descarte, e continuando a reenviar sozinho.
+  function estadoDoEnvio(naFila, pendenteLocal, filaDisponivel, aguardando) {
+    const podeTocar = !!filaDisponivel && !aguardando;
+    if (!filaDisponivel) return { podeTocar: podeTocar, classe: '', texto: 'Conferindo os dados guardados neste aparelho…', recusa: null };
+    if (naFila && naFila.recusado) return { podeTocar: podeTocar, classe: '', texto: '', recusa: naFila.erro || 'O sistema não aceitou esta marcação.' };
+    if (aguardando) return { podeTocar: podeTocar, classe: 'guardado', texto: aguardando, recusa: null };
+    if (naFila && Number(naFila.tentativas) >= (api.AVISAR_NAO_PASSOU || 3))
+      return { podeTocar: podeTocar, classe: 'atraso', texto: 'guardado ✓ ainda não enviou — continuo tentando', recusa: null };
+    if (naFila || pendenteLocal) return { podeTocar: podeTocar, classe: 'guardado', texto: 'guardado ✓ enviando…', recusa: null };
+    return { podeTocar: podeTocar, classe: '', texto: '', recusa: null };
+  }
+
   function renderEntregaCard(item) {
     const row = Number(item.row);
     const key = api.statusKey(item.status);
@@ -375,18 +401,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const naFila = item._fila || null;
     const pendentesLocais = api.filaRowsPendentes();
     const filaDisponivel = pendentesLocais !== null;
-    // ⛔ ATÉ 23/09/2026 OS BOTÕES DESTE CARTÃO FICAVAM `disabled` ESPERANDO A REDE, com o texto
-    // "⏳ Enviando, aguarde…". Com sinal ruim eram dezenas de segundos de cartão morto — a queixa do
-    // dono ("às vezes não vai, aí tem que clicar de novo depois"). Agora só o armazenamento
-    // indisponível desabilita: sem ele a gente NÃO PODE prometer que a informação foi guardada.
-    const dis = !filaDisponivel ? 'disabled' : '';
-    const envioHtml = !filaDisponivel
-      ? '<div class="dc-envio">Conferindo os dados guardados neste aparelho…</div>'
-      : (naFila && naFila.recusado
-        ? '<div class="dc-recusa">⚠️ <span>' + api.esc(naFila.erro || 'O sistema não aceitou esta marcação.')
-          + '</span><button type="button" class="dc-recusa-ok" data-act="okrecusa" data-row="' + row + '">Entendi</button></div>'
-        : (naFila ? '<div class="dc-envio guardado">guardado ✓ enviando…</div>'
-          : (pendentesLocais.has(row) ? '<div class="dc-envio guardado">guardado ✓ enviando…</div>' : '')));
+    const env = estadoDoEnvio(naFila, filaDisponivel && pendentesLocais.has(row), filaDisponivel, state.aguardando);
+    const dis = env.podeTocar ? '' : 'disabled';
+    const envioHtml = env.recusa
+      ? '<div class="dc-recusa">⚠️ <span>' + api.esc(env.recusa)
+        + '</span><button type="button" class="dc-recusa-ok" data-act="okrecusa" data-row="' + row + '">Entendi</button></div>'
+      : (env.texto ? '<div class="dc-envio ' + env.classe + '">' + api.esc(env.texto) + '</div>' : '');
     const restr = String(item.restricao || '').trim();
     const restrHtml = restr ? '<span class="dc-restr">' + ic('clock', 12) + api.esc(restr) + '</span>' : '';
     const addr = String(item.endereco || '').trim();
@@ -1012,8 +1032,14 @@ async function handleFinalizarRota() {
     let atuais = [];
     try {
       if (navigator.onLine !== false) {
+        // ⛔ 23/09/2026 (2ª volta) — ESTA CHAMADA USAVA O TIMEOUT GERAL (15 s) E FICAVA ENTRE O
+        // DEDO E O MODAL DE PAGAMENTO: o "Como foi a entrega?" fechava e a tela ficava morta, sem
+        // diálogo, sem selo, sem nada — justo nas entregas que envolvem dinheiro. O guarda
+        // `navigator.onLine` só salva no offline TOTAL; no "sistema oscilando" que o dono descreveu
+        // o `onLine` é `true` e o await ia até o fim. Agora o orçamento é curto (TEMPO_CONFERIR_MS)
+        // e ela sai ADIANTADA, junto com o primeiro diálogo (ver `adiantarConferenciaPg`).
         const r = await api.apiGet({ action: 'conferirValores', rows: grupo.map(x => x.row).join(','),
-          entregador: state.driver, turno: api.getTurno() }, { retries: 0 });
+          entregador: state.driver, turno: api.getTurno() }, { retries: 0, timeoutMs: api.TEMPO_CONFERIR_MS });
         if (r && r.ok && Array.isArray(r.items)) atuais = r.items;
       }
     } catch (e) { /* a declaração continua; o valor será informado pelo entregador */ }
@@ -1031,9 +1057,27 @@ async function handleFinalizarRota() {
     return conferidos;
   }
 
+  // Dispara a conferência de valor ANTES dos diálogos do entregador, para ela correr EM PARALELO
+  // com os segundos que ele leva lendo "Como foi a entrega?" e "Quem recebeu?". É o que tira a
+  // espera de rede do caminho do dedo sem tirar o valor conferido do modal de dinheiro: com a rede
+  // normal a resposta já chegou quando o modal precisa dela. Nunca rejeita; se falhar ou estourar o
+  // orçamento, devolve null e o modal abre no modo degradado (o entregador digita o valor).
+  function adiantarConferenciaPg(item, irmas) {
+    try {
+      const Pg = window.PgPorta;
+      if (!Pg || !api.usandoPainel() || !Pg.devePerguntar(state.pgCfg, item)) return null;
+      const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+      if (!grupo.length) return null;
+      const p = conferirGrupoValores(grupo);
+      return p && p.then ? p.then(function (g) { return g; }, function () { return null; }) : null;
+    } catch (e) { return null; }
+  }
+
   // Abre o modal para o pedido tocado e as irmãs pagas na porta. Devolve { porRow } ou null quando
   // não há o que perguntar (cofre 0 / pago online / PgPorta não carregou).
-  async function coletarPagamento(item, irmas, tsDevice, anterior) {
+  // `conferencia` = a promessa já em voo de `adiantarConferenciaPg`; aqui só se recolhe o que deu
+  // tempo de chegar. Sem ela (correção de pagamento pela tela 4), a conferência sai agora.
+  async function coletarPagamento(item, irmas, tsDevice, anterior, conferencia) {
     const Pg = window.PgPorta;
     if (!Pg) {
       if (state.pgCfg && state.pgCfg.perguntar && item.naEntrega) {
@@ -1046,7 +1090,8 @@ async function handleFinalizarRota() {
     let grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
     if (!grupo.length) return null;
     if (api.usandoPainel()) {
-      grupo = await conferirGrupoValores(grupo);
+      const conferido = conferencia ? await conferencia : await conferirGrupoValores(grupo);
+      if (conferido && conferido.length) grupo = conferido;
       item = grupo.find(x => Number(x.row) === Number(item.row)) || item;
     }
     return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
