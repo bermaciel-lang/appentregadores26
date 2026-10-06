@@ -182,6 +182,75 @@ test('T8 a lista da maquininha pelos 4 últimos dígitos, como texto',async()=>{
   assert.equal(h.Maq.rotulo({final4:'4656'}),'💳 Maquininha 4656 · trocar');
 });
 
+// ===== Os cenários da revisão independente de 06/10 =====
+test('R1 servidor que não conhece a maquininha: o app não pergunta (campo ausente ≠ "precisa")',async()=>{
+  const antigo=await harness({handler:async p=>p.action==='entregas'?{ok:true,items:[],rotaIniciada:false}:{ok:true}});
+  antigo.api.saveDriverName('Ana');antigo.api.saveDriverToken('tok-ana','Ana');
+  const r=await antigo.api.carregarEntregasPorEntregador('Ana');
+  assert.equal(r.servidorTemMaquininha,false,'painel antigo: não sabe da maquininha');
+  assert.equal(r.precisaMaquininha,undefined,'…e o "precisa" fica INDEFINIDO, não null (null = pergunta)');
+  const novo=await harness({handler:async p=>p.action==='entregas'?{ok:true,items:[],rotaIniciada:false,precisaMaquininha:false,maquininhas:[]}:{ok:true}});
+  novo.api.saveDriverName('Ana');novo.api.saveDriverToken('tok-ana','Ana');
+  const r2=await novo.api.carregarEntregasPorEntregador('Ana');
+  assert.equal(r2.servidorTemMaquininha,true);assert.equal(r2.precisaMaquininha,false);
+});
+
+test('R2 pagamento recusado pelo servidor nunca aparece verde, nem na pergunta única',async()=>{
+  const h=await harness();
+  assert.match(h.Pg.fraseResposta({simples:true,forma:'maquininha',rejeitada:true,erro:'Forma não ativa'},[]),/Corrigir pagamento/);
+  assert.equal(h.Pg.opcoesSimples({opcoes:['boleto']}).length,4,'opções desconhecidas → as 4 do dono, nunca modal vazio');
+});
+
+test('R3 token de quem SAIU do aparelho: entra sem PIN só no prazo; a fila dele sobe sempre',async()=>{
+  const h=await harness();
+  h.api.saveDriverName('Ana');h.api.saveDriverToken('tok-ana','Ana');
+  await h.api.enfileirar({action:'marcarEntregue',row:71,ts_device:'2026-10-06T13:00:00.000Z'},{row:71});
+  h.api.saveDriverName('Beto');h.api.saveDriverToken('tok-beto','Beto');
+  assert.equal(h.api.temToken('Ana'),true,'logo depois da troca a Ana volta sem PIN');
+  const o=JSON.parse(h.local.getItem('app_entregas_tokens_v2'));o.Ana.saiu=Date.now()-17*3600*1000;h.local.setItem('app_entregas_tokens_v2',JSON.stringify(o));
+  assert.equal(h.api.temToken('Ana'),false,'17 h depois: a Ana precisa do PIN para ENTRAR');
+  assert.equal(h.api.temToken('Beto'),true,'o ativo nunca expira (celular pessoal não pede PIN de novo)');
+  await h.api.processarFila();
+  assert.equal(h.calls.find(c=>c.row==='71').token,'tok-ana','…mas a fila que a Ana deixou ainda sobe com o token dela');
+});
+
+test('R4 precisaLogin só apaga o token se ainda for o MESMO que foi na chamada',async()=>{
+  let h;
+  h=await harness({handler:async p=>{ if(p.action==='marcarEntregue'){ h.api.saveDriverToken('tok-novo','Ana'); return {ok:false,precisaLogin:true}; } return {ok:true}; }});
+  h.api.saveDriverName('Ana');h.api.saveDriverToken('tok-velho','Ana');
+  await h.api.enfileirar({action:'marcarEntregue',row:81,ts_device:'2026-10-06T13:00:00.000Z'},{row:81});
+  await h.api.processarFila();
+  assert.equal(h.api.getDriverTokenInfo().token,'tok-novo','o PIN digitado durante a chamada não é apagado pela resposta velha');
+});
+
+test('R5 marcações presas de outro entregador aparecem com o nome',async()=>{
+  const h=await harness();
+  h.api.saveDriverName('Ana');h.api.saveDriverToken('tok-ana','Ana');
+  await h.api.enfileirar({action:'marcarEntregue',row:91,ts_device:'2026-10-06T13:00:00.000Z'},{row:91});
+  await h.api.enfileirar({action:'marcarEntregue',row:92,ts_device:'2026-10-06T13:01:00.000Z'},{row:92});
+  h.api.clearDriverToken('Ana');h.api.saveDriverName('Beto');h.api.saveDriverToken('tok-beto','Beto');
+  assert.equal(JSON.stringify(h.api.filaPresaDeOutros()),JSON.stringify([{nome:'Ana',n:2}]));
+});
+
+test('R6 o iniciar que a tela está enviando não é reenviado em paralelo pela fila',async()=>{
+  let liberar;const travado=new Promise(r=>{liberar=r;});
+  const h=await harness({handler:async p=>{ if(p.action==='iniciarRota'){ await travado; return {ok:true}; } if(p.action==='verificarMontagem') return {ok:true,montagemVerificada:true}; return {ok:true}; }});
+  h.api.saveDriverName('Ana');h.api.saveDriverToken('tok-ana','Ana');
+  const envio=h.api.apiIniciarRota('Ana','123','','image/jpeg');
+  assert.equal(h.api.temRotaPendenteFase('inicio'),true,'o KM já está no aparelho ANTES de qualquer resposta (síncrono)');
+  const dreno=h.api.processarFila();
+  await new Promise(r=>setTimeout(r,20));
+  liberar();await envio;await dreno;
+  assert.equal(h.calls.filter(c=>c.action==='iniciarRota').length,1,'um envio só — a fila pulou o que estava em voo');
+});
+
+test('R7 rota finalizada e atividade: lembradas no aparelho para a home decidir se reabre',async()=>{
+  const h=await harness();
+  h.api.saveDriverName('Ana');
+  assert.equal(h.api.fimConfirmado('Ana'),false);h.api.guardarFimConfirmado('Ana',true);assert.equal(h.api.fimConfirmado('Ana'),true);
+  assert.equal(h.api.atividadeRecente('Ana',1000),false);h.api.marcarAtividade('Ana');assert.equal(h.api.atividadeRecente('Ana',3600000),true);
+});
+
 let falhas=0;
 for(const [nome,fn] of tests){
   try{await fn();console.log('PASS '+nome);}catch(e){falhas++;console.log('FAIL '+nome+'\n   '+(e&&e.stack||e));}

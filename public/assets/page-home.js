@@ -57,9 +57,8 @@
       }
     }
     api.saveDriverName(nome);
-    // Fixa o turno em que ele ENTROU (mesmo sem ter tocado no botão do turno): é o que deixa o app reabrir direto na rota
-    // certa e não virar TARDE sozinho às 14h no meio da rota da manhã.
-    try { api.setTurno(api.getTurno()); } catch (e) {}
+    // (revisão independente de 06/10, M3) o turno NÃO é fixado aqui: só no toque do botão do turno ou no INICIAR da rota
+    // (page-entregas.js). Fixar na entrada prendia o motorista da tarde que abriu o app às 11h na rota da MANHÃ.
     // A rota DESTE entregador já começou hoje (confirmado pelo servidor e lembrado no aparelho): entra direto, sem esperar
     // a rede — a tela de entregas confere o resto sozinha. Era mais uma espera de rede entre o dedo e a rota.
     if (api.inicioConfirmado && api.inicioConfirmado(nome)) { window.location.href = '/entregas/'; return; }
@@ -136,14 +135,36 @@
   // nome na lista, esperar a conferência da montagem… com a mercadoria no carro. Agora: se este aparelho já tem
   // entregador escolhido, com o token DELE, e o turno de HOJE já foi escolhido, volta DIRETO para a rota (sem rede).
   // "Trocar turno"/"Trocar entregador" chegam aqui com ?escolher=1 e aí a tela fica, como sempre.
+  // ⛔ (revisão independente de 06/10, M3) só reabre direto o que é claramente "a rota em andamento DESTE aparelho": a rota começou
+  // hoje neste turno (confirmado pelo servidor), não foi finalizada, e o app foi usado nas últimas 3 h. Celular passado para outro
+  // entregador depois do turno, rota que acabou, ou o escape de emergência (?planilha=1 / ?painel=0) → a tela de escolha, como
+  // sempre.
   function retomarSePuder() {
     try {
-      if (new URLSearchParams(window.location.search).get('escolher') === '1') return false;
+      const q = new URLSearchParams(window.location.search);
+      if (q.get('escolher') === '1' || q.has('planilha') || q.has('painel')) return false;
       const saved = api.getSavedDriverName();
       if (!saved || !api.temToken(saved) || !api.turnoEscolhidoHoje()) return false;
+      if (!api.inicioConfirmado(saved) || api.fimConfirmado(saved)) return false;
+      if (!api.atividadeRecente(saved, 3 * 3600 * 1000)) return false;
       window.location.replace('/entregas/');
       return true;
     } catch (e) { return false; }
+  }
+
+  // ⭐ (revisão independente de 06/10, M5) marcações de OUTRO entregador presas neste aparelho por falta do PIN dele: avisa com o
+  // nome, para ele tocar no nome e digitar o PIN — aí elas sobem sozinhas.
+  async function avisarFilaPresa() {
+    try {
+      await api.filaPronta();
+      const presas = api.filaPresaDeOutros();
+      if (!presas.length) return;
+      const box = document.getElementById('savedDriverBox');
+      if (!box) return;
+      box.textContent = '⚠️ Marcações guardadas neste aparelho esperando o PIN: ' + presas.map(function (x) { return x.nome + ' (' + x.n + ')'; }).join(', ')
+        + '. Quem for, toque no seu nome e digite o PIN — elas sobem sozinhas.';
+      box.classList.remove('hidden');
+    } catch (e) {}
   }
 
   async function init() {
@@ -153,6 +174,7 @@
       if (saved) {
         savedDriverBox.classList.add('hidden');
       }
+      avisarFilaPresa();
 
       const result = await api.carregarEntregadores();
       const items = result.data || [];

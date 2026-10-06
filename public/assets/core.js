@@ -118,7 +118,14 @@ function buildMapsUrl(item) {
   }
 
   function saveDriverName(nome) {
-    localStorage.setItem(C.STORAGE_DRIVER_KEY, String(nome || '').trim());
+    const novo = String(nome || '').trim();
+    // ⛔ (revisão independente de 06/10, M4) quem SAI do aparelho ganha a hora da saída no token dele: o token continua servindo
+    // para subir a fila DELE, mas para ENTRAR sem PIN só vale por PRAZO_TOKEN_DE_OUTRO_MS (ver `temToken`).
+    try {
+      const ant = (localStorage.getItem(C.STORAGE_DRIVER_KEY) || '').trim();
+      if (ant && ant !== novo) { const o = lerTokens(); if (o[ant]) { o[ant].saiu = Date.now(); gravarTokens(o); } }
+    } catch (e) {}
+    localStorage.setItem(C.STORAGE_DRIVER_KEY, novo);
   }
 
   function getSavedDriverName() {
@@ -176,7 +183,19 @@ function buildMapsUrl(item) {
     const t = tokenDe(nome);
     return t ? { token: t, nome: nome } : null;
   }
-  function temToken(nome) { return !!tokenDe(nome); }
+  // ⛔ (revisão independente de 06/10, M4) ENTRAR sem PIN: o entregador ATIVO sempre (o celular pessoal nunca pede de novo — o
+  // device-bind de sempre); um entregador que JÁ SAIU deste aparelho só dentro de 16 h (o mesmo turno/dia, no celular passado de
+  // mão). Depois disso pede o PIN dele — o token continua guardado e servindo para subir a fila que ele deixou aqui.
+  const PRAZO_TOKEN_DE_OUTRO_MS = 16 * 3600 * 1000;
+  function temToken(nome) {
+    const n = nomeLimpo(nome);
+    if (!tokenDe(n)) return false;
+    if (n === getSavedDriverName()) return true;
+    const t = lerTokens()[n];
+    if (!t) return true; // só a chave antiga (de um token só): é do último ativo
+    const desde = Number(t.saiu || t.em || 0);
+    return Date.now() - desde < PRAZO_TOKEN_DE_OUTRO_MS;
+  }
   // Apaga o token de UM entregador (padrão: o ativo). Só é chamado quando o servidor recusou aquele
   // token — nunca por trocar de entregador.
   function clearDriverToken(nome) {
@@ -194,9 +213,11 @@ function buildMapsUrl(item) {
   // conferir o token (antes respondia, e o app apagava um token bom — PIN pedido de novo sem motivo):
   // isso agora volta como `tentarDepois`. Então `precisaLogin` aqui é token que não vale mesmo.
   // Não lança: quem chama decide o que fazer com a resposta (a fila offline, por exemplo, só espera).
-  function tratarPrecisaLogin(res, nomeDoToken) {
+  // `enviado` = { nome, token } que foi NA chamada. Só apaga se o aparelho ainda guarda ESSE token para esse nome (revisão de
+  // 06/10, menor 5: um PIN digitado enquanto a chamada estava no ar não pode ser apagado pela resposta velha).
+  function tratarPrecisaLogin(res, enviado) {
     if (res && res.precisaLogin) {
-      if (nomeDoToken) clearDriverToken(nomeDoToken);
+      if (enviado && enviado.nome && tokenDe(enviado.nome) === enviado.token) clearDriverToken(enviado.nome);
       return true;
     }
     return false;
@@ -377,6 +398,7 @@ async function postJson(body) {
   try {
     // Se houver override do painel neste aparelho, posta direto pra ele (cross-origin,
     // com CORS); senão, usa o proxy do Vercel que fala com o Apps Script antigo.
+    const enviado = tokenParaChamada(body); // o token que VAI nesta chamada (comparado na volta, não relido)
     const res = await fetch(C.POST_URL || '/api/proxy', {
       method: 'POST',
       headers: {
@@ -390,8 +412,7 @@ async function postJson(body) {
 
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    const usado = tokenParaChamada(body);
-    tratarPrecisaLogin(data, usado && usado.nome); // mesma regra do GET: token recusado → apaga ESSE token
+    tratarPrecisaLogin(data, enviado); // mesma regra do GET: token recusado → apaga ESSE token (se ainda for o mesmo)
     return data;
   } finally {
     clearTimeout(timer);
@@ -456,6 +477,7 @@ function espelharNoPainel(body) {
     const params = comTurno(paramsOriginais);
     const opt = options || {};
     const url = buildApiUrl(params);
+    const enviado = tokenParaChamada(params); // o token que vai na URL — é ESTE que o `precisaLogin` da volta recusa
     // Um recebimento coletivo consulta até 20 pedidos antes da primeira gravação.
     // A fila conserva o mesmo ato; não iniciar retries enquanto a conferência ainda roda.
     // `opt.timeoutMs` existe para a ÚNICA chamada que ainda precede um diálogo do entregador (a
@@ -471,8 +493,7 @@ function espelharNoPainel(body) {
         // As DUAS frentes de 09/09 entram aqui: o timeout longo da fila (recebimento coletivo
         // consulta até 20 pedidos antes da 1ª gravação) E a limpeza do token recusado.
         const res = (C.API_MODE === 'json') ? await fetchJson(url, timeoutMs) : await loadJSONP(url, timeoutMs);
-        const usado = tokenParaChamada(params);
-        tratarPrecisaLogin(res, usado && usado.nome); // token recusado → apaga ESSE token (a home volta a pedir o PIN dele)
+        tratarPrecisaLogin(res, enviado); // token recusado → apaga ESSE token (a home volta a pedir o PIN dele)
         return res;
       } catch (error) {
         lastError = error;
@@ -525,6 +546,17 @@ function espelharNoPainel(body) {
       if (iniciado) localStorage.setItem(chaveInicioConfirmado(entregador), '1');
       else localStorage.removeItem(chaveInicioConfirmado(entregador));
     } catch {}
+  }
+  // ⭐ 06/10/2026 (revisão independente, M3) a rota JÁ FINALIZADA hoje, lembrada no aparelho (a sessão morre com o app): a home
+  // não reabre direto numa rota que acabou. E a ÚLTIMA ATIVIDADE de cada entregador: só se reabre direto quem usou há pouco.
+  function chaveFimConfirmado(entregador) { return 'rota_fim_confirmado_v1_' + diaSP() + '_' + getTurno() + '_' + nomeLimpo(entregador); }
+  function fimConfirmado(entregador) { try { return localStorage.getItem(chaveFimConfirmado(entregador)) === '1'; } catch (e) { return false; } }
+  function guardarFimConfirmado(entregador, fim) {
+    try { if (fim) localStorage.setItem(chaveFimConfirmado(entregador), '1'); else localStorage.removeItem(chaveFimConfirmado(entregador)); } catch (e) {}
+  }
+  function marcarAtividade(entregador) { try { localStorage.setItem('app_atividade_v1_' + nomeLimpo(entregador || getSavedDriverName()), String(Date.now())); } catch (e) {} }
+  function atividadeRecente(entregador, prazoMs) {
+    try { const t = Number(localStorage.getItem('app_atividade_v1_' + nomeLimpo(entregador)) || 0); return t > 0 && Date.now() - t < prazoMs; } catch (e) { return false; }
   }
   function erroMontagem(res) {
     const e = new Error(res && res.error || 'Não foi possível verificar a montagem. Confira a internet e tente novamente.');
@@ -625,7 +657,10 @@ async function carregarEntregasPorEntregador(entregador) {
       // = a rota tem pagamento na entrega (false = "Não levei" automático; null = não deu para saber).
       maquininhas: Array.isArray(res.maquininhas) ? res.maquininhas : null,
       maquininha: res.maquininha === undefined ? undefined : (res.maquininha || null),
-      precisaMaquininha: typeof res.precisaMaquininha === 'boolean' ? res.precisaMaquininha : null
+      // ⛔ (revisão independente de 06/10, BLOQUEADOR) servidor que NÃO conhece a maquininha (o painel antigo durante o deploy) não
+      // manda o campo: fica `undefined` e o app NÃO pergunta nada (perguntar com a lista vazia gravaria "não levei" falso para todos)
+      servidorTemMaquininha: Object.prototype.hasOwnProperty.call(res, 'precisaMaquininha'),
+      precisaMaquininha: typeof res.precisaMaquininha === 'boolean' ? res.precisaMaquininha : (Object.prototype.hasOwnProperty.call(res, 'precisaMaquininha') ? null : undefined)
     };
   } catch (error) {
     // Recusa de LOGIN sobe como está: nem cache, nem "montagem". A tela manda pedir o PIN.
@@ -750,6 +785,19 @@ async function apiMarcarCancelado(row, obs) {
   async function filaPorIds(ids) {
     await filaPronta();const alvo = new Set(ids);return (await bancoFila.ler()).filter(x => alvo.has(x.id));
   }
+  // ⭐ (revisão independente de 06/10, M5) marcações de OUTRO entregador presas neste aparelho por falta do PIN dele (o servidor
+  // recusou o token, ou ele nunca entrou aqui): a home MOSTRA, para ele entrar com o PIN e elas subirem. [{ nome, n }]
+  function filaPresaDeOutros() {
+    const fila = bancoFila && bancoFila.snapshot();
+    if (!fila) return [];
+    const ativo = getSavedDriverName(), por = new Map();
+    fila.forEach(x => {
+      const dono = nomeLimpo(x && x.params && x.params.entregador);
+      if (!dono || dono === ativo || tokenDe(dono)) return;
+      por.set(dono, (por.get(dono) || 0) + 1);
+    });
+    return [...por].map(([nome, n]) => ({ nome, n }));
+  }
   // Só o que é do entregador ATIVO (ou item antigo, sem dono): a fila guardada por OUTRO entregador
   // neste aparelho não pode impedir a tela de saber que a fila DESTE esvaziou.
   function doAtivo(x) {
@@ -802,6 +850,7 @@ async function apiMarcarCancelado(row, obs) {
     fila.forEach(x => {
       const acao = x.params && x.params.action;
       if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
+      if (!doAtivo(x)) return; // (revisão de 06/10, menor 8) a intenção guardada por OUTRO entregador não pinta este cartão
       const row = Number(x.params.row);
       if (!row) return;
       const meta = x.meta || {};
@@ -1023,7 +1072,13 @@ function migrarRotaPendLegada(fase) {
     const raw = localStorage.getItem(velha);
     if (!raw) return;
     const p = JSON.parse(raw);
-    if (p && p.entregador && !localStorage.getItem(rotaPendKey(fase, p.entregador))) localStorage.setItem(rotaPendKey(fase, p.entregador), raw);
+    if (p && p.entregador) {
+      const atual = localStorage.getItem(rotaPendKey(fase, p.entregador));
+      let novo = !atual;
+      // (revisão de 06/10, menor 7) já existe a chave nova (voltou de uma versão anterior do app?): fica o toque MAIS NOVO
+      if (atual) { try { novo = String(p.ts_device || '') > String(JSON.parse(atual).ts_device || ''); } catch (e) { novo = false; } }
+      if (novo) localStorage.setItem(rotaPendKey(fase, p.entregador), raw);
+    }
     localStorage.removeItem(velha);
   } catch (e) {}
 }
@@ -1083,7 +1138,7 @@ async function enviarRotaPayload(payload) {
   // caía no mesmo `return null` de "não subiu". A tela então afirmava "SALVA ✅ … você está sem
   // internet … pode fechar o app" com sinal cheio, o fim nunca era gravado, e a cada poll a foto
   // subia de novo para ser recusada de novo, para sempre. Agora a recusa sobe como recusa.
-  const recusa = (res) => (res && res.ok === false && res.error && !res.precisaLogin
+  const recusa = (res) => (res && res.ok === false && res.error && !res.precisaLogin && !res.tentarDepois
     && !res.montagemBloqueada && !res.montagemIndisponivel)
     ? Object.assign({}, res, { recusadoPeloServidor: true }) : null;
   let recusadoPeloServidor = null;
@@ -1138,11 +1193,20 @@ async function enviarRotaPayload(payload) {
 const MAX_TENTATIVAS_FOTO = 20;
 
 // Reenvia o que ficou pendente de iniciar/finalizar (chamado dentro do processarFila).
+// ⛔ (revisão independente de 06/10, menor 2) o iniciar/finalizar que a TELA está enviando agora não é reenviado em paralelo pela
+// fila (duas fotos subindo juntas com sinal ruim, e uma gravação velha de `tentativas` ressuscitando o pendente já limpo).
+const _rotaEmVoo = new Set();
+async function comRotaEmVoo(fase, entregador, trabalho) {
+  const k = fase + '|' + nomeLimpo(entregador);
+  _rotaEmVoo.add(k);
+  try { return await trabalho(); } finally { _rotaEmVoo.delete(k); }
+}
 async function reenviarRotaPendente() {
   // De TODOS os entregadores que usaram este aparelho, cada um com o próprio token. O de quem não
   // tem token guardado aqui espera (subiria sem identidade e o servidor recusaria).
   for (const { fase, entregador, payload: p } of todosRotaPend()) {
     if (!p || p.desistiu) continue;
+    if (_rotaEmVoo.has(fase + '|' + nomeLimpo(entregador))) continue;
     if (entregador !== getSavedDriverName() && !tokenDe(entregador)) continue;
     const res = await enviarRotaPayload(p);
     if (!res || !res.ok) continue;                                       // nem o KM subiu → tenta de novo depois
@@ -1154,7 +1218,12 @@ async function reenviarRotaPendente() {
   }
 }
 
-async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+  // ⚠️ SÍNCRONO até salvar o KM/foto (o `_apiIniciarRota` grava antes do 1º await): quem chama pode abrir um diálogo DEPOIS de
+  // chamar e o KM/foto já estão no aparelho (ver o modal da maquininha em page-entregas.js).
+  return comRotaEmVoo('inicio', entregador, () => _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType));
+}
+async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
@@ -1197,7 +1266,10 @@ async function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
-async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+  return comRotaEmVoo('fim', entregador, () => _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType));
+}
+async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
   const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
   { const d = diaConfiavel(); if (d) payload.data = d; }
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
@@ -1311,6 +1383,11 @@ async function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
 
   window.AppEntrega = {
     temToken,
+    fimConfirmado,
+    guardarFimConfirmado,
+    marcarAtividade,
+    atividadeRecente,
+    filaPresaDeOutros,
     lerListaMaquininhas,
     salvarListaMaquininhas,
     lerEscolhaMaquininha,

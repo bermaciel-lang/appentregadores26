@@ -59,7 +59,10 @@
     // 06/10/2026 — maquininha da rota: a escolha que vale (do aparelho ou do servidor) e se a rota tem pagamento na
     // entrega (false = "Não levei" automático; null = não sei → pergunta).
     maquininha: savedDriver ? api.lerEscolhaMaquininha(savedDriver) : null,
-    precisaMaquininha: null
+    precisaMaquininha: null,
+    // ⛔ (revisão independente de 06/10, BLOQUEADOR) o painel JÁ conhece a maquininha? Só pergunta quando o servidor mandou o
+    // campo alguma vez (lembrado no aparelho: o Iniciar sem sinal também sabe). Painel antigo = não pergunta nada.
+    servidorMaq: (function () { try { return localStorage.getItem('maq_servidor_v1') === '1'; } catch (e) { return false; } })()
   };
 
   function lerPgCfg() {
@@ -651,9 +654,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // 06/10/2026 — maquininha: a lista do cadastro fica no aparelho (o modal abre SEM rede) e a escolha do servidor
       // só vence a do aparelho se for mais nova (a do aparelho pode estar esperando subir na fila).
       if (result.maquininhas) api.salvarListaMaquininhas(result.maquininhas);
-      if (typeof result.precisaMaquininha === 'boolean' || result.precisaMaquininha === null) {
+      if (result.servidorTemMaquininha) {
+        state.servidorMaq = true;
+        try { localStorage.setItem('maq_servidor_v1', '1'); } catch (e) {}
         if (!result.stale) state.precisaMaquininha = result.precisaMaquininha;
       }
+      if (!result.stale) api.marcarAtividade(state.driver);
       if (result.maquininha !== undefined) state.maquininha = api.sincronizarEscolhaDoServidor(result.maquininha, state.driver);
 
       const assinaturaAtual = (result.data || []).map(x => x.row).sort().join(',');
@@ -695,6 +701,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // "finalizei e depois de um tempo aparece em aberto de novo"): a sessão local (sessionStorage)
       // some quando o Android mata o app em segundo plano, e sem isto o app esquecia que já tinha
       // finalizado mesmo com o servidor já tendo o KM e a foto certinhos.
+      if (result.rotaFinalizada === true) api.guardarFimConfirmado(state.driver, true);
+      else if (result.rotaFinalizada === false && !result.stale) api.guardarFimConfirmado(state.driver, false);
       if (result.rotaFinalizada && !state.rotaFinalizada) {
         state.rotaFinalizada = true;
         sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
@@ -847,16 +855,24 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     // 06/10/2026 — "Qual maquininha você vai levar?" (pedido do dono), DEPOIS do KM e da foto. Sem rede: lista do
     // aparelho, gravação na fila durável. Rota sem pagamento na entrega = "Não levei" automático, sem modal.
-    await escolherMaquininhaNoInicio();
-
+    // ⛔ (revisão independente de 06/10, M2) O KM E A FOTO SÃO GUARDADOS ANTES DO MODAL: `apiIniciarRota` grava no aparelho de
+    // forma SÍNCRONA (antes do 1º await) e o envio corre ENQUANTO o entregador escolhe a maquininha. Se o Android matar o app no
+    // meio do modal, nada se perde (a regra do 71d469e: nada só na memória depois de uma etapa de gente).
     state.sendingRouteAction = true;
 
 loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
 loadingRota.classList.remove('hidden');
 btnIniciarRota.disabled = true;
 
+    const envioInicio = api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg')
+      .then(function (r) { return { r: r }; }, function (e) { return { e: e }; });
+    try { api.setTurno(api.getTurno()); } catch (e) {} // o turno da rota que ele INICIOU fica fixo (a home reabre nele)
+    await escolherMaquininhaNoInicio();
+
     try {
-      const res = await api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg');
+      const enviado = await envioInicio;
+      if (enviado.e) throw enviado.e;
+      const res = enviado.r;
 
       // ⛔ 10/09/2026 — O SERVIDOR RESPONDEU E RECUSOU: isso não é falta de sinal, e não pode virar
       // "iniciada e salva ✅". Cair no catch de baixo marcava a rota como iniciada localmente e
@@ -915,7 +931,7 @@ btnIniciarRota.disabled = false;
   // No INICIAR (depois do KM e da foto) e no botão "Trocar maquininha" ao lado de "Trocar entregador". Grava na hora
   // (aparelho + fila durável) e sobe em segundo plano como `definirMaquininha`; nada de rede no caminho do dedo.
   async function escolherMaquininhaNoInicio() {
-    if (!window.Maquininha || !api.registrarMaquininha) return;
+    if (!window.Maquininha || !api.registrarMaquininha || !state.servidorMaq) return;
     let escolha;
     if (state.precisaMaquininha === false) escolha = { semMaquininha: true, automatico: true }; // rota sem pagamento na entrega
     else escolha = await window.Maquininha.escolher({ lista: api.lerListaMaquininhas(), atual: state.maquininha, obrigatorio: true });
@@ -941,7 +957,7 @@ btnIniciarRota.disabled = false;
   function atualizarBotaoMaquininha() {
     const b = document.getElementById('btnTrocarMaq');
     if (!b || !window.Maquininha) return;
-    const mostrar = !!(state.rotaIniciada || state.rotaFinalizada);
+    const mostrar = !!(state.servidorMaq && (state.rotaIniciada || state.rotaFinalizada));
     b.classList.toggle('hidden', !mostrar);
     b.textContent = window.Maquininha.rotulo(state.maquininha);
     // Rota iniciada sem a maquininha informada (app antigo no Iniciar, ou lista que não tinha chegado): chama a atenção.
@@ -1022,6 +1038,7 @@ async function handleFinalizarRota() {
 
     state.rotaFinalizada = true;
     state.rotaIniciada = false;
+    api.guardarFimConfirmado(state.driver, true);
     sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
     sessionStorage.removeItem('rota_iniciada_' + state.driver);
     sessionStorage.removeItem('rota_assinatura_' + state.driver);
@@ -1319,6 +1336,7 @@ async function handleFinalizarRota() {
 
   // O ato em si. Só é alcançado com a trava de reentrância JÁ ligada (ver `handleAction`).
   async function executarAcao(act, row) {
+    try { api.marcarAtividade(state.driver); } catch (e) {}
     // A lista com a fila do aparelho POR CIMA. Todas as decisões de status abaixo (já está em
     // andamento? já está no status alvo?) têm de ver o que o entregador acabou de tocar, mesmo que
     // o servidor ainda não saiba.
@@ -1330,11 +1348,15 @@ async function handleFinalizarRota() {
     // status; sobe uma confirmação nova com ts próprio — no servidor vira ato 'corrigiu'.
     if (act === 'pgcorrigir') {
       const tsC = new Date().toISOString();
-      const resC = await coletarPagamento(item, [item], tsC, pgRespostaAnterior(row, item));
+      // (revisão de 06/10, menor 1) na pergunta única a correção vale para as IRMÃS pagas na porta (mesmo número = mesma porta,
+      // um pagamento) — corrigir "Não pagou" num cartão e deixar a irmã como "Não pagou" mandaria cobrar o cliente
+      const simplesC = !!(state.pgCfg && state.pgCfg.simples);
+      const irmasC = simplesC && item.numero != null ? vistaAgora.filter((x) => Number(x.numero) === Number(item.numero)) : [item];
+      const resC = await coletarPagamento(item, irmasC, tsC, pgRespostaAnterior(row, item));
       if (!resC || resC.manteve || resC.cancelado) return;
       // Pergunta única: não há valor digitado para o servidor recusar — grava e segue, sem espera na frente do dedo.
-      if (state.pgCfg && state.pgCfg.simples) {
-        try { const idsC = await guardarRecebimento([], { [Number(row)]: resC.porRow[Number(row)] }, tsC); renderList(); acompanharEnvio(idsC); }
+      if (simplesC) {
+        try { const idsC = await guardarRecebimento([], resC.porRow, tsC); renderList(); acompanharEnvio(idsC); }
         catch (error) { await avisarArmazenamento(); }
         return;
       }
@@ -1843,18 +1865,27 @@ async function handleFinalizarRota() {
     if (typeof L !== 'undefined') return Promise.resolve(true);
     if (_leaflet) return _leaflet;
     _leaflet = new Promise(function (resolve) {
-      const css = document.createElement('link');
-      css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      css.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin = '';
-      document.head.appendChild(css);
-      const js = document.createElement('script');
-      js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      js.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin = '';
-      const fim = function (ok) { if (!ok) _leaflet = null; resolve(ok && typeof L !== 'undefined'); };
-      js.onload = function () { fim(true); };
-      js.onerror = function () { js.remove(); fim(false); };
+      // (revisão de 06/10, menor 6) o CSS também é esperado (sem ele os ladrilhos saem quebrados), e uma 2ª tentativa reaproveita
+      // o que já está na página em vez de pendurar outro <script>
+      let css = document.getElementById('leaflet-css');
+      if (!css) {
+        css = document.createElement('link'); css.id = 'leaflet-css';
+        css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        css.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin = '';
+        document.head.appendChild(css);
+      }
+      const cssPronto = new Promise(function (ok) { if (css.sheet) ok(); else { css.addEventListener('load', ok); css.addEventListener('error', ok); setTimeout(ok, 8000); } });
+      let js = document.getElementById('leaflet-js');
+      const fim = function (ok) { if (!ok) { _leaflet = null; if (js && js.parentNode) js.parentNode.removeChild(js); } cssPronto.then(function () { resolve(ok && typeof L !== 'undefined'); }); };
+      if (!js) {
+        js = document.createElement('script'); js.id = 'leaflet-js';
+        js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        js.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin = '';
+        document.head.appendChild(js);
+      }
+      js.addEventListener('load', function () { fim(true); });
+      js.addEventListener('error', function () { fim(false); });
       setTimeout(function () { if (typeof L === 'undefined') fim(false); }, 20000);
-      document.head.appendChild(js);
     });
     return _leaflet;
   }

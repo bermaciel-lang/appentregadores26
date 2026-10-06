@@ -260,6 +260,9 @@
   var ROTULO_SIMPLES = { maquininha: '💳 Maquininha', dinheiro: '💵 Dinheiro', cheque: '🧾 Cheque', pix: '📱 PIX', 'nao-pagou': '⚠️ NÃO PAGOU' };
   function fraseResposta(resposta, formas) {
     var r = resposta || {};
+    // ⛔ (revisão independente de 06/10, M1) a RECUSA vem antes: um "Maquininha ✓" verde sobre um pagamento que o servidor
+    // recusou mentiria sobre dinheiro
+    if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
     if (r.simples && ROTULO_SIMPLES[r.forma]) return 'Pagamento: ' + ROTULO_SIMPLES[r.forma] + ' ✓';
     if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
     if (r.naoSei) return '💳 Pagamento: não soube dizer';
@@ -286,7 +289,10 @@
   };
   function opcoesSimples(cfg) {
     var lista = (cfg && Array.isArray(cfg.opcoes) && cfg.opcoes.length) ? cfg.opcoes : OPCOES_PADRAO;
-    return lista.filter(function (o) { return !!BOTAO_SIMPLES[o]; }).map(function (o) {
+    var conhecidas = lista.filter(function (o) { return !!BOTAO_SIMPLES[o]; });
+    // (revisão de 06/10, menor 4) o servidor mandou só opções que este app não conhece: as 4 do dono, nunca um modal vazio
+    if (!conhecidas.length) conhecidas = OPCOES_PADRAO;
+    return conhecidas.map(function (o) {
       return { valor: o, rotulo: BOTAO_SIMPLES[o].rotulo, tom: BOTAO_SIMPLES[o].tom };
     });
   }
