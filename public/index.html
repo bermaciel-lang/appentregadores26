@@ -7,7 +7,10 @@
   <meta name="theme-color" content="#0b1f4d" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- 06/10/2026: a fonte NÃO segura mais a tela (era CSS externo bloqueando o primeiro desenho; com sinal ruim, segundos de
+       tela branca ao abrir o app). Carrega em paralelo e entra quando chegar; até lá vale a fonte do sistema. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>

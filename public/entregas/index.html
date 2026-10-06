@@ -7,13 +7,14 @@
   <meta name="theme-color" content="#0b1f4d" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- 06/10/2026: a fonte NÃO segura mais a tela (era CSS externo bloqueando o primeiro desenho; com sinal ruim, segundos de
+       tela branca ao abrir o app). Carrega em paralelo e entra quando chegar; até lá vale a fonte do sistema. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
   <link rel="stylesheet" href="/assets/styles.css" />
-  <!-- Leaflet (mapa de conferência da rota) — mesma CDN que já usamos pras fontes. -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet (mapa de conferência da rota): desde 06/10/2026 carrega SÓ ao abrir o "Mapa geral" (page-entregas.js
+       `carregarLeaflet`). Antes era um <script> no <head> que travava a tela de entregas inteira até baixar ~150 KB do
+       unpkg — com sinal ruim, a lista demorava a aparecer por causa de um mapa que quase ninguém abre. -->
 </head>
 <body>
   <div class="page-shell">
@@ -89,6 +90,7 @@
   <script src="/assets/core.js"></script>
   <script src="/assets/ui.js"></script>
   <script src="/assets/pagamento-porta.js"></script>
+  <script src="/assets/maquininha.js"></script>
   <script src="/assets/rastreio.js"></script>
   <script src="/assets/page-entregas.js"></script>
   <script src="/assets/chat-entregador.js"></script>

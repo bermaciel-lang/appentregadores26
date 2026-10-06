@@ -16,9 +16,15 @@
     warningBox.textContent = '';
   }
 
-  async function goToEntregas(nome) {
+  let _indo = false; // dois toques no nome não abrem dois PINs
+  async function goToEntregas(nome, jaPediuDeNovo) {
     nome = String(nome || '').trim();
     if (!nome) return;
+    if (_indo && !jaPediuDeNovo) return;
+    _indo = true;
+    try { await entrar(nome, jaPediuDeNovo); } finally { _indo = false; }
+  }
+  async function entrar(nome, jaPediuDeNovo) {
     // MODO TOLERANTE (03/08): enquanto arrumamos os telefones/PINs do cadastro, NINGUÉM fica
     // trancado. Ainda pedimos o PIN (best-effort: acertou → guarda o token do aparelho e da próxima
     // entra direto), mas ERRAR / CANCELAR / ficar sem sinal NÃO barra mais — entra assim mesmo.
@@ -30,8 +36,9 @@
     // isso virou porta trancada: sem PIN não sai token, sem token o servidor recusa a rota
     // ("Faça login com o PIN pra abrir a rota") e não havia lugar NENHUM pra digitar o PIN.
     var ehOperacional = /lala|\bcd\b/i.test(nome);
-    var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
-    if (!(ti && ti.nome === nome)) {
+    // 06/10/2026: o aparelho guarda o token de CADA entregador (core.js) — quem já entrou neste celular volta sem PIN,
+    // mesmo depois de outro ter usado o app. O PIN só é pedido para quem ainda não tem token aqui.
+    if (!api.temToken(nome)) {
       var pin = await AppUI.perguntar(
         ehOperacional
           ? 'Digite o PIN da operação\n(o PIN das rotas de Lalamove / CD — o escritório informa)'
@@ -50,6 +57,12 @@
       }
     }
     api.saveDriverName(nome);
+    // Fixa o turno em que ele ENTROU (mesmo sem ter tocado no botão do turno): é o que deixa o app reabrir direto na rota
+    // certa e não virar TARDE sozinho às 14h no meio da rota da manhã.
+    try { api.setTurno(api.getTurno()); } catch (e) {}
+    // A rota DESTE entregador já começou hoje (confirmado pelo servidor e lembrado no aparelho): entra direto, sem esperar
+    // a rede — a tela de entregas confere o resto sozinha. Era mais uma espera de rede entre o dedo e a rota.
+    if (api.inicioConfirmado && api.inicioConfirmado(nome)) { window.location.href = '/entregas/'; return; }
     try {
       await api.verificarMontagem(nome);
       window.location.href = '/entregas/';
@@ -58,6 +71,12 @@
       // entregador tocar no nome de novo que o PIN é pedido. O título diz isso — antes vinha como
       // "Montagem da rota" e a equipe procurava pendência de montagem em vez do PIN.
       if (e && e.precisaLogin) {
+        // O token deste entregador já foi apagado pelo core (o servidor disse que não vale). Em vez de mandar tocar no
+        // nome de novo, pede o PIN AQUI MESMO, uma vez (06/10/2026 — era mais um "faz tudo de novo").
+        if (!jaPediuDeNovo) {
+          await AppUI.alerta('Seu acesso neste aparelho expirou. Digite seu PIN de novo (os últimos 4 números do seu telefone).', { titulo: 'Precisa entrar de novo', tom: 'warn' });
+          return entrar(nome, true);
+        }
         await AppUI.alerta(e.message + '\n\nToque no seu nome de novo e digite seu PIN (os últimos 4 números do seu telefone).', { titulo: 'Precisa entrar de novo', tom: 'warn' });
         return;
       }
@@ -112,6 +131,21 @@
     });
   }
 
+  // ⛔ 06/10/2026 — "O ENTREGADOR FECHA O APP SEM QUERER E AO ABRIR TEM QUE FAZER TUDO DE NOVO" (queixa do dono).
+  // O .apk sempre abre aqui (`/`), e no painel esta tela NUNCA pulava: a cada reabertura era escolher o turno, achar o
+  // nome na lista, esperar a conferência da montagem… com a mercadoria no carro. Agora: se este aparelho já tem
+  // entregador escolhido, com o token DELE, e o turno de HOJE já foi escolhido, volta DIRETO para a rota (sem rede).
+  // "Trocar turno"/"Trocar entregador" chegam aqui com ?escolher=1 e aí a tela fica, como sempre.
+  function retomarSePuder() {
+    try {
+      if (new URLSearchParams(window.location.search).get('escolher') === '1') return false;
+      const saved = api.getSavedDriverName();
+      if (!saved || !api.temToken(saved) || !api.turnoEscolhidoHoje()) return false;
+      window.location.replace('/entregas/');
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function init() {
     try {
       renderTurno();
@@ -144,5 +178,5 @@
     }
   }
 
-  init();
+  if (!retomarSePuder()) init();
 })();

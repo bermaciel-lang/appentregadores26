@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npx serve public -l 3000",
     "start": "npx serve public -l 3000",
-    "test": "node scripts/_t-pagamento-porta.mjs && node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/test-valor-atual.mjs && node scripts/test-bloqueio-montagem.cjs && node scripts/test-fila-pagamento.mjs && node scripts/_t-toque-instantaneo.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs",
+    "test": "node scripts/_t-pagamento-porta.mjs && node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/test-valor-atual.mjs && node scripts/test-bloqueio-montagem.cjs && node scripts/test-fila-pagamento.mjs && node scripts/_t-toque-instantaneo.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs && node scripts/test-troca-entregador-maquininha.mjs",
     "test:mutacao": "node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs"
   },
   "dependencies": {
