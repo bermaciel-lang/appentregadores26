@@ -878,3 +878,20 @@ button, select, input, textarea {
 .app-modal-opcao.tom-success { border-color: #bbf7d0; }
 .app-modal-opcao.tom-warn { border-color: #fed7aa; }
 .app-modal-opcao.tom-danger { border-color: #fecaca; }
+
+/* ===== Maquininha da rota (06/10/2026) — "Qual maquininha você vai levar?" ===== */
+.maq-modal .maq-grade { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 360px) { .maq-modal .maq-grade { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.maq-op {
+  min-height: 56px; border: 2px solid var(--line); border-radius: 14px; background: #fff; color: var(--text);
+  font-size: 20px; font-weight: 800; letter-spacing: .5px; cursor: pointer; padding: 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  -webkit-tap-highlight-color: transparent;
+}
+.maq-op:active { transform: scale(.97); }
+.maq-op.on { border-color: var(--green); background: #ecfdf3; color: #166534; box-shadow: 0 0 0 3px rgba(22, 163, 74, .2); }
+.maq-term { font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+.maq-sem { width: 100%; margin-top: 10px; font-size: 16px; letter-spacing: 0; min-height: 52px; }
+.maq-aviso { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #fff7ed; color: #9a3412; font-size: 14px; line-height: 1.4; }
+.app-modal-btn[disabled] { opacity: .45; cursor: default; }
+.ghost-sm.maq-falta { background: #fff7ed; border-color: #f59e0b; color: #9a3412; }

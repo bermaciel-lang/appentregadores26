@@ -176,6 +176,7 @@
     });
   }
   function respostaCompleta(r, formas) {
+    if (r && r.simples) return !!ROTULO_SIMPLES[r.forma] && !r.rejeitada;
     return !!r && !r.naoSei && !r.rejeitada && r.aprovacao !== 'rejeitado' && formasPermitidas(formas).some(function (f) {
       return f.chave === r.forma && (!f.operadora || f.operadora === r.operadora);
     }) && (r.forma === 'nao-pagou' || (r.valor != null && isFinite(Number(r.valor)) && Number(r.valor) >= 0 &&
@@ -249,18 +250,71 @@
     if (r.grupo && Array.isArray(r.grupoRows) && r.grupoRows.length) p.pg_grupo_rows = r.grupoRows.map(Number).filter(function (n) { return n > 0; }).join(',');
     if (r.obs) p.pg_obs = String(r.obs).slice(0, 200);
     if (r.naoSei) p.pg_naosei = 1;
+    // 06/10/2026 — a pergunta única: `pg_forma` é a OPÇÃO (maquininha/dinheiro/cheque/pix/nao-pagou) e o valor vai
+    // VAZIO de propósito: o servidor completa com o valor do pedido (resolverRespostaSimples, no painel).
+    if (r.simples) { p.pg_simples = 1; p.pg_valor = ''; p.pg_digitado = 0; delete p.pg_cartao_agrupado; delete p.pg_operadora; delete p.pg_grupo; delete p.pg_grupo_rows; }
     return p;
   }
 
   // Frase curta para o cartão ("💳 Crédito · R$ 189,50 ✓").
+  var ROTULO_SIMPLES = { maquininha: '💳 Maquininha', dinheiro: '💵 Dinheiro', cheque: '🧾 Cheque', pix: '📱 PIX', 'nao-pagou': '⚠️ NÃO PAGOU' };
   function fraseResposta(resposta, formas) {
     var r = resposta || {};
+    // ⛔ (revisão independente de 06/10, M1) a RECUSA vem antes: um "Maquininha ✓" verde sobre um pagamento que o servidor
+    // recusou mentiria sobre dinheiro
+    if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
+    if (r.simples && ROTULO_SIMPLES[r.forma]) return 'Pagamento: ' + ROTULO_SIMPLES[r.forma] + ' ✓';
     if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
     if (r.naoSei) return '💳 Pagamento: não soube dizer';
     if (r.forma === 'nao-pagou') return '⚠️ NÃO PAGOU';
     var rot = cartao(r.forma) ? 'Crédito/Débito' : (r.valeNome || rotuloForma(r.forma, r.operadora, formas, r.forma));
     var v = (r.valor === null || r.valor === undefined) ? 'valor não informado' : fmtBRL(r.valor);
     return '💳 ' + rot + ' · ' + v + (r.digitado ? ' (digitado)' : ' ✓');
+  }
+
+  // ===== 06/10/2026 — A PERGUNTA ÚNICA (pedido do dono) =====
+  // "Ao invés daquele tanto de perguntas (confirmar o valor, qual a forma…), pergunte somente: O cliente te pagou de
+  // alguma forma? Maquininha, Dinheiro, Cheque ou Não pagou — e pronto." Um toque. O valor é o do pedido (o servidor
+  // completa) e QUEM diz em que produto o cartão passou é a Cielo, pela maquininha que o entregador levou.
+  // As opções vêm do servidor (`pagamentoSimplesOpcoes`); sem a lista, as 4 do dono. Cancelar = não confirma a entrega
+  // (mesma regra de antes: sem resposta não há Entregue de pedido pago na porta).
+  // Vale para TODAS as irmãs pagas na porta (mesmo número = mesmo cliente, mesma porta, um pagamento).
+  var OPCOES_PADRAO = ['maquininha', 'dinheiro', 'cheque', 'nao-pagou'];
+  var BOTAO_SIMPLES = {
+    maquininha: { rotulo: '💳 Maquininha', tom: 'success' },
+    dinheiro: { rotulo: '💵 Dinheiro' },
+    pix: { rotulo: '📱 PIX' },
+    cheque: { rotulo: '🧾 Cheque' },
+    'nao-pagou': { rotulo: '⛔ Não pagou', tom: 'danger' }
+  };
+  function opcoesSimples(cfg) {
+    var lista = (cfg && Array.isArray(cfg.opcoes) && cfg.opcoes.length) ? cfg.opcoes : OPCOES_PADRAO;
+    var conhecidas = lista.filter(function (o) { return !!BOTAO_SIMPLES[o]; });
+    // (revisão de 06/10, menor 4) o servidor mandou só opções que este app não conhece: as 4 do dono, nunca um modal vazio
+    if (!conhecidas.length) conhecidas = OPCOES_PADRAO;
+    return conhecidas.map(function (o) {
+      return { valor: o, rotulo: BOTAO_SIMPLES[o].rotulo, tom: BOTAO_SIMPLES[o].tom };
+    });
+  }
+  async function perguntarSimples(ctx) {
+    var item = ctx.item, ui = ctx.ui;
+    var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item]);
+    if (!grupo.length) grupo = [item];
+    var soma = grupo.reduce(function (s, x) { return s + (isFinite(Number(x.valor)) ? Number(x.valor) : 0); }, 0);
+    var temValor = grupo.every(function (x) { return x.valor != null && x.valor !== '' && isFinite(Number(x.valor)); });
+    var linhaValor = temValor ? '\n\nValor ' + (grupo.length > 1 ? 'dos ' + grupo.length + ' pedidos' : 'do pedido') + ': ' + fmtBRL(soma) : '';
+    var esc;
+    try {
+      // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
+      esc = await ui.escolher(linhaValor.trim(), opcoesSimples(ctx.cfg),
+        { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
+    } catch (e) { esc = null; }
+    if (cancelou(esc) || !BOTAO_SIMPLES[esc]) return { porRow: {}, manteve: false, cancelado: true };
+    var out = { porRow: {}, manteve: false, cancelado: false };
+    grupo.forEach(function (x) {
+      out.porRow[Number(x.row)] = { forma: esc, simples: true, valor: null, digitado: false };
+    });
+    return out;
   }
 
   async function perguntar(ctx) {
@@ -438,6 +492,8 @@
     montarParams: montarParams,
     fraseResposta: fraseResposta,
     perguntar: perguntar,
+    perguntarSimples: perguntarSimples,
+    opcoesSimples: opcoesSimples,
     MAX_VOLTAS: MAX_VOLTAS,
     respostaCompleta: respostaCompleta, formasPermitidas: formasPermitidas,
     // Regras puras da conferencia de valor - expostas para a regua testar sem simular tela.
