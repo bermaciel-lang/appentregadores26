@@ -880,11 +880,11 @@ button, select, input, textarea {
 .app-modal-opcao.tom-danger { border-color: #fecaca; }
 
 /* ===== Maquininha da rota (06/10/2026) — "Qual maquininha você vai levar?" ===== */
-.maq-modal .maq-grade { margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-@media (min-width: 360px) { .maq-modal .maq-grade { grid-template-columns: repeat(4, 1fr); } }
+.maq-modal .maq-grade { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 360px) { .maq-modal .maq-grade { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .maq-op {
   min-height: 56px; border: 2px solid var(--line); border-radius: 14px; background: #fff; color: var(--text);
-  font-size: 21px; font-weight: 800; letter-spacing: 1px; cursor: pointer;
+  font-size: 20px; font-weight: 800; letter-spacing: .5px; cursor: pointer; padding: 0; min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   -webkit-tap-highlight-color: transparent;
 }

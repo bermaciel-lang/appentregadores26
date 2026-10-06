@@ -157,7 +157,7 @@ test('T7 a pergunta única: um toque, todas as irmãs pagas na porta, valor vazi
   const h=await harness();
   let perguntas=0,msg='';
   let opsVistas='';
-  const ui={escolher:async(m,ops)=>{perguntas++;msg=m;opsVistas=JSON.stringify(ops.map(o=>o.valor));return 'maquininha';}};
+  const ui={escolher:async(m,ops,o)=>{perguntas++;msg=(o&&o.titulo||'')+' '+m;opsVistas=JSON.stringify(ops.map(o=>o.valor));return 'maquininha';}};
   const item={row:7,naEntrega:true,valor:50};const irma={row:8,naEntrega:true,valor:40.5};const online={row:9,naEntrega:false,valor:10};
   const r=await h.Pg.perguntarSimples({item,irmas:[item,irma,online],cfg:{perguntar:true,simples:true,opcoes:null},ui});
   assert.equal(perguntas,1,'UMA pergunta');

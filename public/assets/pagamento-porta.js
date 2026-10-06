@@ -305,8 +305,9 @@
     var linhaValor = temValor ? '\n\nValor ' + (grupo.length > 1 ? 'dos ' + grupo.length + ' pedidos' : 'do pedido') + ': ' + fmtBRL(soma) : '';
     var esc;
     try {
-      esc = await ui.escolher('O cliente te pagou de alguma forma?' + linhaValor, opcoesSimples(ctx.cfg),
-        { titulo: '💳 Pagamento na entrega', textoCancelar: 'Cancelar' });
+      // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
+      esc = await ui.escolher(linhaValor.trim(), opcoesSimples(ctx.cfg),
+        { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
     } catch (e) { esc = null; }
     if (cancelou(esc) || !BOTAO_SIMPLES[esc]) return { porRow: {}, manteve: false, cancelado: true };
     var out = { porRow: {}, manteve: false, cancelado: false };
