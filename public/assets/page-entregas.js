@@ -495,7 +495,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   // ("Indo para entrega" e vazio NÃO contam como resolvida.)
   function statusResolvido(item) {
     const s = String(item && item.status || '').toLowerCase();
-    return s.indexOf('entregue') >= 0 || s.indexOf('não entreg') >= 0 || s.indexOf('nao entreg') >= 0 || s.indexOf('cancel') >= 0;
+    return s.indexOf('entregue') >= 0 || s.indexOf('não entreg') >= 0 || s.indexOf('nao entreg') >= 0 || s.indexOf('cancel') >= 0 || s.indexOf('removid') >= 0;
   }
 
   // Cor + ✓ nos botões de Iniciar/Finalizar (topo) conforme o estado da rota.
@@ -1406,11 +1406,13 @@ async function handleFinalizarRota() {
     if (act === 'naoentregue') {
       const esc = await AppUI.escolher('O que aconteceu com esta entrega?', [
         { valor: 'fail', rotulo: '🙋 Cliente não estava / não recebeu', tom: 'success' },
-        { valor: 'cancel', rotulo: '🚫 Pedido cancelado / mudou de rota', tom: 'danger' },
+        // 19/10/2026 (dono): era "🚫 Pedido cancelado / mudou de rota". Não é cancelamento — o pedido foi adiado ou foi para
+        // outra rota; o painel mostra "Trocou de rota/adiado". Cancelamento de verdade vem do cliente ou da equipe.
+        { valor: 'cancel', rotulo: '↪️ Saiu da minha rota', tom: 'danger' },
       ], { titulo: 'Não entregue' });
       if (esc === null) return; // fechou sem escolher → não marca nada
       act = esc === 'fail' ? 'fail' : 'cancelado';
-      obsPreset = esc === 'fail' ? 'Cliente não estava / não recebeu' : 'Pedido cancelado / mudou de rota';
+      obsPreset = esc === 'fail' ? 'Cliente não estava / não recebeu' : 'Saiu da minha rota';
     }
 
     if ((act === 'start' || act === 'maps' || act === 'waze') && !state.rotaIniciada) {
@@ -1524,7 +1526,7 @@ async function handleFinalizarRota() {
       pgPorRow = pgRes && !pgRes.manteve ? pgRes.porRow : null;
     }
     else if (act === 'fail') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo / observação:', { titulo: 'Cliente não estava', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
-    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo do cancelamento:', { titulo: 'Cancelado / mudou de rota', tom: 'warn', placeholder: 'Ex.: pedido duplicado', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Cancelado'; }
+    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Por que saiu da sua rota?', { titulo: 'Saiu da minha rota', tom: 'warn', placeholder: 'Ex.: cliente pediu para amanhã', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Removida'; }
     else if (act === 'start') { nextStatus = 'Indo para entrega'; state.expandidos.add(Number(row)); }
 
     try {

@@ -337,7 +337,8 @@ test('o toque não espera rede nem para pintar nem para liberar o próximo',asyn
   const vista=h.vista();
   assert.equal(vista.find(x=>x.row===1).status,'Entregue');
   assert.equal(vista.find(x=>x.row===2).status,'Entregue');
-  assert.equal(vista.find(x=>x.row===3).status,'Cancelado');
+  // 19/10/2026 (dono): o ramo "cancelado" virou "SAIU DA MINHA ROTA" — a tela pinta 'Removida' (rótulo "Saiu da minha rota").
+  assert.equal(vista.find(x=>x.row===3).status,'Removida');
 });
 test('falha de armazenamento aborta antes da rede e de mostrar entrega concluída',async()=>{
   const h=await harness();h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true}];
