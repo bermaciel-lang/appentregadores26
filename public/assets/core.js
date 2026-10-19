@@ -87,12 +87,14 @@
     if (st === 'indo para entrega') return 'start';
     if (st === 'entregue') return 'done';
     if (st === 'não entregue' || st === 'nao entregue') return 'fail';
-    if (st.indexOf('cancel') >= 0) return 'cancel';
+    // 19/10/2026: "Removida" = SAIU DA MINHA ROTA (o servidor tira da lista na sincronização seguinte) — resolvida, como o cancelado.
+    if (st.indexOf('cancel') >= 0 || st.indexOf('removid') >= 0) return 'cancel';
     return 'pending';
   }
 
   function statusLabel(status) {
     const st = String(status || '').trim();
+    if (/^removid/i.test(st)) return 'Saiu da minha rota'; // 19/10/2026: o nome que o entregador tocou
     return st || 'Pendente';
   }
 
@@ -833,7 +835,7 @@ async function apiMarcarCancelado(row, obs) {
     iniciarEntrega: 'Indo para entrega',
     marcarEntregue: 'Entregue',
     marcarNaoEntregue: 'Não entregue',
-    marcarCancelado: 'Cancelado',
+    marcarCancelado: 'Removida', // 19/10/2026: "Saiu da minha rota" (o servidor grava a parada fora da rota, não cancela)
     desfazer: ''
   });
   // Projeção da fila sobre a lista que veio do servidor: row -> o que o aparelho JÁ registrou.
