@@ -138,7 +138,49 @@
     });
   }
 
+  /* ⭐ 20/10/2026 — A ESPERA DA MONTAGEM (pedido do dono: "às vezes está demorando demais de um app comunicar com o outro").
+   * Quadro SEM botão OK: só o texto que muda (o que falta na montagem) e um "Voltar". Quem chama fecha quando a montagem fica pronta.
+   * Devolve { atualizar(msg), fechar(), cancelado } — `cancelado` é uma Promise que resolve quando a pessoa toca em Voltar. */
+  function esperar(cfg) {
+    var overlay = document.createElement('div');
+    overlay.className = 'app-modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('data-espera-montagem', '1');
+    var card = document.createElement('div');
+    card.className = 'app-modal' + (cfg.tom ? ' tom-' + cfg.tom : '');
+    card.innerHTML = (cfg.titulo ? '<div class="app-modal-title">' + escapar(cfg.titulo) + '</div>' : '')
+      + '<div class="app-modal-msg" data-msg style="max-height:55vh;overflow-y:auto;text-align:left;color:inherit;font-weight:600">' + escapar(cfg.mensagem || '') + '</div>'
+      + '<div class="app-modal-msg" data-rodape style="opacity:.75;font-size:13px;margin-top:6px">' + escapar(cfg.rodape || '') + '</div>'
+      + '<div class="app-modal-actions"><button type="button" class="app-modal-btn ghost" data-acao="cancelar">'
+      + escapar(cfg.textoCancelar || 'Voltar') + '</button></div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    travarFundo(true);
+    requestAnimationFrame(function () { overlay.classList.add('aberto'); });
+    var fechado = false, aoCancelar;
+    var cancelado = new Promise(function (r) { aoCancelar = r; });
+    function fechar() {
+      if (fechado) return;
+      fechado = true;
+      overlay.classList.remove('aberto');
+      travarFundo(false);
+      setTimeout(function () { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 180);
+    }
+    card.querySelector('[data-acao="cancelar"]').addEventListener('click', function () { fechar(); aoCancelar(true); });
+    return {
+      atualizar: function (msg, rodape) {
+        if (fechado) return;
+        if (msg != null) card.querySelector('[data-msg]').textContent = String(msg);
+        if (rodape != null) card.querySelector('[data-rodape]').textContent = String(rodape);
+      },
+      fechar: fechar,
+      cancelado: cancelado,
+    };
+  }
+
   window.AppUI = {
+    esperar: esperar,
     alerta: function (mensagem, opc) {
       opc = opc || {};
       return abrir({ tipo: 'alert', mensagem: mensagem, titulo: opc.titulo, textoOk: opc.textoOk || 'Entendi', tom: opc.tom });

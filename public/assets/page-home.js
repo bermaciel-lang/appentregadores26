@@ -63,7 +63,8 @@
     // a rede — a tela de entregas confere o resto sozinha. Era mais uma espera de rede entre o dedo e a rota.
     if (api.inicioConfirmado && api.inicioConfirmado(nome)) { window.location.href = '/entregas/'; return; }
     try {
-      await api.verificarMontagem(nome);
+      // 20/10/2026: montagem pendente = quadro "Aguardando a montagem" com o que falta; abre sozinho quando ficar 100% (core.js).
+      await (api.verificarMontagemEsperando || api.verificarMontagem)(nome);
       window.location.href = '/entregas/';
     } catch (e) {
       // LOGIN recusado (token inválido/ausente): o token já foi apagado pelo core, então basta o
@@ -79,6 +80,7 @@
         await AppUI.alerta(e.message + '\n\nToque no seu nome de novo e digite seu PIN (os últimos 4 números do seu telefone).', { titulo: 'Precisa entrar de novo', tom: 'warn' });
         return;
       }
+      if (e && e.esperaCancelada) return; // saiu da espera tocando em Voltar
       const detalhes = (e.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
       await AppUI.alerta(e.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: 'Montagem da rota', tom: 'warn' });
     }

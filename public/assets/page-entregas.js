@@ -813,9 +813,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     loadingRota.classList.remove('hidden');
     btnIniciarRota.disabled = true;
     try {
-      await api.verificarMontagem(state.driver, false);
+      // 20/10/2026: montagem pendente = quadro "Aguardando a montagem" com o que falta; segue sozinho para o KM quando ficar 100%.
+      await (api.verificarMontagemEsperando || api.verificarMontagem)(state.driver, false);
     } catch (error) {
       if (error && error.precisaLogin) { await pedirLoginDeNovo(error.message); return; }
+      if (error && error.esperaCancelada) return; // saiu da espera tocando em Voltar
       const detalhes = (error.pendentes || []).map(p => p.cliente + ' · ' + p.pedido + ' (' + p.tipo + ')').join('\n');
       await AppUI.alerta(error.message + (detalhes ? '\n\nPendentes:\n' + detalhes : ''), { titulo: 'Montagem da rota', tom: 'warn' });
       return;
