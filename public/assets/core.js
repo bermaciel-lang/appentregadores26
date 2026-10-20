@@ -570,6 +570,7 @@ function espelharNoPainel(body) {
     e.montagemBloqueada = !!(res && res.montagemBloqueada);
     e.semResposta = !res;
     e.pendentes = res && res.pendentes || [];
+    e.resposta = res || null; // 20/10/2026: a tela de espera lê `faltaLista`/`faltaTexto` daqui
     return e;
   }
   async function verificarMontagem(entregador, permitirEmAndamento = true) {
@@ -590,6 +591,81 @@ function espelharNoPainel(body) {
       if (error && error.precisaLogin) throw error;
       if (permitirEmAndamento && inicioConfirmado(entregador)) return { ok: true, rotaIniciada: true, offline: true };
       throw error.bloqueioMontagem ? error : erroMontagem();
+    }
+  }
+
+  /* ⭐ 20/10/2026 — A ESPERA DA MONTAGEM (pedido do dono: "às vezes está demorando demais de um app comunicar com o outro" e "falar
+   * exatamente o que está pendente na montagem… o pessoal é limitado e não entende. Mas isso não pode deixar o app mais lento").
+   * MEDIDO (14–20/10, 36 rotas): depois que a montagem fica 100%, o Iniciar sai em 1–2 min na maioria — mas o entregador só descobre
+   * tocando de novo. Agora, com a montagem pendente, o app abre um quadro "Aguardando a montagem" com a LISTA do que falta (com nomes)
+   * e pergunta SOZINHO ao painel a cada 15 s (action `montagemPronta`, leitura LEVE e sem poder de abrir). Quando ela diz pronta, faz a
+   * conferência de SEMPRE (`verificarMontagem`) e segue. Nada mudou no caminho do dedo: rota pronta = mesma chamada de antes.
+   * · Só pergunta com a tela VISÍVEL (bolso/tela apagada = não gasta internet nem banco); ao voltar, pergunta na hora.
+   * · Painel antigo (sem `montagemPronta`): cai para `verificarMontagem` a cada 30 s.
+   * · "Voltar" fecha o quadro e devolve o erro de antes — o entregador continua podendo fazer o que fazia.
+   * · Teto de 60 min de espera aberta; depois fecha com o aviso de sempre. */
+  function textoDaEspera(res) {
+    const lista = res && Array.isArray(res.faltaLista) ? res.faltaLista.filter(Boolean) : [];
+    if (lista.length) return 'Peça para a montagem terminar:\n\n• ' + lista.join('\n• ');
+    if (res && res.faltaTexto) return 'Peça para a montagem terminar:\n\n' + res.faltaTexto;
+    if (res && Array.isArray(res.pendentes) && res.pendentes.length)
+      return 'Peça para a montagem terminar:\n\n• ' + res.pendentes.map(p => (p.cliente ? p.cliente + ' (' + p.pedido + ')' : p.pedido)).join('\n• ');
+    return 'A montagem desta rota ainda não está 100%.';
+  }
+  async function esperarMontagem(entregador, erroInicial) {
+    if (!window.AppUI || !window.AppUI.esperar) throw erroInicial;
+    const quadro = window.AppUI.esperar({ titulo: '⏳ Aguardando a montagem', mensagem: textoDaEspera(erroInicial && erroInicial.resposta),
+      rodape: 'O app abre sozinho quando a montagem ficar 100%. Pode deixar esta tela aberta.', tom: 'warn' });
+    let cancelou = false;
+    quadro.cancelado.then(() => { cancelou = true; acordar(); });
+    let acordar = () => {};
+    const dormir = (ms) => new Promise(r => { const t = setTimeout(r, ms); acordar = () => { clearTimeout(t); r(); }; });
+    const aoVoltarATela = () => { if (document.visibilityState === 'visible') acordar(); };
+    document.addEventListener('visibilitychange', aoVoltarATela);
+    const fim = Date.now() + 60 * 60 * 1000;
+    let semAcaoLeve = false;
+    // Revisão de 20/10: a leitura leve usa base em cache e pode dizer "pronta" um pouco cedo. Depois de a conferência completa recusar,
+    // ignora o "pronta" das próximas 4 perguntas (~1 min, o tempo de o cache renovar) para não repetir a conferência pesada à toa.
+    let ignorarProntas = 0;
+    try {
+      while (!cancelou && Date.now() < fim) {
+        await dormir(semAcaoLeve ? 30000 : 15000);
+        if (cancelou) break;
+        if (document.visibilityState === 'hidden') continue;
+        let res = null;
+        if (!semAcaoLeve) {
+          try { res = await apiGet({ action: 'montagemPronta', entregador, turno: getTurno() }, { retries: 0 }); } catch (e) { res = null; }
+          if (cancelou) break;
+          if (res && res.precisaLogin) throw erroLogin(res);
+          // Painel de antes (a ação não existe): responde sem o campo → passa a usar a conferência de sempre, mais espaçada.
+          if (res && res.ok && res.montagemPronta === undefined && !res.demo) { semAcaoLeve = true; res = null; }
+          else if (res && res.ok && !res.montagemPronta && !res.rotaIniciada) {
+            quadro.atualizar(textoDaEspera(res), 'Conferido às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+              + ' — o app abre sozinho quando ficar 100%.');
+            continue;
+          } else if (!(res && res.ok)) continue; // sem sinal / painel ocupado: tenta de novo, sem susto
+          else if (ignorarProntas > 0 && !res.rotaIniciada) { ignorarProntas--; continue; }
+        }
+        // Pronta (ou painel antigo): a conferência de SEMPRE é a única que abre.
+        try { const ok = await verificarMontagem(entregador, false); quadro.fechar(); return ok; }
+        catch (e) {
+          if (e && e.precisaLogin) throw e;
+          if (e && e.montagemBloqueada) { quadro.atualizar(textoDaEspera(e.resposta)); if (!semAcaoLeve) ignorarProntas = 4; }
+        }
+      }
+      if (cancelou && erroInicial) erroInicial.esperaCancelada = true; // tocou em Voltar: quem chamou não repete o aviso
+      throw erroInicial;
+    } finally {
+      document.removeEventListener('visibilitychange', aoVoltarATela);
+      quadro.fechar();
+    }
+  }
+  /** `verificarMontagem` + a ESPERA: montagem pendente de verdade abre o quadro e espera; qualquer outro erro sai como antes. */
+  async function verificarMontagemEsperando(entregador, permitirEmAndamento = true) {
+    try { return await verificarMontagem(entregador, permitirEmAndamento); }
+    catch (e) {
+      if (!e || !e.montagemBloqueada) throw e;
+      return await esperarMontagem(entregador, e);
     }
   }
 
@@ -1416,6 +1492,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     apiGet,
     carregarEntregadores,
     verificarMontagem,
+    verificarMontagemEsperando,
     manterValorMaisRecente,
     carregarEntregasPorEntregador,
     carregarCancelamentosDaRota,
