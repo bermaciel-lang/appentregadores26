@@ -624,6 +624,9 @@ function espelharNoPainel(body) {
     document.addEventListener('visibilitychange', aoVoltarATela);
     const fim = Date.now() + 60 * 60 * 1000;
     let semAcaoLeve = false;
+    // Revisão de 20/10: a leitura leve usa base em cache e pode dizer "pronta" um pouco cedo. Depois de a conferência completa recusar,
+    // ignora o "pronta" das próximas 4 perguntas (~1 min, o tempo de o cache renovar) para não repetir a conferência pesada à toa.
+    let ignorarProntas = 0;
     try {
       while (!cancelou && Date.now() < fim) {
         await dormir(semAcaoLeve ? 30000 : 15000);
@@ -641,12 +644,13 @@ function espelharNoPainel(body) {
               + ' — o app abre sozinho quando ficar 100%.');
             continue;
           } else if (!(res && res.ok)) continue; // sem sinal / painel ocupado: tenta de novo, sem susto
+          else if (ignorarProntas > 0 && !res.rotaIniciada) { ignorarProntas--; continue; }
         }
         // Pronta (ou painel antigo): a conferência de SEMPRE é a única que abre.
         try { const ok = await verificarMontagem(entregador, false); quadro.fechar(); return ok; }
         catch (e) {
           if (e && e.precisaLogin) throw e;
-          if (e && e.montagemBloqueada) quadro.atualizar(textoDaEspera(e.resposta));
+          if (e && e.montagemBloqueada) { quadro.atualizar(textoDaEspera(e.resposta)); if (!semAcaoLeve) ignorarProntas = 4; }
         }
       }
       if (cancelou && erroInicial) erroInicial.esperaCancelada = true; // tocou em Voltar: quem chamou não repete o aviso

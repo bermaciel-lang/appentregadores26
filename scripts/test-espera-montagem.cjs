@@ -38,7 +38,9 @@ const OK = { ok: true, montagemVerificada: true, montagemBloqueada: false, rotaI
     const t = montar({ verificarMontagem: [BLOQ, BLOQ, OK], montagemPronta: [{ ok: true, montagemPronta: true }] });
     const r = await t.api.verificarMontagemEsperando('Camila', false);
     assert.equal(r.montagemVerificada, true); assert.equal(t.chamadas.filter(c => c === 'verificarMontagem').length, 3);
-    ok('a leitura leve NUNCA abre sozinha: só a verificarMontagem');
+    const i1 = t.chamadas.indexOf('verificarMontagem', 1), i2 = t.chamadas.indexOf('verificarMontagem', i1 + 1);
+    assert.equal(i2 - i1 - 1, 5, 'depois da recusa, 4 "pronta" ignorados antes de conferir de novo (sem martelar a pesada)');
+    ok('a leitura leve NUNCA abre sozinha; depois de uma recusa, espera ~1 min antes de conferir de novo');
   }
   { // 3. sem sinal na leve → segue esperando
     const t = montar({ verificarMontagem: [BLOQ, OK], montagemPronta: ['offline', { ok: false, tentarDepois: true }, { ok: true, montagemPronta: true }] });
