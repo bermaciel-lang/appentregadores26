@@ -1155,6 +1155,17 @@ async function handleFinalizarRota() {
   // não há o que perguntar (cofre 0 / pago online / PgPorta não carregou).
   // `conferencia` = a promessa já em voo de `adiantarConferenciaPg`; aqui só se recolhe o que deu
   // tempo de chegar. Sem ela (correção de pagamento pela tela 4), a conferência sai agora.
+  /* ⛔ 21/10/2026 — AS IRMÃS DA MESMA PORTA NUNCA INCLUEM PEDIDO CANCELADO (caso Faní Moritz, rota do Luiz Fábio, 20/10).
+   * A loja cancelou o LOJA-2174 com ele na rua e refez o MESMO pedido (LOJA-2324); os dois ficaram seguidos, mesmo cliente e
+   * endereço → o MESMO número de parada (16). As irmãs eram "todas com o mesmo número", e o cancelado entrava junto: a pergunta
+   * da cobrança somava os dois ("Valor dos 2 pedidos: R$ 233,70" para um pedido de R$ 116,85) e o Entregue tentava marcar o
+   * cancelado também. Agora: mesmo número E não cancelado/saiu da rota. A própria tocada sempre entra. */
+  function irmasAtivas(vista, item) {
+    if (!item || item.numero == null || api.statusKey(item.status) === 'cancel') return [item];
+    return vista.filter((x) => Number(x.numero) === Number(item.numero)
+      && (Number(x.row) === Number(item.row) || api.statusKey(x.status) !== 'cancel'));
+  }
+
   async function coletarPagamento(item, irmas, tsDevice, anterior, conferencia) {
     const Pg = window.PgPorta;
     if (!Pg) {
@@ -1353,7 +1364,7 @@ async function handleFinalizarRota() {
       // (revisão de 06/10, menor 1) na pergunta única a correção vale para as IRMÃS pagas na porta (mesmo número = mesma porta,
       // um pagamento) — corrigir "Não pagou" num cartão e deixar a irmã como "Não pagou" mandaria cobrar o cliente
       const simplesC = !!(state.pgCfg && state.pgCfg.simples);
-      const irmasC = simplesC && item.numero != null ? vistaAgora.filter((x) => Number(x.numero) === Number(item.numero)) : [item];
+      const irmasC = simplesC ? irmasAtivas(vistaAgora, item) : [item];
       const resC = await coletarPagamento(item, irmasC, tsC, pgRespostaAnterior(row, item));
       if (!resC || resC.manteve || resC.cancelado) return;
       // Pergunta única: não há valor digitado para o servidor recusar — grava e segue, sem espera na frente do dedo.
@@ -1391,7 +1402,7 @@ async function handleFinalizarRota() {
         { valor: 'sim', rotulo: '↩ Sim, desfazer', tom: 'danger' },
       ], { titulo: 'Desfazer' });
       if (esc === null) return;
-      const alvo = (item.numero != null ? vistaAgora.filter((x) => Number(x.numero) === Number(item.numero)) : [item]).map((x) => Number(x.row));
+      const alvo = irmasAtivas(vistaAgora, item).map((x) => Number(x.row));
       // Mesmo caminho instantâneo das outras marcações: grava e pinta. Antes eram até 3 tentativas
       // de rede POR LINHA (15 s cada no timeout) antes de a tela responder.
       try { await guardarNaFila(alvo.map((r) => ({ action: 'desfazer', row: Number(r) }))); }
@@ -1433,7 +1444,7 @@ async function handleFinalizarRota() {
         // A conferência de valor sai ANTES do diálogo e corre em paralelo com ele (ver
         // `adiantarConferenciaPg`). Se a pessoa não escolher "Entregue", a resposta é só descartada
         // — é uma leitura, não muda nada no servidor.
-        const irmasA = ant.numero != null ? vistaAgora.filter((x) => Number(x.numero) === Number(ant.numero)) : [ant];
+        const irmasA = irmasAtivas(vistaAgora, ant);
         const conferenciaA = adiantarConferenciaPg(ant, irmasA);
         const esc = await AppUI.escolher('Você ainda está indo para "' + (ant.cliente || 'outro cliente') + '". Antes de iniciar a próxima, o que aconteceu com essa entrega?', [
           { valor: 'done', rotulo: '✅ Entregue', tom: 'success' },
@@ -1494,7 +1505,7 @@ async function handleFinalizarRota() {
       // entregador leva lendo os diálogos abaixo. Antes ela esperava ENTRE o "Como foi a entrega?"
       // e o modal de pagamento, com o timeout geral de 15 s e a tela morta. Aqui nada é esperado:
       // só disparado. Quem recolhe (e mostra a espera que sobrar) é o `coletarPagamento`.
-      irmasPg = item.numero != null ? vistaAgora.filter((x) => Number(x.numero) === Number(item.numero)) : [item];
+      irmasPg = irmasAtivas(vistaAgora, item);
       conferenciaPg = adiantarConferenciaPg(item, irmasPg);
       // 3 opções rápidas pra registrar COMO foi a entrega. Cancelar aqui ABORTA (não marca).
       const tipo = await AppUI.escolher('Como foi a entrega?', [
@@ -1565,9 +1576,7 @@ async function handleFinalizarRota() {
       // DUPLICADAS vão JUNTAS ao INICIAR / ENTREGAR: pedidos do mesmo cliente+endereço têm o MESMO
       // `numero` (o painel já colapsa e manda). O entregador vai a UM lugar só, então tocar Iniciar/
       // Entregue numa marca TODAS as do mesmo número de uma vez. (Não-entregue/Cancelado seguem 1 a 1.)
-      const irmas = (act === 'start' || act === 'done') && item.numero != null
-        ? vistaAgora.filter((x) => Number(x.numero) === Number(item.numero))
-        : [item];
+      const irmas = (act === 'start' || act === 'done') ? irmasAtivas(vistaAgora, item) : [item];
       // Só as que ainda NÃO estão no status alvo (a própria tocada sempre entra) — evita remarcar/enfileirar à toa.
       const rowsAlvo = irmas
         .filter((x) => Number(x.row) === Number(row) || api.statusKey(x.status) !== api.statusKey(nextStatus))

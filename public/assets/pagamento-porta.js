@@ -133,6 +133,8 @@
     var vistas = {}, out = [];
     (Array.isArray(irmas) ? irmas : []).forEach(function (x) {
       if (!x || !x.naEntrega) return;
+      // 21/10/2026: pedido CANCELADO ou que SAIU DA ROTA nunca entra na soma da porta (caso Faní: R$ 233,70 por um de R$ 116,85).
+      if (/cancel|removid/i.test(String(x.status || ''))) return;
       var r = Number(x.row);
       if (vistas[r]) return;
       vistas[r] = 1; out.push(x);

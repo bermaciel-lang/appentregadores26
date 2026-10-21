@@ -47,7 +47,7 @@ function funcaoDaPagina(nome) {
 const FUNCOES = ['pgRespostaAnterior', 'metaDeStatus', 'itensComFila', 'guardarNaFila', 'agendarEnvio',
   'avisarSemSincronizacao', 'comEspera', 'avisarArmazenamento', 'guardarRecebimento',
   'enviarRecebimentoGuardado', 'acompanharEnvio', 'enviarConfirmacao', 'estadoDoEnvio',
-  'handleAction', 'executarAcao'];
+  'irmasAtivas', 'handleAction', 'executarAcao'];
 // Só nos cenários que provam a CONFERÊNCIA DE VALOR (a última rede que precede um diálogo). Nos
 // outros, `coletarPagamento`/`conferirGrupoValores` continuam fictícios — senão todo cenário
 // passaria a depender do modal de dinheiro, que tem régua própria (_t-pagamento-porta.mjs).
