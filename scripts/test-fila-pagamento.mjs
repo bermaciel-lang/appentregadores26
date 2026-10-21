@@ -93,7 +93,7 @@ async function harness({store=new Map(),handler=async()=>accepted}={}){
   // ReferenceError no meio do cenário — e foi assim que o toque instantâneo (23/09) foi integrado.
   const nomes=['pgRespostaAnterior','metaDeStatus','itensComFila','guardarNaFila','agendarEnvio',
     'avisarSemSincronizacao','comEspera','avisarArmazenamento','guardarRecebimento',
-    'enviarRecebimentoGuardado','acompanharEnvio','enviarConfirmacao','handleAction','executarAcao'];
+    'enviarRecebimentoGuardado','acompanharEnvio','enviarConfirmacao','irmasAtivas','handleAction','executarAcao'];
   const page=vm.runInContext(nomes.map(pageFunction).join('\n')+'\n({'+nomes.join(',')+'});',
     ctx,{filename:'public/assets/page-entregas.js (funções reais)'});
   await api.filaPronta();
