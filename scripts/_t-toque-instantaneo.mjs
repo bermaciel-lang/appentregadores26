@@ -477,8 +477,11 @@ teste('o pagamento não sobe antes da entrega da MESMA parada', async () => {
   await h.tocar('done', 1);
   await h.enviar();
   await h.enviar();
-  assert.deepEqual(h.calls.map(x => x.action), ['marcarEntregue', 'marcarEntregue'],
-    'a declaração de dinheiro espera ATRÁS da entrega da mesma parada');
+  // 28/10/2026: com o "rodar de novo" do processarFila (o `enviar()` durante o ciclo do toque roda mais um ciclo), o NÚMERO de
+  // tentativas da marcação mudou (eram exatamente 2). O que esta régua guarda continua igual: nenhuma declaração de dinheiro sai
+  // enquanto a entrega da MESMA parada não passou.
+  assert.ok(h.calls.length >= 2 && h.calls.every(x => x.action === 'marcarEntregue'),
+    'a declaração de dinheiro espera ATRÁS da entrega da mesma parada: ' + h.calls.map(x => x.action).join(' -> '));
   quebrado = false;
   await h.enviar();
   assert.deepEqual(h.calls.map(x => x.action).slice(-2), ['marcarEntregue', 'confirmarPagamento']);

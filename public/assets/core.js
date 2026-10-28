@@ -49,6 +49,8 @@
   // Se não der tempo, o modal abre no modo degradado: o entregador DIGITA o valor, com a trava de
   // 10x sobre o valor de referência. Nada de dinheiro afrouxa; só a espera é que tem limite.
   const TEMPO_CONFERIR_MS = Number(C.API_CONFERIR_TIMEOUT_MS) > 0 ? Number(C.API_CONFERIR_TIMEOUT_MS) : 6000;
+  // Orçamento de UMA tentativa do `confirmarPagamento` na fila (28/10/2026; era 45 s × 2). Ver `apiGet`.
+  const TEMPO_PAGAMENTO_MS = 20000;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -485,8 +487,11 @@ function espelharNoPainel(body) {
     // `opt.timeoutMs` existe para a ÚNICA chamada que ainda precede um diálogo do entregador (a
     // conferência de valor do pagamento na porta): lá 15 s de espera é tela morta na rua, e o
     // modal sabe seguir sem o valor conferido (o entregador digita). Ver TEMPO_CONFERIR_MS.
+    // ⛔ 28/10/2026 — `confirmarPagamento` espera 20 s (era 45 s, e com a tentativa interna da fila eram ~91 s segurando todo o
+    // resto atrás dele). Timeout não é ACK: o item fica e a fila repete; o servidor confere a chave do toque (parada:ts_device)
+    // ANTES da parte lenta (lib/erp-pagamento-na-entrega.ts), então a repetição de um toque que já gravou volta rápida.
     const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
-      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);
+      : (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);
     const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
     let lastError = null;
 
@@ -882,10 +887,13 @@ async function apiMarcarCancelado(row, obs) {
     const dono = nomeLimpo(x && x.params && x.params.entregador);
     return !dono || dono === getSavedDriverName();
   }
+  // ⛔ 28/10/2026 — O RECUSADO NÃO É MAIS "PENDENTE". Ele não vai subir sozinho (espera o "Entendi" ou a correção), e contá-lo
+  // aqui travava para sempre o "a fila esvaziou → recarrega a lista" da tela (page-entregas.js) e punha "enviando…" num pagamento
+  // que o servidor recusou. A recusa continua na tela pelo seu próprio caminho (o cartão, a faixa do topo, "Corrigir pagamento").
   function filaRowsPendentes() {
     const fila = bancoFila && bancoFila.snapshot();
     if (fila === null || !bancoFila) return null; // desconhecida não é uma fila vazia
-    return new Set(fila.filter(doAtivo).map(x => Number(x.meta && x.meta.row)).filter(Boolean));
+    return new Set(fila.filter(x => doAtivo(x) && !x.precisaCorrigir).map(x => Number(x.meta && x.meta.row)).filter(Boolean));
   }
   function filaParamsPendentes(row, action) {
     let achado = null;const fila = bancoFila && bancoFila.snapshot();
@@ -964,16 +972,48 @@ async function apiMarcarCancelado(row, obs) {
     await bancoFila.ack(id);
     return true;
   }
-  let _processamentoFila = null;
+  // ⭐ 28/10/2026 — OS ACKS RECENTES POR CIMA DA LISTA ("a tela volta atrás"). A lista do servidor pedida ANTES de um ACK pode
+  // chegar DEPOIS dele: o item já saiu da fila (nada mais o projeta) e `state.items = result.data` repinta o que o servidor sabia
+  // antes. Cada ACK de STATUS fica aqui, em memória, com uma marca do relógio lógico; a tela o sobrepõe até aplicar uma lista
+  // pedida DEPOIS dele (`esquecerAcksAte(marcaDoPedido)`). É só memória de exibição: o ato já está no servidor.
+  let _marcaLogica = 0;
+  function proximaMarca() { _marcaLogica += 1; return _marcaLogica; }
+  const _acksRecentes = new Map(); // row -> { row, action, alvo, obsAlvo, saiuDaRota, marca }
+  function registrarAckDeStatus(item) {
+    const acao = item && item.params && item.params.action;
+    if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao) || !doAtivo(item)) return;
+    const row = Number(item.params.row);
+    if (!row) return;
+    _acksRecentes.set(row, { row, action: acao, alvo: ACOES_DE_STATUS[acao], obsAlvo: item.params.obs || '',
+      saiuDaRota: acao === 'marcarCancelado', marca: proximaMarca() });
+  }
+  function acksRecentesDeStatus() { return new Map(_acksRecentes); }
+  function esquecerAcksAte(marca) {
+    for (const [row, a] of _acksRecentes) if (a.marca < Number(marca)) _acksRecentes.delete(row);
+  }
+  // ⛔ 28/10/2026 — "RODAR DE NOVO". Um toque feito com o ciclo já no fim (ex.: reenviando o KM/foto, depois do último `ler()`)
+  // recebia a MESMA promessa do ciclo em voo e só subia no próximo gatilho (até 60 s, ou nunca, se a tela fechasse). Agora quem
+  // chama com um ciclo em voo marca "rodar de novo": o ciclo acaba e roda outro, e a promessa devolvida só resolve depois dele.
+  let _processamentoFila = null, _rodarDeNovo = false;
   function processarFila() {
-    if (_processamentoFila) return _processamentoFila;
+    if (_processamentoFila) { _rodarDeNovo = true; return _processamentoFila; }
     _keepaliveFeito = false; // o app voltou a viver: o disparo de fechamento pode acontecer de novo
-    _processamentoFila = filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
-      console.error('[fila]', error);
-      return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
-    }).finally(() => { _processamentoFila = null; });
+    _processamentoFila = (async () => {
+      let r;
+      for (let voltas = 0; ; voltas++) {
+        _rodarDeNovo = false;
+        r = await filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
+          console.error('[fila]', error);
+          return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
+        });
+        // Sem consumidor (outra aba, sem Web Locks) ou com o armazenamento quebrado, repetir não muda nada.
+        if (!_rodarDeNovo || voltas >= 20 || (r && (r.erroArmazenamento || r.sincronizacaoIndisponivel || r.ocupado))) break;
+      }
+      return r;
+    })().finally(() => { _processamentoFila = null; });
     return _processamentoFila;
   }
+  function filaEmEnvio() { return !!_processamentoFila; }
   // ⛔ 23/09/2026 (2ª volta) — AQUI EXISTIA `MAX_AMBIGUAS_STATUS = 12`: depois de 12 ciclos sem
   // passar, um `ok:false` AMBÍGUO virava RECUSA DURÁVEL, a tela desfazia a marcação e o único botão
   // oferecido ("Entendi") APAGAVA a declaração do aparelho. Só que o catch de topo do painel devolve
@@ -1004,14 +1044,38 @@ async function apiMarcarCancelado(row, obs) {
     // até o próximo ciclo, então dentro de uma parada a fila continua estritamente FIFO.
     const rowsBloqueadas = new Set();
     const bloquearRow = it => { const r = Number(it.params && it.params.row); if (r) rowsBloqueadas.add(r); };
+    // ⛔ 28/10/2026 — O PORTEIRO FECHADO TRAVAVA A FILA INTEIRA PARA SEMPRE. `precisaLogin`/`montagemBloqueada`/
+    // `montagemIndisponivel` davam `break` no ciclo, e o ciclo seguinte começava pelo MESMO item: um toque cuja rota não vale mais
+    // (republicada sem as paradas dele enquanto estava sem sinal; ou de ontem, sem o dia carimbado, batendo na rota de hoje ainda
+    // não iniciada) segurava todas as entregas de trás, de qualquer rota, para sempre. Agora o porteiro trava só o que ele fecha:
+    //   · montagem/rota não iniciada → a ROTA daquele item (entregador|dia|turno), só para ações de status (as únicas que o
+    //     porteiro do servidor confere);
+    //   · login → o ENTREGADOR daquele token (o PIN dele continua sendo esperado, nada se perde).
+    // E segue com as outras rotas/entregadores. Cada item pulado por isso também bloqueia a PARADA dele no ciclo, para o
+    // `confirmarPagamento` dela nunca passar na frente do `marcarEntregue` (que ficou para trás). A tentativa conta no selo.
+    const rotasBloqueadas = new Set(), entregadoresBloqueados = new Set();
+    const donoDe = it => nomeLimpo(it && it.params && it.params.entregador) || getSavedDriverName();
+    const rotaDe = it => {
+      const a = it && it.params && it.params.action;
+      if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, a)) return null;
+      return donoDe(it) + '|' + String(it.params.data || '') + '|' + String(it.params.turno || '');
+    };
+    const travadoPeloPorteiro = it => entregadoresBloqueados.has(donoDe(it)) || (rotaDe(it) !== null && rotasBloqueadas.has(rotaDe(it)));
     for (;;) {
-      const item = (await bancoFila.ler()).find(x => !x.precisaCorrigir && !tentados.has(x.id) &&
-        !rowsBloqueadas.has(Number(x.params && x.params.row)) && podeEnviarAgora(x));
+      let item = null;
+      for (const x of await bancoFila.ler()) {
+        if (x.precisaCorrigir || tentados.has(x.id) || !podeEnviarAgora(x)) continue;
+        if (travadoPeloPorteiro(x)) { bloquearRow(x); continue; } // a parada inteira espera junto (ordem sagrada)
+        if (rowsBloqueadas.has(Number(x.params && x.params.row))) continue;
+        item = x; break;
+      }
       if (!item || !await continua()) break;
       tentados.add(item.id);
       const pagamento = item.params.action === 'confirmarPagamento';
       let res;
-      try { res = await apiGet(item.params, { retries: 1 }); }
+      // ⛔ 28/10/2026 — `confirmarPagamento` sem tentativa interna (era 45 s × 2 = ~91 s segurando tudo atrás dele): a fila
+      // repete sozinha no próximo ciclo e o servidor reconhece o mesmo toque (chave parada:ts_device conferida antes da parte lenta).
+      try { res = await apiGet(item.params, { retries: pagamento ? 0 : 1 }); }
       catch (error) {
         // Exceção = sem resposta (sem sinal, timeout, proxy fora). Não é recusa: nada é perdido,
         // nada é marcado, e parar aqui é certo — se a rede caiu, os itens de trás também não vão.
@@ -1025,6 +1089,7 @@ async function apiMarcarCancelado(row, obs) {
           await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
         }
         _naoPassaram.delete(item.id);
+        registrarAckDeStatus(item); // ANTES do ack: a tela nunca fica um quadro sem a fila e sem o ACK por cima
         await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
         _naoPassaram.delete(item.id);
@@ -1040,11 +1105,17 @@ async function apiMarcarCancelado(row, obs) {
         await bancoFila.recusar(item.id, (res.error && String(res.error)) ||
           'Esta parada não está mais na sua rota. Se você entregou, avise o escritório.');
       } else if (pagamento) {
+        if (res && res.precisaLogin) entregadoresBloqueados.add(donoDe(item)); // sem token, os outros dele também não passam
         await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
       } else if (res && (res.precisaLogin || res.montagemBloqueada || res.montagemIndisponivel)) {
-        // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato e vale para a
-        // fila inteira. Guarda tudo como está e para — o próximo ciclo tenta de novo.
-        break;
+        // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato. Guarda tudo como está, trava só o que
+        // o porteiro fecha (a rota deste item, ou o entregador do token) e segue com o resto — ver o comentário no topo.
+        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
+        if (res.precisaLogin) entregadoresBloqueados.add(donoDe(item));
+        else if (rotaDe(item) !== null) rotasBloqueadas.add(rotaDe(item));
+        else entregadoresBloqueados.add(donoDe(item)); // ação sem rota (não deveria vir com montagem*): espera com o entregador
+        continue;
       } else {
         // `ok:false` AMBÍGUO — pode ser recusa e pode ser o servidor engasgado; o painel devolve os
         // dois com o mesmo formato. Então: não descarta, não recusa, não desfaz a tela. Conta a
@@ -1460,6 +1531,10 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
   }
 
   window.AppEntrega = {
+    proximaMarca,
+    acksRecentesDeStatus,
+    esquecerAcksAte,
+    filaEmEnvio,
     temToken,
     fimConfirmado,
     guardarFimConfirmado,

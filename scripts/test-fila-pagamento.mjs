@@ -163,7 +163,9 @@ test('ok sem pagamento.gravado===true não remove pagamento nem recusa anterior'
 test('falha de rede e reload preservam payload, timestamp e correção pendente',async()=>{
   const offline=async()=>{throw Error('Sem rede fictícia');};
   const h=await harness({handler:offline});await h.send(1,paid,T1,false);
-  assert.equal(h.calls.length,2,'consumidor único: tentativa inicial e um retry real');
+  // ⛔ 28/10/2026 — INVERTIDA (velocidade, leva 2): era "tentativa inicial e um retry real" (2 chamadas). O `confirmarPagamento` na
+  // fila não tem mais tentativa interna (eram 45 s × 2 segurando tudo atrás dele): UMA por ciclo, e a fila repete no próximo.
+  assert.equal(h.calls.length,1,'consumidor único: uma tentativa por ciclo (a fila repete sozinha)');
   assert.equal(h.queue().length,1);assert.equal(h.queue()[0].params.pg_fila,1);
   const before=copy(h.queue());await h.api.processarFila();assert.deepEqual(h.queue(),before);
   const reloaded=await harness({store:h.store,handler:offline});assert.equal(reloaded.previous(1,{}).valor,95);
@@ -247,13 +249,17 @@ test('ACK de correção e recusas vinculadas é atômico nos dois pontos de inte
   }
 });
 
-test('somente confirmarPagamento espera 45s, inclusive após recarregar a fila',async()=>{
+// ⛔ 28/10/2026 — INVERTIDA (velocidade, leva 2; pedido do coordenador): era "somente confirmarPagamento espera 45s". Com a tentativa
+// interna da fila eram ~91 s de um pagamento segurando todas as marcações de trás. Agora: 20 s, uma tentativa por ciclo. Continua
+// valendo que o timeout NÃO é ACK (o item fica e a fila repete) e que o servidor reconhece o mesmo toque (chave parada:ts_device,
+// conferida antes da parte lenta em lib/erp-pagamento-na-entrega.ts). As outras chamadas seguem com 15 s.
+test('confirmarPagamento espera 20 s (era 45 s), inclusive após recarregar a fila',async()=>{
   const h=await harness();await h.send(1,paid,T1,false);
-  assert.deepEqual(h.timeouts,[45000]);
+  assert.deepEqual(h.timeouts,[20000]);
   await h.api.apiGet({action:'marcarEntregue',row:1},{retries:0});
-  assert.deepEqual(h.timeouts,[45000,15000]);
+  assert.deepEqual(h.timeouts,[20000,15000]);
   await h.enqueue(2,T2);const reloaded=await harness({store:h.store});await reloaded.api.processarFila();
-  assert.deepEqual(reloaded.timeouts,[45000]);assert.equal(reloaded.queue().length,0);
+  assert.deepEqual(reloaded.timeouts,[20000]);assert.equal(reloaded.queue().length,0);
 });
 test('recebimento coletivo conserva intenção idêntica após falha e recarga',async()=>{
   const response={forma:'credito-entrega',operadora:null,valor:140,digitado:false,

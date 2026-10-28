@@ -86,9 +86,10 @@ const defeitos = [
   {
     nome: 'a conferência de valor volta ao timeout geral de 15 s (orçamento próprio ignorado)',
     arquivo: 'core.js',
+    // 28/10/2026: o orçamento do pagamento virou TEMPO_PAGAMENTO_MS (20 s, era 45000) — o defeito plantado é o mesmo.
     de: `    const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
-      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`,
-    para: `    const timeoutMs = (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`
+      : (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);`,
+    para: `    const timeoutMs = (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);`
   },
   // ── page-entregas.js: a TELA ───────────────────────────────────────────────────────────────
   {
