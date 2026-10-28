@@ -95,10 +95,12 @@ const defeitos = [
   {
     nome: 'a tela volta a ser pintada só pelo servidor (a fila não projeta nada)',
     arquivo: 'page-entregas.js',
+    // 28/10/2026: a projeção ganhou os ACKs recentes por cima (core.js acksRecentesDeStatus) — o defeito plantado continua sendo
+    // "a fila não projeta nada": a primeira linha da projeção deixa de ler a fila.
     de: `    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    if (!mapa || !mapa.size) return state.items;`,
-    para: `    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    return state.items;`
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;`,
+    para: `    const mapa = null;
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;`
   },
   {
     nome: 'o toque não congela mais o estado ANTERIOR: a recusa não tem como desfazer',

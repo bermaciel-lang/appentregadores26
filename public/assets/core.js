@@ -706,15 +706,18 @@ function manterValorMaisRecente(item, anteriores) {
   return novo;
 }
 
-async function carregarEntregasPorEntregador(entregador) {
+// ⛔ 28/10/2026 — `opcoes.retries`: a consulta PERIÓDICA (poll de 60 s, voltar ao app, fila esvaziou) vai com 0 tentativas extras —
+// eram 3 × 15 s, e a próxima já vinha atrás, empilhando. Falhou, vale o cache e o próximo gatilho tenta de novo.
+async function carregarEntregasPorEntregador(entregador, opcoes) {
   const cacheName = chaveCacheEntregas(entregador);
+  const retries = opcoes && Number.isFinite(opcoes.retries) ? opcoes.retries : undefined;
 
   try {
     const res = await apiGet({
       action: 'entregas',
       entregador,
       turno: getTurno()
-    });
+    }, retries === undefined ? undefined : { retries });
 
     if (res && res.precisaLogin) throw erroLogin(res); // login ≠ montagem (ver erroLogin)
     if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
@@ -783,7 +786,8 @@ async function carregarEntregasPorEntregador(entregador) {
 // Poll leve e separado da lista: cancelamento urgente não espera o refresh de 60 s
 // e uma Instabuy lenta não congela os cards nem o envio da fila offline.
 async function carregarCancelamentosDaRota(entregador) {
-  const res = await apiGet({ action: 'cancelamentos', entregador, turno: getTurno() });
+  // 28/10/2026: consulta periódica (15 s) sem tentativa extra — eram 3 × 15 s e a próxima rodada empilhava em cima.
+  const res = await apiGet({ action: 'cancelamentos', entregador, turno: getTurno() }, { retries: 0 });
   if (res && res.precisaLogin) throw erroLogin(res);
   if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar cancelamentos');
   return Array.isArray(res.avisos) ? res.avisos : [];

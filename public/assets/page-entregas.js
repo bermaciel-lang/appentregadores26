@@ -357,12 +357,20 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   //   3. DESFAZ só o item recusado: quando o servidor diz não, aquela declaração sai de `pendente`
   //      e a projeção devolve o `statusAnterior` que foi congelado no instante do toque.
   // Sobrevive a fechar o app, trocar de aba e ficar sem sinal, porque a fonte é o IndexedDB.
+  // ⭐ 28/10/2026 — e os ACKs RECENTES por cima, quando a lista em `state.items` foi pedida ANTES deles (core.js
+  // `acksRecentesDeStatus`): o item já saiu da fila, mas a resposta velha do servidor não pode desfazer na tela o que ele aceitou.
   function itensComFila() {
     const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    if (!mapa || !mapa.size) return state.items;
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;
+    if ((!mapa || !mapa.size) && (!acks || !acks.size)) return state.items;
     return state.items.map(function (item) {
-      const p = mapa.get(Number(item.row));
-      if (!p) return item;
+      const p = mapa && mapa.get(Number(item.row));
+      if (!p) {
+        const a = acks && acks.get(Number(item.row));
+        if (!a) return item;
+        return Object.assign({}, item, { status: a.alvo, observacaoPedido: a.obsAlvo || item.observacaoPedido,
+          _saiuDaRota: !!a.saiuDaRota });
+      }
       if (!p.recusado) {
         return Object.assign({}, item, { status: p.alvo, observacaoPedido: p.obsAlvo || item.observacaoPedido, _fila: p,
           _saiuDaRota: !!p.saiuDaRota });
@@ -412,7 +420,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const emAndamento = key === 'start';
     const expandido = state.expandidos.has(row);
     const naFila = item._fila || null;
-    const pendentesLocais = api.filaRowsPendentes();
+    // 28/10/2026: as pendências são calculadas UMA vez por pintura (`pintarLista` põe em `_pendentesDaPintura`); antes cada cartão
+    // copiava a fila inteira de novo (40 cartões = 40 cópias da fila a cada repintura).
+    const pendentesLocais = _pendentesDaPintura !== undefined ? _pendentesDaPintura : api.filaRowsPendentes();
     const filaDisponivel = pendentesLocais !== null;
     const env = estadoDoEnvio(naFila, filaDisponivel && pendentesLocais.has(row), filaDisponivel, state.aguardando, state.semSincronizacao);
     const dis = env.podeTocar ? '' : 'disabled';
@@ -469,7 +479,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-sec">' + pagamentoHtml(item, true) + pgHtml
         + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
         + cong + ovosHtml(item.ovos) + '</div>'
-        + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist">' + prodList + '</div>' : '')
+        + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist" data-prodrow="' + row + '">' + prodList + '</div>' : '')
         + envioHtml
         + '<div class="dc-btns" style="margin-top:12px">' + btnEntregue + btnNao + '</div>'
         + ((btnDesfazer || btnPgCorrigir) ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + btnPgCorrigir + '</div>' : '')
@@ -599,7 +609,36 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     } catch (e) { await AppUI.alerta('Não foi possível enviar a foto agora.', { tom: 'danger' }); }
   }
 
+  // ⭐ 28/10/2026 — PINTAR NO MÁXIMO UMA VEZ POR QUADRO. Um toque no Entregue de uma porta com 2 pedidos repintava a lista INTEIRA
+  // (innerHTML de todos os cartões) várias vezes seguidas: uma por irmã, mais a da fila que gravou, mais a da trava que soltou — e
+  // cada pintura copiava a fila uma vez por cartão. Agora `renderList()` só AGENDA: todas as chamadas do mesmo quadro viram UMA
+  // pintura no próximo requestAnimationFrame (com a tela escondida ela espera a tela voltar — nada é pintado à toa).
+  let _pinturaAgendada = 0;
+  let _pendentesDaPintura; // as pendências da fila, calculadas 1× por pintura (lidas por `renderEntregaCard`)
   function renderList() {
+    if (_pinturaAgendada) return;
+    const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function (fn) { return window.setTimeout(fn, 16); };
+    _pinturaAgendada = raf(function () { _pinturaAgendada = 0; pintarLista(); }) || 1;
+  }
+
+  // ⭐ 28/10/2026 — RECUSA SEM CARTÃO. A recusa de uma marcação aparece no cartão da parada; quando a parada SAIU da lista (tirada
+  // da rota, movida para outro entregador), não havia cartão nenhum e a recusa sumia calada — e ainda travava a recarga da lista.
+  // Aqui elas ganham uma faixa no topo, com quem era (cliente/pedido guardados no toque) e o "Entendi".
+  function faixaRecusasSemCartao(vista) {
+    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
+    if (!mapa || !mapa.size) return '';
+    const comCartao = new Set(vista.map(function (x) { return Number(x.row); }));
+    const linhas = [];
+    mapa.forEach(function (p, row) {
+      if (!p.recusado || comCartao.has(Number(row))) return;
+      const quem = [p.cliente, p.pedido].filter(Boolean).join(' · ') || ('parada ' + row);
+      linhas.push('<div class="dc-recusa">⚠️ <span><b>' + api.esc(quem) + ':</b> ' + api.esc(p.erro || 'O sistema não aceitou esta marcação.')
+        + '</span><button type="button" class="dc-recusa-ok" data-act="okrecusa" data-row="' + Number(row) + '">Entendi</button></div>');
+    });
+    return linhas.length ? '<div class="recusas-sem-cartao">' + linhas.join('') + '</div>' : '';
+  }
+
+  function pintarLista() {
     // Tudo abaixo lê a VISTA (servidor + fila do aparelho por cima), nunca `state.items` cru:
     // senão o contador e o lembrete de finalizar voltariam atrás a cada poll enquanto houvesse
     // marcação guardada esperando subir.
@@ -610,9 +649,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     atualizarBotoesRota();
     renderInfoRota();
+    const faixa = faixaRecusasSemCartao(vista);
 
     if (!state.rotaIniciada) {
-      sectionsRoot.innerHTML = '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
+      sectionsRoot.innerHTML = faixa + '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
       sectionsRoot.classList.remove('hidden');
       return;
     }
@@ -629,26 +669,71 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const fimTxt = state.rotaFinalizada ? '✓ Rota finalizada' : (fimEnviando ? '⏳ Enviando…' : '🏁 Finalizar rota');
     const botaoFim = `<button type="button" class="btn-finalizar-bottom ${state.rotaFinalizada ? 'route-success' : ''}" data-route="finalizar" ${state.rotaFinalizada || fimEnviando ? 'disabled' : ''}>${fimTxt}</button>`;
 
-    sectionsRoot.innerHTML = `
+    // A rolagem da lista de produtos de um cartão aberto não volta ao topo a cada repintura (28/10/2026).
+    const rolagens = {};
+    sectionsRoot.querySelectorAll('.dc-prodlist[data-prodrow]').forEach(function (el) { if (el.scrollTop) rolagens[el.getAttribute('data-prodrow')] = el.scrollTop; });
+    _pendentesDaPintura = api.filaRowsPendentes();
+    try {
+      sectionsRoot.innerHTML = `
+      ${faixa}
       ${lembrete}
       <div class="delivery-list">
         ${vista.map(renderEntregaCard).join('')}
       </div>
       ${botaoFim}
     `;
+    } finally { _pendentesDaPintura = undefined; }
+    Object.keys(rolagens).forEach(function (r) {
+      const el = sectionsRoot.querySelector('.dc-prodlist[data-prodrow="' + r + '"]');
+      if (el) el.scrollTop = rolagens[r];
+    });
 
     sectionsRoot.classList.remove('hidden');
   }
 
-  async function carregarTudo(showSkeleton) {
+  /* ⭐ 28/10/2026 — "A TELA VOLTA ATRÁS". `carregarTudo` corria em PARALELO com o envio da fila (poll, voltar ao app, fila
+   * esvaziou, cada um disparava o seu), valia a ÚLTIMA resposta que chegasse, e `state.items = result.data` apagava o que o
+   * aparelho sabia: uma lista pedida ANTES de um ACK, chegando depois dele, repintava a entrega como pendente.
+   * Agora: UMA recarga em voo por vez (quem pede durante uma, ganha outra logo depois, pedida DEPOIS — nunca se perde o pedido);
+   * cada recarga leva a marca do relógio lógico do instante em que foi PEDIDA; resposta de uma recarga mais velha do que a última
+   * aplicada é descartada; e os ACKs recentes (core.js) ficam por cima até chegar uma lista pedida depois deles. O mesmo vale para
+   * o início/fim da rota: uma lista pedida ANTES do Iniciar/Finalizar confirmado não des-inicia nem des-finaliza a tela.
+   * `insistir` = uma tentativa extra de rede (abertura e o ↻); as recargas periódicas vão com zero (o próximo gatilho tenta). */
+  const recarga = { emVoo: null, pendente: false, pendenteSkeleton: false, pendenteInsistir: false, ultimaAplicada: 0 };
+  function carregarTudo(showSkeleton, insistir) {
+    if (recarga.emVoo) {
+      recarga.pendente = true;
+      if (showSkeleton) { recarga.pendenteSkeleton = true; setLoading(true); }
+      if (insistir || showSkeleton) recarga.pendenteInsistir = true;
+      return recarga.emVoo;
+    }
+    recarga.emVoo = (async function () {
+      let sk = !!showSkeleton, ins = !!(insistir || showSkeleton);
+      for (let voltas = 0; voltas < 10; voltas++) {
+        recarga.pendente = false; recarga.pendenteSkeleton = false; recarga.pendenteInsistir = false;
+        await umaRecarga(sk, ins);
+        if (!recarga.pendente) break;
+        sk = recarga.pendenteSkeleton; ins = recarga.pendenteInsistir;
+      }
+    })().finally(function () { recarga.emVoo = null; });
+    return recarga.emVoo;
+  }
+
+  async function umaRecarga(showSkeleton, insistir) {
     if (showSkeleton) setLoading(true);
     errorBox.classList.add('hidden');
 
     try {
       await api.filaPronta(); // hidrata antes de tratar pendência local como inexistente
-      const result = await api.carregarEntregasPorEntregador(state.driver);
+      const pedidoEm = api.proximaMarca ? api.proximaMarca() : 0; // o instante em que a lista foi PEDIDA
+      const result = await api.carregarEntregasPorEntregador(state.driver, { retries: insistir ? 1 : 0 });
+      if (pedidoEm && pedidoEm < recarga.ultimaAplicada) return; // chegou depois de uma mais nova: não pinta por cima
+      recarga.ultimaAplicada = pedidoEm;
+      // ACKs anteriores a ESTE pedido já estão na lista do servidor: saem de cima. (Cache não prova nada: não limpa.)
+      if (!result.stale && api.esquecerAcksAte) api.esquecerAcksAte(pedidoEm);
+      const pedidaAntesDaRota = pedidoEm && pedidoEm < (state.marcaRota || 0);
       state.items = result.data || [];
-      if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
+      if (result.rotaInfo && !pedidaAntesDaRota) state.rotaInfo = result.rotaInfo;
       // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
       // modal some do aparelho no próximo poll (rollback sem deploy). No cache (stale) fica a última.
       if (result.pgConfig) { state.pgCfg = result.pgConfig; salvarPgCfg(result.pgConfig); }
@@ -674,7 +759,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada
+      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada && !pedidaAntesDaRota
                  && !(api.temRotaPendenteFase && api.temRotaPendenteFase('inicio'))) {
         // SÓ no fluxo do PAINEL (Etapa C), onde a resposta SEMPRE traz rotaIniciada de verdade.
         // No fluxo ANTIGO (Apps Script) a resposta NÃO traz esse campo (vem false), então isto
@@ -703,11 +788,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // some quando o Android mata o app em segundo plano, e sem isto o app esquecia que já tinha
       // finalizado mesmo com o servidor já tendo o KM e a foto certinhos.
       if (result.rotaFinalizada === true) api.guardarFimConfirmado(state.driver, true);
-      else if (result.rotaFinalizada === false && !result.stale) api.guardarFimConfirmado(state.driver, false);
+      else if (result.rotaFinalizada === false && !result.stale && !pedidaAntesDaRota) api.guardarFimConfirmado(state.driver, false);
       if (result.rotaFinalizada && !state.rotaFinalizada) {
         state.rotaFinalizada = true;
         sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada
+      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada && !pedidaAntesDaRota
                  && !(api.temRotaPendenteFase && api.temRotaPendenteFase('fim'))) {
         // Mesmo guarda do início: com um "finalizar" ainda na fila do aparelho, o servidor
         // legitimamente não sabe do fim — o `false` dele não desfaz o que está salvo aqui.
@@ -1309,7 +1394,10 @@ async function handleFinalizarRota() {
     const resultado = await api.processarFila();
     if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
     const restantes = await api.filaPorIds(ids);
-    const recusados = restantes.filter(x => x.precisaCorrigir);
+    // ⛔ 28/10/2026 — só RECUSA DE PAGAMENTO abre este aviso. A recusa da MARCAÇÃO (parada tirada da rota: `naoEncontrado`) entrava
+    // aqui também e abria "Pagamento precisa de conferência" num pedido sem pagamento nenhum — um modal no meio da rua com o
+    // texto errado. A recusa da marcação aparece no cartão (ou na faixa do topo, se o cartão saiu da lista).
+    const recusados = restantes.filter(x => x.precisaCorrigir && x.params && x.params.action === 'confirmarPagamento');
     for (const x of recusados) {
       const row = Number(x.params.row);
       if (state.pgRespondido[row] && state.pgRespondido[row].tsDevice === x.params.ts_device) delete state.pgRespondido[row];
@@ -1719,13 +1807,20 @@ async function handleFinalizarRota() {
     _filaPendentes = rows.size;
   });
 
+  // ⛔ 28/10/2026 — UMA CONSULTA DE CADA VEZ, E A LISTA DEPOIS DA FILA. O poll disparava a fila e a lista em PARALELO (a lista
+  // podia ser lida antes de as marcações subirem — "a tela volta atrás") e, com sinal ruim, a rodada seguinte começava com a
+  // anterior ainda tentando. Agora: fila primeiro, lista depois (como o `online` já fazia), e um tique com o anterior em voo é pulado.
+  let _pollEmVoo = false;
+  function filaDepoisLista() {
+    const recarregar = function () { return carregarTudo(false); };
+    return api.processarFila().then(recarregar, recarregar);
+  }
   function startAutoRefresh() {
     stopAutoRefresh();
     state.refreshTimer = window.setInterval(function () {
-      if (document.visibilityState === 'visible') {
-        api.processarFila();
-        carregarTudo(false);
-      }
+      if (document.visibilityState !== 'visible' || _pollEmVoo) return;
+      _pollEmVoo = true;
+      filaDepoisLista().finally(function () { _pollEmVoo = false; });
     }, window.APP_CONFIG.REFRESH_INTERVAL_MS);
   }
 
@@ -1843,8 +1938,7 @@ async function handleFinalizarRota() {
 
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') {
-      api.processarFila();
-      carregarTudo(false);
+      filaDepoisLista(); // 28/10/2026: a fila primeiro, a lista depois (eram as duas em paralelo)
     } else {
       despedida(); // no Android trocar de app costuma dar só `hidden`, sem `pagehide`
     }
@@ -1852,7 +1946,7 @@ async function handleFinalizarRota() {
 
   // Quando a internet volta, reenvia o que ficou pendente na fila.
   window.addEventListener('online', function () {
-    api.processarFila().then(function () { carregarTudo(false); });
+    filaDepoisLista();
   });
 
   // Fechou / trocou de app com coisa na fila: último empurrão com `keepalive` (o navegador termina
