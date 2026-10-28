@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "npx serve public -l 3000",
     "start": "npx serve public -l 3000",
-    "test": "node scripts/_t-pagamento-porta.mjs && node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/test-valor-atual.mjs && node scripts/test-bloqueio-montagem.cjs && node scripts/test-fila-pagamento.mjs && node scripts/_t-toque-instantaneo.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs && node scripts/test-troca-entregador-maquininha.mjs && node scripts/test-espera-montagem.cjs && node scripts/test-cobranca-sem-cancelado.mjs",
-    "test:mutacao": "node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs"
+    "test": "node scripts/_t-pagamento-porta.mjs && node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/test-valor-atual.mjs && node scripts/test-bloqueio-montagem.cjs && node scripts/test-fila-pagamento.mjs && node scripts/_t-toque-instantaneo.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs && node scripts/test-troca-entregador-maquininha.mjs && node scripts/test-espera-montagem.cjs && node scripts/test-cobranca-sem-cancelado.mjs && node scripts/test-leva2-irmas.mjs && node scripts/test-leva2-fila.mjs && node scripts/test-leva2-rota.mjs && node scripts/test-leva2-abertura.mjs",
+    "test:mutacao": "node scripts/_t-pagamento-porta-reintroducao.mjs && node scripts/_t-toque-instantaneo-reintroducao.mjs",
+    "test:navegador": "node scripts/test-leva2-navegador.mjs && node scripts/test-fila-durabilidade-browser.mjs",
+    "medir:lapides": "node scripts/medir-lapides-faxina.mjs"
   },
   "dependencies": {
     "googleapis": "^171.4.0",
