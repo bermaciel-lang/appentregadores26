@@ -364,7 +364,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       const p = mapa.get(Number(item.row));
       if (!p) return item;
       if (!p.recusado) {
-        return Object.assign({}, item, { status: p.alvo, observacaoPedido: p.obsAlvo || item.observacaoPedido, _fila: p });
+        return Object.assign({}, item, { status: p.alvo, observacaoPedido: p.obsAlvo || item.observacaoPedido, _fila: p,
+          _saiuDaRota: !!p.saiuDaRota });
       }
       // Recusado. Item legado (gravado antes deste commit) não tem `statusAnterior` guardado — aí a
       // tela não inventa um estado anterior: mostra o motivo e mantém o que o servidor diz.
@@ -435,7 +436,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-head">'
         + '<span class="dc-num ' + (ok ? 'ok' : 'nofeito') + '">' + (ok ? ic('check', 15) : (item.numero || '')) + '</span>'
         + '<span style="font-size:15px;color:' + (ok ? '#15803d' : '#b91c1c') + ';font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + nome + '</span>'
-        + '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + api.esc(api.statusLabel(item.status)) + '</span>'
+        + '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + api.esc(api.statusLabel(item.status, item)) + '</span>'
         + (naFila ? '<span class="dc-selo" title="guardado no aparelho, enviando">✓</span>' : '')
         + '</div></article>';
     }
@@ -746,20 +747,24 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     }
   }
 
+  // 28/10/2026: só MUDA a lista em memória. Quem chama grava o cache UMA vez por ato (`api.saveEntregasCache`) e pinta (`renderList`,
+  // que já junta tudo num quadro) — antes cada irmã gravava a lista inteira no localStorage e repintava a tela inteira.
+  // `nextObs === null` (Desfazer, "Ainda não fui") = volta a observação DO CLIENTE: a nota do toque ("Entregue em mãos") tinha
+  // tomado o lugar dela no cartão, e o Desfazer apagava as duas ('').
   function updateLocalStatus(row, nextStatus, nextObs) {
     const index = state.items.findIndex((x) => Number(x.row) === Number(row));
     if (index < 0) return null;
 
     const previous = Object.assign({}, state.items[index]);
-    state.items[index] = Object.assign({}, state.items[index], {
+    const atual = state.items[index];
+    const obsCliente = Object.prototype.hasOwnProperty.call(atual, 'obsCliente') ? atual.obsCliente : (atual.observacaoPedido || '');
+    state.items[index] = Object.assign({}, atual, {
       status: nextStatus,
       // a tela lê 'observacaoPedido' (mesma chave da API); gravar em 'observacao' fazia a
       // observação digitada sumir até recarregar.
-      observacaoPedido: nextObs !== undefined ? nextObs : state.items[index].observacaoPedido
+      observacaoPedido: nextObs === null ? obsCliente : (nextObs !== undefined ? nextObs : atual.observacaoPedido),
+      obsCliente: obsCliente
     });
-
-    api.saveEntregasCache(state.driver, state.items);
-    renderList();
     return previous;
   }
 
@@ -1139,12 +1144,14 @@ async function handleFinalizarRota() {
   // espera de rede do caminho do dedo sem tirar o valor conferido do modal de dinheiro: com a rede
   // normal a resposta já chegou quando o modal precisa dela. Nunca rejeita; se falhar ou estourar o
   // orçamento, devolve null e o modal abre no modo degradado (o entregador digita o valor).
+  // 28/10/2026: decide pelo GRUPO da porta (a tocada pode ser paga online e a irmã, na porta) — ver `coletarPagamento`.
   function adiantarConferenciaPg(item, irmas) {
     try {
       const Pg = window.PgPorta;
-      if (!Pg || !api.usandoPainel() || !Pg.devePerguntar(state.pgCfg, item)) return null;
+      if (!Pg || !api.usandoPainel()) return null;
       if (state.pgCfg && state.pgCfg.simples && Pg.perguntarSimples) return null; // pergunta única: o valor não é perguntado
-      const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+      const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item], item && item.row)
+        .filter(function (x) { return Pg.devePerguntar(state.pgCfg, x); });
       if (!grupo.length) return null;
       const p = conferirGrupoValores(grupo);
       return p && p.then ? p.then(function (g) { return g; }, function () { return null; }) : null;
@@ -1159,29 +1166,53 @@ async function handleFinalizarRota() {
    * A loja cancelou o LOJA-2174 com ele na rua e refez o MESMO pedido (LOJA-2324); os dois ficaram seguidos, mesmo cliente e
    * endereço → o MESMO número de parada (16). As irmãs eram "todas com o mesmo número", e o cancelado entrava junto: a pergunta
    * da cobrança somava os dois ("Valor dos 2 pedidos: R$ 233,70" para um pedido de R$ 116,85) e o Entregue tentava marcar o
-   * cancelado também. Agora: mesmo número E não cancelado/saiu da rota. A própria tocada sempre entra. */
-  function irmasAtivas(vista, item) {
-    if (!item || item.numero == null || api.statusKey(item.status) === 'cancel') return [item];
+   * cancelado também. Agora: mesmo número E não cancelado/saiu da rota. A própria tocada sempre entra.
+   * ⛔ 28/10/2026 — E NUNCA ARRASTAM PEDIDO JÁ DECIDIDO (revisão de 28/10). Mesmo endereço, um "Não entregue" (Cliente não estava,
+   * ou o novo "Saiu da minha rota", que o servidor novo grava como "Não entregue") e outro pendente: tocar Entregue no pendente
+   * marcava os DOIS e a pergunta somava "Valor dos 2 pedidos". Agora só entra junto a irmã no MESMO estado da tocada:
+   *   · Iniciar/Entregue (modo padrão): a tocada ABERTA (pendente ou indo) e as irmãs abertas — pendente e indo são a mesma
+   *     família porque o servidor só deixa UM "Indo" por entregador e a irmã que foi junto pode voltar como pendente. Tocada já
+   *     decidida (corrigindo um "Não entregue", por exemplo) → só ela: um decidido nunca muda por tabela;
+   *   · 'mesmoStatus' (Desfazer, "Ainda não fui", corrigir o pagamento): só as irmãs com EXATAMENTE o status da tocada.
+   * Cancelado e "Saiu da minha rota" nunca andam junto, e tocar num deles mexe só nele. Quem grava RECALCULA o grupo logo antes
+   * de gravar (a lista pode ter mudado com o diálogo aberto). Zero rede. */
+  function irmasAtivas(vista, item, modo) {
+    const k = (x) => api.statusKey(x && x.status);
+    const fora = (x) => k(x) === 'cancel' || (api.ehSaiuDaRota ? api.ehSaiuDaRota(x) : /removid/i.test(String((x && x.status) || '')));
+    if (!item || item.numero == null || fora(item)) return [item];
+    const exato = modo === 'mesmoStatus';
+    const aberta = (x) => k(x) === 'pending' || k(x) === 'start';
+    if (!exato && !aberta(item)) return [item];
     return vista.filter((x) => Number(x.numero) === Number(item.numero)
-      && (Number(x.row) === Number(item.row) || api.statusKey(x.status) !== 'cancel'));
+      && (Number(x.row) === Number(item.row) || (!fora(x) && (exato ? k(x) === k(item) : aberta(x)))));
   }
 
+  /* ⛔ 28/10/2026 — A PERGUNTA DO PAGAMENTO ERA DECIDIDA SÓ PELA TOCADA. Mesma porta, A pago online e B na entrega: Entregue em A
+   * marcava B também, SEM perguntar como B foi pago (o `devePerguntar` olhava só A). Agora decide pelo GRUPO: havendo qualquer
+   * parada paga na porta entre as que vão junto, pergunta — e o modal abre com a tocada se ela for paga na porta, senão com a
+   * primeira paga na porta. E relê cada parada de `state.items` NA HORA (o valor pode ter mudado com os diálogos abertos). */
   async function coletarPagamento(item, irmas, tsDevice, anterior, conferencia) {
     const Pg = window.PgPorta;
+    const base = irmas && irmas.length ? irmas : [item];
     if (!Pg) {
-      if (state.pgCfg && state.pgCfg.perguntar && item.naEntrega) {
+      if (state.pgCfg && state.pgCfg.perguntar && base.some(function (x) { return x && x.naEntrega; })) {
         await AppUI.alerta('Atualize o app para informar o pagamento antes de salvar.', { tom: 'warn' });
         return { cancelado: true, porRow: {} };
       }
       return null;
     }
-    if (!Pg.devePerguntar(state.pgCfg, item)) return null;
-    let grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+    const relidos = base.map(function (x) {
+      const atual = x && state.items.find(function (y) { return Number(y.row) === Number(x.row); });
+      return atual ? Object.assign({}, atual, { status: x.status, observacaoPedido: x.observacaoPedido, _fila: x._fila, _saiuDaRota: x._saiuDaRota }) : x;
+    });
+    let grupo = Pg.irmasNaPorta(relidos, item && item.row).filter(function (x) { return Pg.devePerguntar(state.pgCfg, x); });
     if (!grupo.length) return null;
+    let alvo = grupo.find(function (x) { return Number(x.row) === Number(item.row); }) || grupo[0];
+    if (Number(alvo.row) !== Number(item.row)) anterior = pgRespostaAnterior(alvo.row, alvo);
     // ⭐ 06/10/2026 — A PERGUNTA ÚNICA ("O cliente te pagou de alguma forma?"). Nenhuma rede antes dela: o valor não é
     // mais perguntado (o servidor usa o do pedido), então a conferência de valor não precisa mais ficar na frente do dedo.
     if (state.pgCfg && state.pgCfg.simples && Pg.perguntarSimples) {
-      return Pg.perguntarSimples({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice });
+      return Pg.perguntarSimples({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice });
     }
     if (api.usandoPainel()) {
       // ⛔ 23/09/2026 (2ª volta) — ESTA ESPERA ERA INVISÍVEL E LONGA: o "Como foi a entrega?"
@@ -1193,10 +1224,14 @@ async function handleFinalizarRota() {
       const conferido = await comEspera('conferindo o valor a receber…', function () {
         return conferencia ? conferencia : conferirGrupoValores(grupo);
       });
-      if (conferido && conferido.length) grupo = conferido;
-      item = grupo.find(x => Number(x.row) === Number(item.row)) || item;
+      if (conferido && conferido.length) {
+        const rows = new Set(grupo.map(function (x) { return Number(x.row); }));
+        const doGrupo = conferido.filter(function (x) { return rows.has(Number(x.row)); });
+        if (doGrupo.length) grupo = doGrupo;
+      }
+      alvo = grupo.find(function (x) { return Number(x.row) === Number(alvo.row); }) || alvo;
     }
-    return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
+    return Pg.perguntar({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
   }
 
   // Congela, NO INSTANTE DA GRAVAÇÃO, o estado que a parada tinha ANTES do toque. É isto que
@@ -1204,10 +1239,12 @@ async function handleFinalizarRota() {
   // até lá já pode ter sido recarregada várias vezes). Vive no `meta` do item da fila, que é
   // durável e imutável junto com o payload. Parada que não está na lista não ganha palpite: sem os
   // campos, a projeção cai no que o servidor disser.
+  // 28/10/2026: e QUEM é (cliente/pedido) — a recusa de uma parada que depois saiu da lista ainda diz de quem era (faixa do topo).
   function metaDeStatus(row) {
     const atual = state.items.find(function (x) { return Number(x.row) === Number(row); });
     if (!atual) return { row: Number(row) };
-    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '' };
+    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '',
+      cliente: String(atual.cliente || '').slice(0, 80), pedido: String(atual.pedido || '').slice(0, 40) };
   }
 
   // ⭐ O CAMINHO DO DEDO. Grava a intenção na fila durável e volta. NENHUMA rede aqui: é o `await`
@@ -1325,7 +1362,7 @@ async function handleFinalizarRota() {
       const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
       const p = mapa && mapa.get(Number(row));
       if (!p || !p.recusado) { renderList(); return; }
-      if (p.anterior !== undefined) updateLocalStatus(Number(row), p.anterior, p.obsAnterior || '');
+      if (p.anterior !== undefined && updateLocalStatus(Number(row), p.anterior, p.obsAnterior || '')) api.saveEntregasCache(state.driver, state.items);
       try { await api.filaDescartarStatus(p.id); } catch (e) { console.error('[recusa]', e); }
       renderList();
       window.setTimeout(function () { carregarTudo(false); }, 0);
@@ -1356,6 +1393,35 @@ async function handleFinalizarRota() {
     const vistaAgora = itensComFila();
     const item = vistaAgora.find((x) => Number(x.row) === Number(row));
     if (!item) return;
+    // ⭐ 28/10/2026 — O GRUPO É RECALCULADO NA HORA DE GRAVAR. Entre o toque e a gravação há diálogos (segundos, às vezes minutos)
+    // e a lista pode mudar: uma recarga, um cancelamento, a irmã marcada por outro caminho. Grava só quem CONTINUA no grupo (mesmo
+    // estado, ver `irmasAtivas`) E estava no grupo que o entregador viu/respondeu (`vistoAntes`); a tocada sempre.
+    const grupoNaHora = (alvo, modo, vistoAntes) => {
+      const vista = itensComFila();
+      const atual = vista.find((x) => Number(x.row) === Number(alvo.row)) || alvo;
+      const viu = vistoAntes ? new Set(vistoAntes.map((x) => Number(x.row))) : null;
+      return irmasAtivas(vista, atual, modo).filter((x) => Number(x.row) === Number(alvo.row) || !viu || viu.has(Number(x.row)));
+    };
+    // Parada paga na porta que vai junto SEM resposta do pagamento (o grupo mudou entre o modal e a gravação) não é marcada por
+    // tabela: fica para o entregador tocar nela. "Manter" (a resposta anterior vale) conta como respondida.
+    const semRespostaDePagamento = (x, pgRes) => !!(window.PgPorta && window.PgPorta.devePerguntar(state.pgCfg, x))
+      && !(pgRes && pgRes.manteve) && !(pgRes && pgRes.porRow && pgRes.porRow[Number(x.row)]);
+    const soDasRows = (porRow, rows) => {
+      if (!porRow) return null;
+      const out = {};
+      Object.keys(porRow).forEach((r) => { if (rows.indexOf(Number(r)) >= 0) out[r] = porRow[r]; });
+      return out;
+    };
+    // ⛔ 28/10/2026 — DESFAZER (e "Ainda não fui"): o servidor ANULA a declaração de pagamento da parada (anularPorDesfazer). A
+    // resposta guardada na tela tem de sair junto, senão a próxima entrega oferecia "Manter" e nenhuma declaração nova subia.
+    // E a observação do CLIENTE volta para o cartão (`updateLocalStatus(r, '', null)`), em vez de ser apagada.
+    const desfazerLocal = (r) => {
+      updateLocalStatus(r, '', null);
+      delete state.pgRespondido[r];
+      const it = state.items.find((x) => Number(x.row) === Number(r));
+      if (it && it.pgConfirmado) it.pgConfirmado = null;
+      state.expandidos.delete(r);
+    };
 
     // Corrigir a resposta de pagamento de uma entrega JÁ marcada (tela 4 do desenho). Não mexe em
     // status; sobe uma confirmação nova com ts próprio — no servidor vira ato 'corrigiu'.
@@ -1363,8 +1429,9 @@ async function handleFinalizarRota() {
       const tsC = new Date().toISOString();
       // (revisão de 06/10, menor 1) na pergunta única a correção vale para as IRMÃS pagas na porta (mesmo número = mesma porta,
       // um pagamento) — corrigir "Não pagou" num cartão e deixar a irmã como "Não pagou" mandaria cobrar o cliente
+      // (28/10/2026: só as irmãs no MESMO status — as que foram entregues junto.)
       const simplesC = !!(state.pgCfg && state.pgCfg.simples);
-      const irmasC = simplesC ? irmasAtivas(vistaAgora, item) : [item];
+      const irmasC = simplesC ? irmasAtivas(vistaAgora, item, 'mesmoStatus') : [item];
       const resC = await coletarPagamento(item, irmasC, tsC, pgRespostaAnterior(row, item));
       if (!resC || resC.manteve || resC.cancelado) return;
       // Pergunta única: não há valor digitado para o servidor recusar — grava e segue, sem espera na frente do dedo.
@@ -1397,17 +1464,20 @@ async function handleFinalizarRota() {
 
     // DESFAZER (apertou errado): volta a entrega pra PENDENTE. Vale pra Iniciar/Entregue/Não entregue.
     // Agrupa as duplicadas (mesmo número). Best-effort: a que falhar vai pra fila offline.
+    // 28/10/2026: só as irmãs no MESMO status da tocada (as que foram marcadas junto), e com a hora do toque (`ts_device`).
     if (act === 'desfazer') {
       const esc = await AppUI.escolher('Desfazer a marcação desta entrega? Ela volta a ficar PENDENTE (como se nada tivesse sido tocado).', [
         { valor: 'sim', rotulo: '↩ Sim, desfazer', tom: 'danger' },
       ], { titulo: 'Desfazer' });
       if (esc === null) return;
-      const alvo = irmasAtivas(vistaAgora, item).map((x) => Number(x.row));
+      const alvo = grupoNaHora(item, 'mesmoStatus', irmasAtivas(vistaAgora, item, 'mesmoStatus')).map((x) => Number(x.row));
+      const tsD = new Date().toISOString();
       // Mesmo caminho instantâneo das outras marcações: grava e pinta. Antes eram até 3 tentativas
       // de rede POR LINHA (15 s cada no timeout) antes de a tela responder.
-      try { await guardarNaFila(alvo.map((r) => ({ action: 'desfazer', row: Number(r) }))); }
+      try { await guardarNaFila(alvo.map((r) => ({ action: 'desfazer', row: Number(r), ts_device: tsD }))); }
       catch (e) { await avisarArmazenamento(); return; }
-      alvo.forEach((r) => { updateLocalStatus(r, '', ''); state.expandidos.delete(r); });
+      alvo.forEach((r) => desfazerLocal(r));
+      api.saveEntregasCache(state.driver, state.items);
       renderList();
       agendarEnvio();
       return;
@@ -1459,9 +1529,14 @@ async function handleFinalizarRota() {
         if (pgA && pgA.cancelado) return;
         if (esc === 'done') {
           try {
-            const marcacoes = irmasA.map(x => ({ action: 'marcarEntregue', row: Number(x.row), obs: 'Entregue', ts_device: tsA }));
-            const ids = await guardarRecebimento(marcacoes, pgA && !pgA.manteve ? pgA.porRow : null, tsA);
-            irmasA.forEach(x => { updateLocalStatus(Number(x.row), 'Entregue', 'Entregue'); state.expandidos.delete(Number(x.row)); });
+            const finalA = grupoNaHora(ant, undefined, irmasA)
+              .filter((x) => Number(x.row) === Number(ant.row) || !semRespostaDePagamento(x, pgA));
+            const rowsA = finalA.map((x) => Number(x.row));
+            const marcacoes = rowsA.map((r) => ({ action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }));
+            const ids = await guardarRecebimento(marcacoes, pgA && !pgA.manteve ? soDasRows(pgA.porRow, rowsA) : null, tsA);
+            rowsA.forEach((r) => { updateLocalStatus(r, 'Entregue', 'Entregue'); state.expandidos.delete(r); });
+            api.saveEntregasCache(state.driver, state.items);
+            renderList();
             // NÃO espera: o entregador resolveu a pendência e já segue para a próxima entrega.
             acompanharEnvio(ids);
           } catch (error) {
@@ -1473,16 +1548,19 @@ async function handleFinalizarRota() {
         // Só 'nao' e 'pend' chegam aqui (o 'done' sempre sai no `continue` acima), e nestes dois
         // `pgA` é sempre null — por isso o `enviarConfirmacao` que existia neste laço era código
         // morto e saiu junto. Um commit único para o grupo inteiro, sem rede.
+        // (28/10/2026: "Ainda não fui" = desfazer das irmãs no MESMO status, com `ts_device`; "Não entregue" = as abertas.)
+        const finalA = esc === 'nao' ? grupoNaHora(ant, undefined, irmasA) : grupoNaHora(ant, 'mesmoStatus', irmasAtivas(vistaAgora, ant, 'mesmoStatus'));
         try {
-          await guardarNaFila(irmasA.map(x => (esc === 'nao'
+          await guardarNaFila(finalA.map(x => (esc === 'nao'
             ? { action: 'marcarNaoEntregue', row: Number(x.row), obs: 'Não entregue', ts_device: tsA }
-            : { action: 'desfazer', row: Number(x.row) })));
+            : { action: 'desfazer', row: Number(x.row), ts_device: tsA })));
         } catch (e) { await avisarArmazenamento(); return; }
-        for (const x of irmasA) {
+        for (const x of finalA) {
           const r = Number(x.row);
-          updateLocalStatus(r, esc === 'nao' ? 'Não entregue' : '', esc === 'nao' ? 'Não entregue' : '');
-          state.expandidos.delete(r);
+          if (esc === 'nao') { updateLocalStatus(r, 'Não entregue', 'Não entregue'); state.expandidos.delete(r); }
+          else desfazerLocal(r);
         }
+        api.saveEntregasCache(state.driver, state.items);
         renderList();
         agendarEnvio();
       }
@@ -1497,7 +1575,7 @@ async function handleFinalizarRota() {
     let nextStatus = null, obs;
     // Hora do APARELHO no toque. Para o Entregue ela nasce ANTES do modal de pagamento, porque a
     // confirmação viaja com o MESMO ts_device do marcarEntregue (chave de idempotência no servidor).
-    let tsDevice = null, pgPorRow = null;
+    let tsDevice = null, pgPorRow = null, pgRes = null;
     let irmasPg = null, conferenciaPg = null;
     if (act === 'done') {
       // ⭐ A ÚNICA rede que ainda precede um diálogo (`conferirValores`, que decide o valor do
@@ -1534,24 +1612,32 @@ async function handleFinalizarRota() {
       // ⛔ PORTA 1: "💳 Como o cliente pagou?" — só para pedido pago NA PORTA e só quando o servidor
       // mandou perguntar. Sem uma resposta completa, não confirma a entrega.
       tsDevice = new Date().toISOString();
-      const pgRes = await coletarPagamento(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
+      pgRes = await coletarPagamento(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
       if (pgRes && pgRes.cancelado) return;
       pgPorRow = pgRes && !pgRes.manteve ? pgRes.porRow : null;
     }
     else if (act === 'fail') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo / observação:', { titulo: 'Cliente não estava', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
-    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Por que saiu da sua rota?', { titulo: 'Saiu da minha rota', tom: 'warn', placeholder: 'Ex.: cliente pediu para amanhã', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Removida'; }
+    // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' (o servidor novo grava assim, sem pagar, com ↩ Desfazer); era 'Removida'.
+    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Por que saiu da sua rota?', { titulo: 'Saiu da minha rota', tom: 'warn', placeholder: 'Ex.: cliente pediu para amanhã', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
     else if (act === 'start') { nextStatus = 'Indo para entrega'; state.expandidos.add(Number(row)); }
 
     try {
-      // Maps/Waze: marca "indo" e abre o mapa (navega pra fora).
+      // Maps/Waze: abre o mapa (navega pra fora) e, se a parada está PENDENTE e tem endereço, marca "Indo".
+      // ⛔ 28/10/2026 — antes marcava "Indo" em QUALQUER status: abrir o mapa num cartão Entregue (expandido para ver o endereço)
+      // mandava `iniciarEntrega`, e o servidor trocava "Entregue" por "Indo para entrega". Sem endereço o mapa nem abria e a
+      // marcação já tinha ido. Agora, fora de "pendente com endereço", só abre o mapa.
       if (act === 'maps' || act === 'waze') {
-        if (api.statusKey(item.status) !== 'start') {
+        const url = act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item);
+        if (api.statusKey(item.status) === 'pending' && url && url !== '#') {
           // Antes o mapa só abria DEPOIS de `apiIniciarEntrega` responder (3 tentativas × 15 s).
           // Agora grava, pinta e abre; o envio corre atrás.
-          try { await guardarNaFila([{ action: 'iniciarEntrega', row: Number(row), ts_device: new Date().toISOString() }]); updateLocalStatus(row, 'Indo para entrega'); agendarEnvio(); }
+          try {
+            await guardarNaFila([{ action: 'iniciarEntrega', row: Number(row), ts_device: new Date().toISOString() }]);
+            updateLocalStatus(row, 'Indo para entrega'); api.saveEntregasCache(state.driver, state.items); renderList(); agendarEnvio();
+          }
           catch (e) { console.error('[fila]', e); /* o mapa abre assim mesmo; a marcação não fingiu */ }
         }
-        await openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
+        await openSameTab(url);
         return;
       }
 
@@ -1575,12 +1661,15 @@ async function handleFinalizarRota() {
       if (!tsDevice) tsDevice = new Date().toISOString();
       // DUPLICADAS vão JUNTAS ao INICIAR / ENTREGAR: pedidos do mesmo cliente+endereço têm o MESMO
       // `numero` (o painel já colapsa e manda). O entregador vai a UM lugar só, então tocar Iniciar/
-      // Entregue numa marca TODAS as do mesmo número de uma vez. (Não-entregue/Cancelado seguem 1 a 1.)
-      const irmas = (act === 'start' || act === 'done') ? irmasAtivas(vistaAgora, item) : [item];
+      // Entregue numa marca as do mesmo número de uma vez — 28/10/2026: só as que estão no MESMO estado (abertas), recalculadas
+      // AGORA (ver `grupoNaHora`). (Não-entregue/Saiu da rota seguem 1 a 1.)
+      const irmas = (act === 'start' || act === 'done') ? grupoNaHora(item, undefined, act === 'done' ? irmasPg : null) : [item];
       // Só as que ainda NÃO estão no status alvo (a própria tocada sempre entra) — evita remarcar/enfileirar à toa.
       const rowsAlvo = irmas
         .filter((x) => Number(x.row) === Number(row) || api.statusKey(x.status) !== api.statusKey(nextStatus))
+        .filter((x) => act !== 'done' || Number(x.row) === Number(row) || !semRespostaDePagamento(x, pgRes))
         .map((x) => Number(x.row));
+      if (act === 'done') pgPorRow = soDasRows(pgPorRow, rowsAlvo);
       const paramsDe = (r) => act === 'start' ? { action: 'iniciarEntrega', row: r, ts_device: tsDevice }
         : act === 'done' ? { action: 'marcarEntregue', row: r, obs: obs || '', ts_device: tsDevice }
         : act === 'fail' ? { action: 'marcarNaoEntregue', row: r, obs: obs || '', ts_device: tsDevice }
@@ -1602,6 +1691,7 @@ async function handleFinalizarRota() {
       // Ao MARCAR (entregue/não entregue/cancelado) o cartão MINIMIZA sozinho (Bernardo). Iniciar NÃO
       // minimiza — pelo contrário, expande (feito acima). Tocar de novo num concluído reabre pra corrigir.
       if (act === 'done' || act === 'fail' || act === 'cancelado') rowsAlvo.forEach((r) => state.expandidos.delete(r));
+      api.saveEntregasCache(state.driver, state.items); // UMA gravação do cache por ato (28/10/2026)
       renderList();
       // ⛔ DAQUI PARA BAIXO NÃO EXISTE MAIS REDE NO CAMINHO DO DEDO.
       // O envio corre em segundo plano e o entregador já pode tocar a próxima entrega.

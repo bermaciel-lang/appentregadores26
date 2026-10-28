@@ -94,9 +94,23 @@
     return 'pending';
   }
 
-  function statusLabel(status) {
+  // ⭐ 28/10/2026 — "SAIU DA MINHA ROTA" VIROU "NÃO ENTREGUE" (servidor da leva 3: fica na rota, sem pagar, com ↩ Desfazer). O
+  // servidor grava "Não entregue" + o marcador "Saiu da rota do entregador (removido do pagamento)" na observação; o aparelho,
+  // enquanto o toque não sobe, mostra 'Não entregue' com a marca `_saiuDaRota` (projeção da fila) ou a nota "Saiu da minha rota".
+  // O servidor antigo grava "Removida" (e tira da lista). Nos três casos o cartão diz o nome que o entregador tocou, e a parada
+  // NUNCA anda junto com a irmã da mesma porta (page-entregas.js `irmasAtivas`).
+  function ehSaiuDaRota(item) {
+    if (!item) return false;
+    const st = String(item.status || '').trim();
+    if (/^removid/i.test(st)) return true;
+    if (statusKey(st) !== 'fail') return false;
+    const obs = String(item.observacaoPedido || '');
+    return !!item._saiuDaRota || /saiu da rota do entregador/i.test(obs) || /^\s*saiu da minha rota/i.test(obs);
+  }
+  function statusLabel(status, item) {
     const st = String(status || '').trim();
     if (/^removid/i.test(st)) return 'Saiu da minha rota'; // 19/10/2026: o nome que o entregador tocou
+    if (item && ehSaiuDaRota(Object.assign({}, item, { status: st }))) return 'Saiu da minha rota';
     return st || 'Pendente';
   }
 
@@ -895,11 +909,16 @@ async function apiMarcarCancelado(row, obs) {
     if (fila === null || !bancoFila) return null; // desconhecida não é uma fila vazia
     return new Set(fila.filter(x => doAtivo(x) && !x.precisaCorrigir).map(x => Number(x.meta && x.meta.row)).filter(Boolean));
   }
+  // ⛔ 28/10/2026 — Um `desfazer` da MESMA parada depois da declaração a anula no servidor (anularPorDesfazer): a declaração que
+  // ficou ANTES dele na fila não vale mais como "resposta anterior" (o "Manter" não criaria declaração nova e a entrega refeita
+  // ficaria sem pagamento).
   function filaParamsPendentes(row, action) {
     let achado = null;const fila = bancoFila && bancoFila.snapshot();
     if (!fila) return null;
     fila.forEach(x => {
-      if (x.params.action === action && Number(x.params.row) === Number(row))
+      if (Number(x.params.row) !== Number(row)) return;
+      if (x.params.action === 'desfazer' && action !== 'desfazer') { achado = null; return; }
+      if (x.params.action === action)
         achado = { ...x.params, pg_recusado: !!x.precisaCorrigir, pg_recusa: x.erro || null };
     });
     return achado;
@@ -919,7 +938,9 @@ async function apiMarcarCancelado(row, obs) {
     iniciarEntrega: 'Indo para entrega',
     marcarEntregue: 'Entregue',
     marcarNaoEntregue: 'Não entregue',
-    marcarCancelado: 'Removida', // 19/10/2026: "Saiu da minha rota" (o servidor grava a parada fora da rota, não cancela)
+    // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' (era 'Removida', 19/10). O servidor novo grava "Não entregue" sem pagar e
+    // deixa a parada na rota com ↩ Desfazer (o cartão mostra o Desfazer para statusKey 'fail'); o antigo grava "Removida".
+    marcarCancelado: 'Não entregue',
     desfazer: ''
   });
   // Projeção da fila sobre a lista que veio do servidor: row -> o que o aparelho JÁ registrou.
@@ -944,6 +965,9 @@ async function apiMarcarCancelado(row, obs) {
         id: x.id, row, action: acao,
         alvo: ACOES_DE_STATUS[acao],
         obsAlvo: x.params.obs || '',
+        saiuDaRota: acao === 'marcarCancelado', // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' mas nunca anda com a irmã
+        // Quem era a parada no toque (28/10/2026): a recusa de uma parada que SAIU da lista ainda diz de quem é (faixa do topo).
+        cliente: meta.cliente || '', pedido: meta.pedido || '',
         // Item legado (gravado antes deste commit) não tem `statusAnterior`: aí a tela não inventa
         // um estado anterior — devolve undefined e quem lê cai no status do servidor.
         anterior: Object.prototype.hasOwnProperty.call(meta, 'statusAnterior') ? meta.statusAnterior : undefined,
@@ -1535,6 +1559,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     acksRecentesDeStatus,
     esquecerAcksAte,
     filaEmEnvio,
+    ehSaiuDaRota,
     temToken,
     fimConfirmado,
     guardarFimConfirmado,

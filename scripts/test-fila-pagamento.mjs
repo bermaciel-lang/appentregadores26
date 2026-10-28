@@ -343,8 +343,11 @@ test('o toque não espera rede nem para pintar nem para liberar o próximo',asyn
   const vista=h.vista();
   assert.equal(vista.find(x=>x.row===1).status,'Entregue');
   assert.equal(vista.find(x=>x.row===2).status,'Entregue');
-  // 19/10/2026 (dono): o ramo "cancelado" virou "SAIU DA MINHA ROTA" — a tela pinta 'Removida' (rótulo "Saiu da minha rota").
-  assert.equal(vista.find(x=>x.row===3).status,'Removida');
+  // 19/10/2026 (dono): o ramo "cancelado" virou "SAIU DA MINHA ROTA" — a tela pintava 'Removida' (rótulo "Saiu da minha rota").
+  // ⛔ 28/10/2026 — INVERTIDA: o servidor novo (leva 3) grava "Não entregue" sem pagar e deixa a parada na rota com ↩ Desfazer;
+  // a tela pinta 'Não entregue' (o rótulo continua "Saiu da minha rota" — core.js `statusLabel`).
+  assert.equal(vista.find(x=>x.row===3).status,'Não entregue');
+  assert.equal(h.api.statusLabel(vista.find(x=>x.row===3).status,vista.find(x=>x.row===3)),'Saiu da minha rota');
 });
 test('falha de armazenamento aborta antes da rede e de mostrar entrega concluída',async()=>{
   const h=await harness();h.state.items=[{row:1,numero:1,status:'Indo para entrega',naEntrega:true}];
