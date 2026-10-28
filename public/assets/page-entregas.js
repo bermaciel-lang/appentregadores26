@@ -553,7 +553,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     if (el) el.innerHTML = !st.pendente ? ''
       : st.desistiu
         ? '<div class="info-rota-linha" style="justify-content:center;color:#b91c1c;font-weight:700;">📷 A foto não subiu. Toque no botão da rota pra enviar de novo, ou avise o supervisor.</div>'
-        : '<div class="info-rota-linha" style="justify-content:center;color:#92400e;font-weight:700;">⏳ KM/foto salvos no aparelho — sobem sozinhos quando a internet voltar</div>';
+        // 28/10/2026: "sobem sozinhos" era meia verdade — com o app FECHADO nada sobe. Diz a condição de verdade.
+        : '<div class="info-rota-linha" style="justify-content:center;color:#92400e;font-weight:700;">⏳ KM/foto guardados no aparelho — sobem com o app aberto e internet</div>';
     return;
     // eslint-disable-next-line no-unreachable
     const ri = state.rotaInfo || {};
@@ -660,12 +661,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // Lembrete quando todas as entregas estão marcadas (e a rota ainda não foi
     // finalizada). Fica NO TOPO, grande, fixo na tela e clicável (toca = finaliza).
     const todasMarcadas = vista.length > 0 && vista.every(statusResolvido);
-    const lembrete = (todasMarcadas && !state.rotaFinalizada && !state.sendingRouteAction)
+    const lembrete = (todasMarcadas && !state.rotaFinalizada && !state.enviandoFim)
       ? '<button type="button" class="lembrete-finalizar" data-route="finalizar">✅ Todas as entregas marcadas!<br>👉 Toque aqui para FINALIZAR A ROTA</button>'
       : '';
 
     // Botão grande de Finalizar embaixo da lista.
-    const fimEnviando = state.sendingRouteAction;
+    const fimEnviando = !!state.enviandoFim; // 28/10/2026: só durante o ENVIO do fim (a trava do fluxo cobre também o KM e a foto)
     const fimTxt = state.rotaFinalizada ? '✓ Rota finalizada' : (fimEnviando ? '⏳ Enviando…' : '🏁 Finalizar rota');
     const botaoFim = `<button type="button" class="btn-finalizar-bottom ${state.rotaFinalizada ? 'route-success' : ''}" data-route="finalizar" ${state.rotaFinalizada || fimEnviando ? 'disabled' : ''}>${fimTxt}</button>`;
 
@@ -880,25 +881,38 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     else await reenviarFoto(fase);
   }
 
+  // ⛔ 28/10/2026 — A TRAVA DO INICIAR COBRE O FLUXO INTEIRO. Ela era solta logo depois da conferência da montagem e só voltava
+  // depois do KM e da foto: no meio (a câmera voltando, a foto sendo comprimida — sem diálogo na tela), um 2º toque em "Iniciar"
+  // abria um 2º fluxo em paralelo (outro KM, outra foto). Agora vale do toque até o fim, inclusive o menu de corrigir KM/foto.
   async function handleIniciarRota() {
     if (state.sendingRouteAction) return;
+    state.sendingRouteAction = true;
+    const loadingRota = document.getElementById('loadingRota');
+    const btnIniciarRota = document.getElementById('btnIniciarRota');
+    try { await fluxoIniciarRota(loadingRota, btnIniciarRota); }
+    finally {
+      loadingRota.classList.add('hidden');
+      btnIniciarRota.disabled = false;
+      state.sendingRouteAction = false;
+      renderList();
+    }
+  }
+  async function fluxoIniciarRota(loadingRota, btnIniciarRota) {
     if (state.rotaIniciada) { await menuEditarRota('inicio'); return; } // já iniciada → tocar edita KM/foto
     // Já tem um "iniciar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
     // novo do zero — senão a segunda tentativa SOBRESCREVE a primeira, que ainda nem tentou subir.
     if (api.temRotaPendenteFase && api.temRotaPendenteFase('inicio')) {
-      await AppUI.alerta('Você já iniciou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
+      await AppUI.alerta('Você já iniciou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Com o app aberto e a conexão de volta, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
       return;
     }
-
-    const loadingRota = document.getElementById('loadingRota');
-    const btnIniciarRota = document.getElementById('btnIniciarRota');
 
     // CONFERE A MONTAGEM ANTES de pedir KM e foto. A trava da montagem (08/09) precisa do servidor
     // responder; se ela vier DEPOIS de o entregador digitar o KM e tirar a foto, uma falha de sinal
     // custava tudo o que ele tinha feito (a foto e o KM só existiam na memória — regressão do commit
     // 71d469e). Aqui, se o servidor não responder ou disser que tem pendência, ele ainda não digitou
     // nada: avisa e volta, sem perda. É o mesmo que a tela inicial já faz ao entrar (page-home.js).
-    state.sendingRouteAction = true;
+    // (28/10/2026: é a ÚNICA conferência do app no Iniciar — a 2ª, que core.js repetia antes de subir o KM, saiu: o servidor
+    // confere de novo no próprio `iniciarRota`.)
     loadingRota.textContent = '⏳ Conferindo a montagem da rota…';
     loadingRota.classList.remove('hidden');
     btnIniciarRota.disabled = true;
@@ -913,8 +927,6 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       return;
     } finally {
       loadingRota.classList.add('hidden');
-      btnIniciarRota.disabled = false;
-      state.sendingRouteAction = false;
     }
 
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
@@ -950,17 +962,26 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // ⛔ (revisão independente de 06/10, M2) O KM E A FOTO SÃO GUARDADOS ANTES DO MODAL: `apiIniciarRota` grava no aparelho de
     // forma SÍNCRONA (antes do 1º await) e o envio corre ENQUANTO o entregador escolhe a maquininha. Se o Android matar o app no
     // meio do modal, nada se perde (a regra do 71d469e: nada só na memória depois de uma etapa de gente).
-    state.sendingRouteAction = true;
-
-loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
-loadingRota.classList.remove('hidden');
-btnIniciarRota.disabled = true;
+    loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+    loadingRota.classList.remove('hidden');
 
     const envioInicio = api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg')
       .then(function (r) { return { r: r }; }, function (e) { return { e: e }; });
     try { api.setTurno(api.getTurno()); } catch (e) {} // o turno da rota que ele INICIOU fica fixo (a home reabre nele)
     await escolherMaquininhaNoInicio();
 
+    // ⭐ 28/10/2026 — a lista aparece NA HORA (já está em memória desde a abertura) e a recarga corre atrás, sem segurar o aviso
+    // (era `await carregarTudo` antes do aviso: mais uma ida e volta inteira ao servidor no caminho do entregador).
+    const marcarIniciada = function () {
+      state.rotaIniciada = true;
+      state.rotaFinalizada = false;
+      state.marcaRota = api.proximaMarca ? api.proximaMarca() : 0; // lista pedida antes disto não des-inicia a tela
+      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      sessionStorage.setItem('rota_assinatura_' + state.driver, state.items.map(x => x.row).sort().join(','));
+      sessionStorage.removeItem('rota_finalizada_' + state.driver);
+      renderList();
+      carregarTudo(false);
+    };
     try {
       const enviado = await envioInicio;
       if (enviado.e) throw enviado.e;
@@ -978,18 +999,11 @@ btnIniciarRota.disabled = true;
         throw new Error((res && res.error) || 'Falha ao iniciar rota');
       }
 
-      state.rotaIniciada = true;
-      state.rotaFinalizada = false;
-      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      const assinaturaRota = state.items.map(x => x.row).sort().join(',');
-      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRota);
-      sessionStorage.removeItem('rota_finalizada_' + state.driver);
-
-      await carregarTudo(false);
+      marcarIniciada();
       if (res.precisaLogin) {
         await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem sozinhos logo depois.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
       } else if (res.pendenteEnvio) {
-        await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto sobem sozinhos quando a conexão voltar. Pode fazer as entregas normalmente.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
+        await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto sobem sozinhos quando a conexão voltar (com o app aberto). Pode fazer as entregas normalmente.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
       } else if (res.semFoto) {
         await AppUI.alerta('Rota iniciada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe sozinha. Não precisa iniciar de novo — pode seguir com as entregas.', { titulo: 'Iniciada — a foto sobe sozinha', tom: 'warn' });
       } else {
@@ -1002,21 +1016,13 @@ btnIniciarRota.disabled = true;
         await AppUI.alerta(error.message, { titulo: 'Montagem da rota', tom: 'warn' });
         return;
       }
-      state.rotaIniciada = true;
-      state.rotaFinalizada = false;
-      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      const assinaturaRotaErr = state.items.map(x => x.row).sort().join(',');
-      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaErr);
-      sessionStorage.removeItem('rota_finalizada_' + state.driver);
-      await carregarTudo(false);
+      marcarIniciada();
       await AppUI.alerta('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.', { tom: 'warn' });
     } finally {
-loadingRota.classList.add('hidden');
-btnIniciarRota.disabled = false;
-      state.sendingRouteAction = false;
+      // Liga o rastreamento GPS da rota (não trava nada se falhar). 28/10/2026: com o dia e o TURNO certos (`window.getTurno` não
+      // existia: os pontos iam sem turno e sumiam do mapa).
+      try { if (state.rotaIniciada) ligarRastreio(); } catch (e) {}
     }
-    // Liga o rastreamento GPS da rota (não trava nada se falhar).
-    try { if (state.rotaIniciada && window.Rastreio) window.Rastreio.iniciar(state.driver); } catch (e) {}
   }
 
   // ===== MAQUININHA DA ROTA (06/10/2026) =====
@@ -1056,65 +1062,85 @@ btnIniciarRota.disabled = false;
     b.classList.toggle('maq-falta', mostrar && !state.maquininha && state.precisaMaquininha !== false);
   }
 
-async function handleFinalizarRota() {
-  if (state.sendingRouteAction) return;
-  if (state.rotaFinalizada) { await menuEditarRota('fim'); return; } // já finalizada → tocar edita KM/foto
-
-  if (!state.rotaIniciada) {
-    await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
-    return;
-  }
-  // Já tem um "finalizar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
-  // novo do zero — é a causa do "mandei foto e ele pede outra": a sessão local esquece o que já foi
-  // feito, mas o que estava salvo (esperando subir) ainda não confirmou, e uma 2ª tentativa SOBRESCREVE.
-  if (api.temRotaPendenteFase && api.temRotaPendenteFase('fim')) {
-    await AppUI.alerta('Você já finalizou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
-    return;
-  }
-
-  let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
-  if (km === null) return; // cancelou o KM -> aborta
-
-  let foto = await pedirFotoObrigatoria();
-  if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
-
-  if (foto) {
-    // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
-    if (!km) {
-      km = await pedirKm('Você enviou a foto. Agora informe o KM final do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
-      if (km === null) {
-        await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
-        return; // não salva nada pela metade
-      }
+  // ⛔ 28/10/2026 — A TRAVA DO FINALIZAR COBRE O FLUXO INTEIRO (como o Iniciar): ela só era ligada DEPOIS do KM e da foto, e um 2º
+  // toque no "Finalizar" (ou no lembrete do topo) no meio abria um 2º fluxo. E o texto do fim deixou de prometer o que não acontece:
+  // "pode fechar o app tranquilo, sobe sozinho" — com o app FECHADO nada sobe, e a home nem enviava a fila.
+  async function handleFinalizarRota() {
+    if (state.sendingRouteAction) return;
+    state.sendingRouteAction = true;
+    const loadingRota = document.getElementById('loadingRota');
+    const btnFinalizarRota = document.getElementById('btnFinalizarRota');
+    try { await fluxoFinalizarRota(loadingRota, btnFinalizarRota); }
+    finally {
+      loadingRota.classList.add('hidden');
+      btnFinalizarRota.disabled = false;
+      state.enviandoFim = false;
+      state.sendingRouteAction = false;
+      renderList();
     }
-  } else {
-    // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
-    const segue = await AppUI.confirmar('A foto do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)', {
-      titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
-    });
-    if (!segue) return;
-    // Mesma proteção do iniciar: foto que chegou enquanto a pergunta estava na tela não se perde.
-    const tardia = pegarFotoAtrasada();
-    if (tardia && km) foto = tardia;
   }
+  // "Faltam N envios": o que ainda está SÓ neste aparelho (fila + KM/foto) do entregador da tela. Zero = nada a dizer.
+  function linhaEnviosFaltando() {
+    const c = api.contarEnviosPendentes ? api.contarEnviosPendentes({ soDoAtivo: true }) : null;
+    if (!c || !c.total) return '';
+    return '\n\n⚠️ Faltam ' + c.total + (c.total === 1 ? ' envio' : ' envios') + ' deste aparelho. Abra o app quando tiver internet — com o app fechado nada sobe.';
+  }
+  async function fluxoFinalizarRota(loadingRota, btnFinalizarRota) {
+    if (state.rotaFinalizada) { await menuEditarRota('fim'); return; } // já finalizada → tocar edita KM/foto
 
-  state.sendingRouteAction = true;
+    if (!state.rotaIniciada) {
+      await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
+      return;
+    }
+    // ⭐ 28/10/2026 — a fila sobe JÁ, no toque: enquanto o entregador digita o KM e tira a foto, as marcações guardadas vão subindo.
+    agendarEnvio();
+    // Já tem um "finalizar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
+    // novo do zero — é a causa do "mandei foto e ele pede outra": a sessão local esquece o que já foi
+    // feito, mas o que estava salvo (esperando subir) ainda não confirmou, e uma 2ª tentativa SOBRESCREVE.
+    if (api.temRotaPendenteFase && api.temRotaPendenteFase('fim')) {
+      await AppUI.alerta('Você já finalizou a rota — o KM e a foto estão salvos no aparelho, esperando a internet para enviar.\n\nNão precisa fazer de novo: eles sobem com o app ABERTO e internet.' + linhaEnviosFaltando(), { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
+      return;
+    }
 
-  const loadingRota = document.getElementById('loadingRota');
-  const btnFinalizarRota = document.getElementById('btnFinalizarRota');
+    let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
+    if (km === null) return; // cancelou o KM -> aborta
 
-  loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
-  loadingRota.classList.remove('hidden');
-  btnFinalizarRota.disabled = true;
-  renderList(); // o botão de baixo mostra "⏳ Enviando…"
+    let foto = await pedirFotoObrigatoria();
+    if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
 
-  try {
-    const res = await api.apiFinalizarRota(
-      state.driver,
-      km,
-      foto ? foto.base64 : '',
-      foto ? foto.mimeType : 'image/jpeg'
-    );
+    if (foto) {
+      // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
+      if (!km) {
+        km = await pedirKm('Você enviou a foto. Agora informe o KM final do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
+        if (km === null) {
+          await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
+          return; // não salva nada pela metade
+        }
+      }
+    } else {
+      // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
+      const segue = await AppUI.confirmar('A foto do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)', {
+        titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
+      });
+      if (!segue) return;
+      // Mesma proteção do iniciar: foto que chegou enquanto a pergunta estava na tela não se perde.
+      const tardia = pegarFotoAtrasada();
+      if (tardia && km) foto = tardia;
+    }
+
+    state.enviandoFim = true;
+    loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+    loadingRota.classList.remove('hidden');
+    btnFinalizarRota.disabled = true;
+    renderList(); // o botão de baixo mostra "⏳ Enviando…"
+
+    try {
+      const res = await api.apiFinalizarRota(
+        state.driver,
+        km,
+        foto ? foto.base64 : '',
+        foto ? foto.mimeType : 'image/jpeg'
+      );
 
       // ⛔ 10/09/2026 — O SERVIDOR RESPONDEU E RECUSOU: isso não é falta de sinal, e não pode virar
       // "salvo, sobe sozinho". Antes o entregador fechava o app achando estar resolvido enquanto a
@@ -1128,37 +1154,47 @@ async function handleFinalizarRota() {
         throw new Error((res && res.error) || 'Falha ao finalizar rota');
       }
 
-    state.rotaFinalizada = true;
-    state.rotaIniciada = false;
-    api.guardarFimConfirmado(state.driver, true);
-    sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-    sessionStorage.removeItem('rota_iniciada_' + state.driver);
-    sessionStorage.removeItem('rota_assinatura_' + state.driver);
-    // Desliga o rastreamento GPS (rota finalizada).
-    try { if (window.Rastreio) window.Rastreio.parar(); } catch (e) {}
+      state.rotaFinalizada = true;
+      state.rotaIniciada = false;
+      state.marcaRota = api.proximaMarca ? api.proximaMarca() : 0; // lista pedida antes disto não des-finaliza a tela
+      api.guardarFimConfirmado(state.driver, true);
+      sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
+      sessionStorage.removeItem('rota_iniciada_' + state.driver);
+      sessionStorage.removeItem('rota_assinatura_' + state.driver);
+      state.enviandoFim = false;
+      // Desliga o rastreamento GPS (rota finalizada) — inclusive o do Android que ficou de uma abertura anterior do app.
+      try { pararRastreio(); } catch (e) {}
+      renderList();
+      carregarTudo(false); // a recarga corre atrás; o aviso não espera por ela
 
-    await carregarTudo(false);
-    if (res.precisaLogin) {
-      await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem sozinhos logo depois.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
-    } else if (res.pendenteEnvio) {
-      // Sem internet AGORA: o KM e a foto FICARAM SALVOS no aparelho e sobem sozinhos quando a conexão
-      // voltar (o app tenta de novo a cada atualização/quando reconecta/ao reabrir). NADA se perde.
-      await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto vão subir sozinhos assim que a conexão voltar. Pode fechar o app tranquilo.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
-    } else if (res.semFoto) {
-      await AppUI.alerta('Rota finalizada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe sozinha. Não precisa finalizar de novo — pode fechar o app.', { titulo: 'Finalizada — a foto sobe sozinha', tom: 'warn' });
-    } else {
-      await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+      // ⭐ 28/10/2026 — o que AINDA não subiu deste aparelho (a fila disparada no toque já teve o tempo do KM e da foto).
+      const falta = linhaEnviosFaltando();
+      if (res.precisaLogin) {
+        await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem logo depois, com o app aberto.' + falta, { titulo: 'Precisa entrar de novo', tom: 'warn' });
+      } else if (res.pendenteEnvio) {
+        // Sem internet AGORA: o KM e a foto FICARAM SALVOS no aparelho. Eles sobem quando o app estiver ABERTO com internet (a home
+        // também envia ao abrir). NADA se perde — mas fechado, nada sobe: o aviso diz quantos faltam.
+        await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nVocê está sem internet agora. O KM e a foto ficam guardados neste aparelho e sobem quando o app estiver aberto com internet.' + (falta || '\n\nAbra o app quando tiver internet.'), { titulo: 'Salvo — falta enviar', tom: 'warn' });
+      } else if (res.semFoto) {
+        await AppUI.alerta('Rota finalizada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe com o app aberto e internet. Não precisa finalizar de novo.' + falta, { titulo: 'Finalizada — falta a foto', tom: 'warn' });
+      } else if (falta) {
+        await AppUI.alerta('Rota finalizada ✅' + falta, { titulo: 'Falta enviar', tom: 'warn' });
+      } else {
+        await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+      }
+    } catch (error) {
+      console.error(error);
+      await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
     }
-  } catch (error) {
-    console.error(error);
-    await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
-  } finally {
-    loadingRota.classList.add('hidden');
-    btnFinalizarRota.disabled = false;
-    state.sendingRouteAction = false;
-    renderList();
   }
-}
+
+  // GPS da rota (28/10/2026): dia e TURNO certos (antes `window.getTurno`, que não existe — os pontos iam sem turno e sumiam do
+  // mapa), e o parar também desliga o rastreio que o Android manteve de uma abertura anterior do app (rastreio.js).
+  function ligarRastreio() {
+    if (!window.Rastreio) return;
+    window.Rastreio.iniciar(state.driver, api.diaSP ? api.diaSP() : undefined, api.getTurno());
+  }
+  function pararRastreio() { if (window.Rastreio) window.Rastreio.parar(); }
 
   // ===== PAGAMENTO NA PORTA (05/09/2026) — o entregador confirma FORMA e VALOR ao marcar Entregue =====
   // O modal em si mora em pagamento-porta.js (PgPorta). Aqui: quando abre, com o que, e como a
@@ -2176,5 +2212,7 @@ async function handleFinalizarRota() {
     carregarTudo(true);
     startAutoRefresh();
     startCancelRefresh();
+    // GPS (28/10/2026): rota em andamento ao abrir a tela (o Android matou o app, o entregador reabriu) → o rastreio volta a ligar.
+    if (state.rotaIniciada && !state.rotaFinalizada) { try { ligarRastreio(); } catch (e) {} }
   })();
 })();

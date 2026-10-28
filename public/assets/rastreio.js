@@ -6,18 +6,51 @@
 //  - No NAVEGADOR / iPhone (sem app): usa o GPS do navegador — só com o app ABERTO.
 // Liga no "Iniciar entregas", desliga no "Finalizar". Objetivo nº 1: KM real preciso
 // (o painel cola o trajeto na rua via OSRM). Aqui a gente só COLETA os pontos bons.
+//
+// ⛔ 28/10/2026 (revisão da leva 2):
+//  - o TURNO vinha de `window.getTurno`, que NÃO EXISTE: todo ponto ia com turno vazio e sumia do mapa (que filtra por turno).
+//    Agora quem liga passa dia e turno (page-entregas.js `ligarRastreio`), com `AppEntrega.getTurno()` de reserva;
+//  - o id do rastreio NATIVO fica guardado no aparelho: quando o Android mata a tela e o app volta, o rastreio antigo (órfão,
+//    com a notificação "Rota em andamento" presa) é desligado antes de ligar outro, e o Finalizar desliga os dois;
+//  - o lote leva o TOKEN do entregador (o servidor da leva 3 passa a exigir; o atual ignora o campo).
 // ====================================================================
 (function () {
   'use strict';
 
   var FLUSH_MS = 30000;     // manda o lote a cada 30s
   var MAX_FILA = 20;        // se acumular 20 pontos antes disso, manda já
+  var CHAVE_WATCHER = 'rastreio_watcher_nativo_v1';
   var fila = [];
   var st = { ativo: false, entregador: '', data: '', turno: '', watchId: null, timer: null, nativo: false };
 
+  function api() { return window.AppEntrega || null; }
+
   function dataLocal() {
+    var a = api();
+    if (a && a.diaSP) { try { return a.diaSP(); } catch (e) {} }
     var d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function turnoAtual() {
+    var a = api();
+    try { return a && a.getTurno ? a.getTurno() : ''; } catch (e) { return ''; }
+  }
+  function tokenDoEntregador(nome) {
+    var a = api();
+    try {
+      var ti = a && a.getDriverTokenInfo ? a.getDriverTokenInfo() : null;
+      return ti && ti.token && String(ti.nome || '').trim() === String(nome || '').trim() ? ti.token : '';
+    } catch (e) { return ''; }
+  }
+
+  function lerWatcherGuardado() { try { return localStorage.getItem(CHAVE_WATCHER); } catch (e) { return null; } }
+  function guardarWatcher(id) { try { if (id == null) localStorage.removeItem(CHAVE_WATCHER); else localStorage.setItem(CHAVE_WATCHER, String(id)); } catch (e) {} }
+  function pluginNativo() { return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundGeolocation; }
+  // Desliga um rastreio nativo pelo id (o desta tela ou o órfão de uma abertura anterior). Nunca lança.
+  function desligarNativo(id) {
+    var BG = pluginNativo();
+    if (!BG || id == null || id === '') return;
+    try { var p = BG.removeWatcher({ id: id }); if (p && p.catch) p.catch(function () {}); } catch (e) {}
   }
 
   function enfileirar(lat, lng, acc, vel, rumo) {
@@ -39,6 +72,8 @@
     if (!fila.length || !st.entregador) return;
     var lote = fila.splice(0, 100);
     var body = { entregador: st.entregador, data: st.data, turno: st.turno, pontos: lote };
+    var token = tokenDoEntregador(st.entregador);
+    if (token) body.token = token;
     fetch('/api/ping', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -55,14 +90,16 @@
     if (st.ativo) return;
     st.entregador = entregador || (window.state && window.state.driver) || '';
     st.data = data || dataLocal();
-    st.turno = turno || (typeof window.getTurno === 'function' ? window.getTurno() : '');
+    st.turno = turno || turnoAtual();
     if (!st.entregador) { console.warn('[rastreio] sem entregador — não inicia'); return; }
     st.ativo = true;
 
-    var BG = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundGeolocation;
+    var BG = pluginNativo();
     if (BG) {
-      // APP ANDROID: plugin nativo (segundo plano, tela apagada).
+      // APP ANDROID: plugin nativo (segundo plano, tela apagada). Um rastreio que ficou de uma abertura anterior sai antes.
       st.nativo = true;
+      desligarNativo(lerWatcherGuardado());
+      guardarWatcher(null);
       BG.addWatcher({
         backgroundMessage: 'Registrando o trajeto da rota.',
         backgroundTitle: 'Rota em andamento',
@@ -72,7 +109,10 @@
       }, function (loc, err) {
         if (err) { console.warn('[rastreio] erro nativo', err); return; }
         if (loc) enfileirar(loc.latitude, loc.longitude, loc.accuracy, loc.speed, loc.bearing);
-      }).then(function (id) { st.watchId = id; }).catch(function (e) { console.warn('[rastreio] addWatcher', e); });
+      }).then(function (id) {
+        if (!st.ativo) { desligarNativo(id); return; } // parou enquanto ligava
+        st.watchId = id; guardarWatcher(id);
+      }).catch(function (e) { console.warn('[rastreio] addWatcher', e); });
     } else if (window.APP_CONFIG && window.APP_CONFIG.RASTREIO_WEB && navigator.geolocation) {
       // NAVEGADOR/iPhone: só com o app ABERTO, e SÓ se RASTREIO_WEB estiver ligado.
       // Padrão = DESLIGADO no navegador, pra NÃO pedir permissão de GPS a todo mundo enquanto o
@@ -93,11 +133,14 @@
   }
 
   function parar() {
+    // O órfão de uma abertura anterior (nativo) sai SEMPRE — mesmo que esta tela nunca tenha ligado o rastreio.
+    var guardado = lerWatcherGuardado();
+    if (guardado != null && String(guardado) !== String(st.watchId)) desligarNativo(guardado);
+    guardarWatcher(null);
     if (!st.ativo) return;
     st.ativo = false;
     if (st.timer) { clearInterval(st.timer); st.timer = null; }
-    var BG = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundGeolocation;
-    if (st.nativo && BG && st.watchId != null) { try { BG.removeWatcher({ id: st.watchId }); } catch (e) {} }
+    if (st.nativo && st.watchId != null) desligarNativo(st.watchId);
     else if (st.watchId != null && navigator.geolocation) { try { navigator.geolocation.clearWatch(st.watchId); } catch (e) {} }
     st.watchId = null; st.nativo = false;
     flush(); // manda o que sobrou na fila
@@ -107,5 +150,5 @@
   // Manda o que sobrou se o app for fechado.
   window.addEventListener('pagehide', function () { if (st.ativo) flush(); });
 
-  window.Rastreio = { iniciar: iniciar, parar: parar, _st: st };
+  window.Rastreio = { iniciar: iniciar, parar: parar, _st: st, _fila: function () { return fila.slice(); }, _flush: flush };
 })();

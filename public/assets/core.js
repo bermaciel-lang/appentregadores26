@@ -1168,6 +1168,9 @@ async function apiMarcarCancelado(row, obs) {
   //    sem ordem garantida e o resultado final poderia ficar invertido;
   //  - NENHUM ack é escrito: sem resposta não há prova de gravação, então o item continua na fila
   //    e sobe de novo no próximo ciclo (o servidor aguenta, é update).
+  //  - ⭐ 28/10/2026: o `confirmarPagamento` também vai, quando cabe — UM só na parada e DEPOIS da única marcação dela na fila. Ele
+  //    só sai depois que a marcação RESPONDEU ok (a ordem é sagrada: nunca na frente do `marcarEntregue`); se a página morrer antes,
+  //    ele sobe na reabertura, como sempre. Parada que só tem o pagamento pendente (a marcação já subiu) manda o pagamento direto.
   const MAX_KEEPALIVE = 6;
   let _keepaliveFeito = false;
   function enviarPendentesNoFechamento() {
@@ -1175,21 +1178,37 @@ async function apiMarcarCancelado(row, obs) {
       if (_keepaliveFeito || C.API_MODE !== 'json') return 0;
       const fila = bancoFila && bancoFila.snapshot();
       if (!fila || !fila.length) return 0;
-      const porRow = new Map();
-      fila.forEach(x => {
+      const porRow = new Map(), pagamentos = new Map(), posicao = new Map();
+      fila.forEach((x, i) => {
         const acao = x.params && x.params.action;
-        if (x.precisaCorrigir || !Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
-        if (!podeEnviarAgora(x)) return; // item de outro entregador sem token aqui: espera, nunca vai com o token errado
+        if (x.precisaCorrigir || !podeEnviarAgora(x)) return; // item de outro entregador sem token aqui: espera, nunca vai com o token errado
         const row = Number(x.params.row);
         if (!row) return;
+        posicao.set(x.id, i);
+        if (acao === 'confirmarPagamento') { pagamentos.set(row, (pagamentos.get(row) || []).concat([x])); return; }
+        if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
         porRow.set(row, (porRow.get(row) || []).concat([x]));
       });
+      const disparar = params => fetch(buildApiUrl(params), { method: 'GET', keepalive: true, cache: 'no-store' });
       let enviados = 0;
-      for (const itens of porRow.values()) {
+      for (const [row, itens] of porRow) {
         if (enviados >= MAX_KEEPALIVE) break;
         if (itens.length !== 1) continue; // ambíguo na ordem → deixa para o consumidor serial
-        try { fetch(buildApiUrl(itens[0].params), { method: 'GET', keepalive: true, cache: 'no-store' }).catch(function () {}); enviados++; }
-        catch (e) { /* o item continua na fila */ }
+        const pgs = pagamentos.get(row) || [];
+        const pgDepois = pgs.length === 1 && posicao.get(pgs[0].id) > posicao.get(itens[0].id) ? pgs[0] : null;
+        try {
+          const envio = disparar(itens[0].params); enviados++;
+          if (pgDepois && enviados < MAX_KEEPALIVE) {
+            enviados++;
+            envio.then(r => (r && r.ok ? r.json() : null)).then(j => { if (j && j.ok) disparar(pgDepois.params).catch(function () {}); })
+              .catch(function () {});
+          } else envio.catch(function () {});
+        } catch (e) { /* o item continua na fila */ }
+      }
+      for (const [row, pgs] of pagamentos) {
+        if (enviados >= MAX_KEEPALIVE) break;
+        if (porRow.has(row) || pgs.length !== 1) continue; // com marcação pendente, só pelo caminho acima
+        try { disparar(pgs[0].params).catch(function () {}); enviados++; } catch (e) { /* continua na fila */ }
       }
       if (enviados) _keepaliveFeito = true;
       return enviados;
@@ -1378,6 +1397,18 @@ async function comRotaEmVoo(fase, entregador, trabalho) {
   _rotaEmVoo.add(k);
   try { return await trabalho(); } finally { _rotaEmVoo.delete(k); }
 }
+// ⛔ 28/10/2026 — "OK" NÃO PROVA QUE A FOTO FOI GRAVADA. Com sinal fraco os envios COM foto estouravam, o GET sem foto gravava o
+// início, e o reenvio seguinte (com a foto) recebia `ok` de um replay que não grava nada (fn_rota_iniciar_cas_rota: "Replay de
+// saída formal não altera hora, foto, km") — e o app APAGAVA a foto pendente. A resposta já traz o cabeçalho da rota
+// (`rotaInfo.fotoInicio`/`fotoFim`, "ok" quando há foto no servidor): a foto do aparelho só sai quando ele confirma. Servidor que
+// não manda `rotaInfo` (versão antiga) segue a regra de antes.
+function fotoConfirmada(payload, res) {
+  if (!payload || !payload.fotoBase64) return true; // não havia foto para guardar
+  if (!res || !res.ok || res.semFoto) return false;
+  const info = res.rotaInfo;
+  if (!info || typeof info !== 'object') return true;
+  return !!(payload.action === 'finalizarRota' ? info.fotoFim : info.fotoInicio);
+}
 async function reenviarRotaPendente() {
   // De TODOS os entregadores que usaram este aparelho, cada um com o próprio token. O de quem não
   // tem token guardado aqui espera (subiria sem identidade e o servidor recusaria).
@@ -1387,7 +1418,7 @@ async function reenviarRotaPendente() {
     if (entregador !== getSavedDriverName() && !tokenDe(entregador)) continue;
     const res = await enviarRotaPayload(p);
     if (!res || !res.ok) continue;                                       // nem o KM subiu → tenta de novo depois
-    if (!res.semFoto || !p.fotoBase64) { limparRotaPend(fase, entregador); continue; } // subiu inteiro → limpa
+    if (fotoConfirmada(p, res)) { limparRotaPend(fase, entregador); continue; } // subiu inteiro (o servidor confirmou a foto) → limpa
     // O KM subiu e a FOTO não. Antes isto era tratado como sucesso e a foto era APAGADA do
     // aparelho (perdida de vez). Agora ela fica salva e continua tentando sozinha.
     const n = Number(p.tentativas || 0) + 1;
@@ -1411,28 +1442,20 @@ async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) 
   //    digita o KM, tira a foto, toca Iniciar, 15s depois "não foi possível verificar a montagem" —
   //    e tinha que refazer tudo. Salvo aqui, nada mais se perde, aconteça o que acontecer abaixo.
   const salvouCompleto = salvarRotaPend('inicio', payload);
-  // 2) Confere a montagem (best-effort). BLOQUEIO de verdade (o servidor disse "tem pendência") →
-  //    para aqui, sem subir foto à toa (o servidor recusaria de qualquer jeito). SEM RESPOSTA (sem
-  //    sinal, timeout) → NÃO para: o próprio iniciarRota é conferido de novo no servidor, então
-  //    seguir é seguro; e se o envio também não subir, fica salvo e reenvia sozinho (processarFila).
-  //    A tela já conferiu a montagem ANTES de pedir KM/foto (page-entregas.js) — esta é a 2ª rede.
-  try { await verificarMontagem(entregador, false); }
-  catch (e) {
-    if (e && e.montagemBloqueada) {
-      salvarRotaPend('inicio', Object.assign({}, payload, { desistiu: true }));
-      throw e;
-    }
-    // sem resposta → segue pro envio (o servidor confere a montagem no iniciarRota)
-  }
-  espelharNoPainel(payload);
+  // 2) ⛔ 28/10/2026 — SAIU A 2ª CONFERÊNCIA DA MONTAGEM que ficava aqui (um `verificarMontagem` inteiro, ~2 s no servidor com a
+  //    "paciência", e até 15 s de espera sem sinal antes de sequer tentar subir o KM). A tela já conferiu ANTES de pedir KM/foto
+  //    (page-entregas.js) e o próprio `iniciarRota` é conferido no servidor (route.ts: conferirMontagemComPaciencia + CAS da
+  //    rota): montagem que voltou a ficar pendente nesse meio-tempo responde `montagemBloqueada` aqui embaixo e trava igual — o
+  //    único custo é a foto subir uma vez à toa nesse caso raro.
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
     salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
     throw erroMontagem(res);
   }
   if (res && res.ok) guardarInicioConfirmado(entregador, true); // o servidor confirmou o início, mesmo se a foto ficou pendente
-  if (res && res.ok && !res.semFoto) { limparRotaPend('inicio', entregador); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok && fotoConfirmada(payload, res)) { limparRotaPend('inicio', entregador); return res; }
+  // KM subiu, foto NÃO (ou o servidor não confirmou a foto) → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok) return Object.assign({}, res, { semFoto: true });
   // O servidor RESPONDEU e recusou: não é falta de sinal. Mentir "salvo, sobe sozinho" fazia o
   // entregador fechar o app achando que estava resolvido, e a foto era reenviada a cada poll para
   // ser recusada de novo, sem fim. Marca `desistiu` (para o reenvio automático) e devolve o motivo.
@@ -1450,14 +1473,13 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
   const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
   { const d = diaConfiavel(); if (d) payload.data = d; }
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
-  espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
     salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
     throw erroMontagem(res);
   }
-  if (res && res.ok && !res.semFoto) { limparRotaPend('fim', entregador); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok && fotoConfirmada(payload, res)) { limparRotaPend('fim', entregador); return res; }
+  if (res && res.ok) return Object.assign({}, res, { semFoto: true }); // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   if (res && res.recusadoPeloServidor) { // ver o comentário em apiIniciarRota
     salvarRotaPend('fim', Object.assign({}, payload, { desistiu: true, recusa: res.error }));
     return { ok: false, error: res.error, recusadoPeloServidor: true };
@@ -1558,7 +1580,26 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     return local;
   }
 
+  // ⭐ 28/10/2026 — QUANTOS ENVIOS AINDA ESTÃO SÓ NO APARELHO (a fila e o KM/foto da rota). O Finalizar e a home dizem o número em
+  // vez de prometer que "sobe sozinho": com o app fechado nada sobe. `soDoAtivo` = só o entregador da tela; sem ele, tudo o que
+  // ESTE aparelho consegue mandar (o de quem não tem token aqui espera o PIN dele — aviso próprio na home). Recusados não contam.
+  function contarEnviosPendentes(opcoes) {
+    const so = !!(opcoes && opcoes.soDoAtivo);
+    const fila = bancoFila && bancoFila.snapshot();
+    let n = 0;
+    (fila || []).forEach(x => { if (x.precisaCorrigir) return; if (so ? !doAtivo(x) : !podeEnviarAgora(x)) return; n += 1; });
+    let rota = 0;
+    todosRotaPend().forEach(({ entregador, payload }) => {
+      if (!payload || payload.desistiu) return;
+      if (so ? nomeLimpo(entregador) !== getSavedDriverName() : (nomeLimpo(entregador) !== getSavedDriverName() && !tokenDe(entregador))) return;
+      rota += 1;
+    });
+    return { fila: n, rota, total: n + rota, conhecida: fila !== null && fila !== undefined };
+  }
+
   window.AppEntrega = {
+    diaSP,
+    contarEnviosPendentes,
     proximaMarca,
     acksRecentesDeStatus,
     esquecerAcksAte,

@@ -169,6 +169,34 @@
     } catch (e) {}
   }
 
+  // ⭐ 28/10/2026 — A HOME TAMBÉM ENVIA. Quem finalizou sem sinal fechava o app achando que "sobe sozinho"; ao reabrir caía aqui, e
+  // a home NÃO enviava a fila: as marcações e o KM/foto só subiam quando ele entrasse de novo na rota. Agora a home dispara o envio
+  // ao abrir (sem esperar nada) e mostra quantos envios ainda estão só neste aparelho, atualizando enquanto sobem.
+  function pintarEnviosPendentes() {
+    try {
+      let box = document.getElementById('enviosPendentesBox');
+      const c = api.contarEnviosPendentes ? api.contarEnviosPendentes() : null;
+      const n = c && c.conhecida ? c.total : 0;
+      if (!n) { if (box) box.classList.add('hidden'); return; }
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'enviosPendentesBox';
+        box.className = 'warning-box';
+        listEl.parentNode.insertBefore(box, listEl.parentNode.firstChild);
+      }
+      box.textContent = '⏳ Faltam ' + n + (n === 1 ? ' envio' : ' envios') + ' deste aparelho (entregas, pagamento ou KM/foto). Deixe o app aberto com internet até este aviso sumir.';
+      box.classList.remove('hidden');
+    } catch (e) {}
+  }
+  async function enviarPendentesDaHome() {
+    try {
+      await api.filaPronta();
+      pintarEnviosPendentes();
+      window.addEventListener('fila-entregas-mudou', pintarEnviosPendentes);
+      api.processarFila().then(pintarEnviosPendentes, pintarEnviosPendentes);
+    } catch (e) {}
+  }
+
   async function init() {
     try {
       renderTurno();
@@ -202,5 +230,5 @@
     }
   }
 
-  if (!retomarSePuder()) init();
+  if (!retomarSePuder()) { enviarPendentesDaHome(); init(); }
 })();
