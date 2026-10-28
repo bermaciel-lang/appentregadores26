@@ -146,7 +146,7 @@
   function retomarSePuder() {
     try {
       const q = new URLSearchParams(window.location.search);
-      if (q.get('escolher') === '1' || q.has('planilha') || q.has('painel')) return false;
+      if (q.get('escolher') === '1') return false;
       const saved = api.getSavedDriverName();
       if (!saved || !api.temToken(saved) || !api.turnoEscolhidoHoje()) return false;
       if (!api.inicioConfirmado(saved) || api.fimConfirmado(saved)) return false;

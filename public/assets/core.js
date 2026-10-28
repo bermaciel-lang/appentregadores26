@@ -249,18 +249,13 @@ function buildMapsUrl(item) {
     return e;
   }
   // Login por PIN. Devolve { ok, token, nome } ou { ok:false, error }. Não anexa token (não tem ainda).
+  // ⛔ 28/10/2026 — O PIN NÃO VAI MAIS NA URL. Ia por GET (`?action=login&pin=1234`), e URL acaba em log (Vercel, Caddy, painel).
+  // Agora vai no CORPO de um POST pelo mesmo proxy (`api/painel.js` já repassa POST com JSON; o POST do painel converte o corpo em
+  // parâmetros e chama o mesmo `executar`). Mesmo contrato de resposta, mesma tentativa extra. Ver `apiGet`: login nunca vira GET.
   async function apiLogin(nome, pin) {
     var aparelho = '';
     try { aparelho = (navigator.userAgent || '').slice(0, 120); } catch (e) {}
-    return apiGet({ action: 'login', entregador: nome, pin: pin, aparelho: aparelho }, { retries: 1 });
-  }
-
-  function setAdminAuth(ok) {
-    localStorage.setItem(C.STORAGE_ADMIN_AUTH_KEY, ok ? '1' : '0');
-  }
-
-  function getAdminAuth() {
-    return localStorage.getItem(C.STORAGE_ADMIN_AUTH_KEY) === '1';
+    return apiPost({ action: 'login', entregador: nome, pin: pin, aparelho: aparelho }, { retries: 1 });
   }
 
   function cacheKey(key) {
@@ -341,46 +336,7 @@ function buildMapsUrl(item) {
     return cached.value;
   }
 
-  function loadJSONP(url, timeoutMs = C.API_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
-      const callback = 'cb' + Date.now() + Math.floor(Math.random() * 1000);
-      const script = document.createElement('script');
-      let finished = false;
-
-      function cleanup() {
-        if (finished) return;
-        finished = true;
-        try {
-          if (script.parentNode) script.parentNode.removeChild(script);
-        } catch (e) {}
-        try {
-          delete window[callback];
-        } catch (e) {
-          window[callback] = undefined;
-        }
-      }
-
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Tempo esgotado ao chamar a API'));
-      }, timeoutMs);
-
-      window[callback] = (data) => {
-        clearTimeout(timeout);
-        cleanup();
-        resolve(data);
-      };
-
-      script.onerror = () => {
-        clearTimeout(timeout);
-        cleanup();
-        reject(new Error('Erro ao carregar JSONP'));
-      };
-
-      script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + callback;
-      document.body.appendChild(script);
-    });
-  }
+  // (28/10/2026: saiu o `loadJSONP` — só servia ao Apps Script da planilha, aposentado junto com o escape `?planilha=1`.)
 
   // De QUEM é o token que vai nesta chamada. O servidor resolve o entregador PELO TOKEN e IGNORA o
   // nome mandado — então o token tem de ser o de quem FEZ o ato. Um item da fila carrega o nome de
@@ -398,7 +354,7 @@ function buildMapsUrl(item) {
   }
 
   function buildApiUrl(params) {
-    // Aceita URL absoluta (Apps Script) OU caminho same-origin (/api/painel, no override).
+    // Caminho same-origin (/api/painel/, o proxy da Vercel para o painel).
     const url = new URL(C.API_URL, window.location.origin);
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
@@ -443,10 +399,9 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    // Se houver override do painel neste aparelho, posta direto pra ele (cross-origin,
-    // com CORS); senão, usa o proxy do Vercel que fala com o Apps Script antigo.
+    // Sempre o proxy do painel (28/10/2026: o `/api/proxy` do Apps Script antigo saiu do projeto).
     const enviado = tokenParaChamada(body); // o token que VAI nesta chamada (comparado na volta, não relido)
-    const res = await fetch(C.POST_URL || '/api/proxy', {
+    const res = await fetch(C.POST_URL || C.API_URL || '/api/painel/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -466,26 +421,21 @@ async function postJson(body) {
   }
 }
 
-// ===== Espelho pro PAINEL (Etapa C, ponte) =====
-// Manda KM/foto pro NOSSO sistema ALÉM da planilha — pra essas infos aparecerem no painel
-// (Resumo de rotas) sem depender de puxar da planilha depois. Só roda quando este aparelho
-// está no fluxo ANTIGO (planilha): se já estiver no painel (override), o envio principal já
-// vai pra lá e duplicar seria à toa. É BEST-EFFORT: dispara e não espera — não trava o
-// entregador nem falha a ação se o painel estiver fora do ar (a planilha é a fonte principal).
-// Obs.: só espelhamos KM/foto (iniciar/finalizar rota), que casam por data+turno+entregador.
-// Os status de cada entrega (entregue/não) NÃO dá pra espelhar: o "row" da planilha é
-// diferente do id do banco — isso só na virada completa (piloto Etapa C).
-function espelharNoPainel(body) {
-  try {
-    if (usandoPainel()) return;
-    fetch('/api/painel/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(corpoComToken(body)),
-      cache: 'no-store'
-    }).catch(function () {});
-  } catch (e) {}
+// POST com as mesmas tentativas do `apiGet` (só o login usa hoje — o PIN não pode ir na URL). Exceção = sem resposta.
+async function apiPost(body, options) {
+  const opt = options || {};
+  const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try { return await postJson(body); }
+    catch (error) { lastError = error; if (attempt < retries) await sleep(600 * (attempt + 1)); }
+  }
+  throw lastError || new Error('Falha na API');
 }
+// (28/10/2026: saiu o `espelharNoPainel` — espelhava KM/foto da planilha antiga no painel e só rodava fora do painel, o que
+// não acontece mais desde que o escape `?planilha=1` foi aposentado.)
+// Ações que levam segredo (PIN) no pedido: NUNCA na URL (ver `apiLogin`).
+const ACOES_SO_POR_POST = ['login', 'loginAdmin'];
 
   // 🕛 Quando o app NÃO manda `turno`, o painel CHUTA pelo relógio dele — e ele vira TARDE às
   // 12:00 enquanto o app só vira às 14:00 (`turnoPadrao`, linha 6). Nessas 2 horas a marcação de
@@ -521,6 +471,7 @@ function espelharNoPainel(body) {
   }
 
   async function apiGet(paramsOriginais, options) {
+    if (paramsOriginais && ACOES_SO_POR_POST.includes(paramsOriginais.action)) return apiPost(paramsOriginais, options);
     const params = comTurno(paramsOriginais);
     const opt = options || {};
     const url = buildApiUrl(params);
@@ -542,7 +493,7 @@ function espelharNoPainel(body) {
       try {
         // As DUAS frentes de 09/09 entram aqui: o timeout longo da fila (recebimento coletivo
         // consulta até 20 pedidos antes da 1ª gravação) E a limpeza do token recusado.
-        const res = (C.API_MODE === 'json') ? await fetchJson(url, timeoutMs) : await loadJSONP(url, timeoutMs);
+        const res = await fetchJson(url, timeoutMs);
         tratarPrecisaLogin(res, enviado); // token recusado → apaga ESSE token (a home volta a pedir o PIN dele)
         return res;
       } catch (error) {
@@ -876,7 +827,6 @@ async function apiMarcarCancelado(row, obs) {
 
   // Corrige o KM inicial/final já registrado (tipo = 'inicial' | 'final').
   async function apiEditarKm(entregador, tipo, km) {
-    espelharNoPainel({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() });
     return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() }, { retries: 3 });
   }
 
@@ -1533,15 +1483,6 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     const v = c && c.value !== undefined ? c.value : null;
     return Array.isArray(v) ? v : null;
   }
-
-  async function carregarAdminPainel() {
-    const result = await withCache('admin_painel', async () => {
-      const res = await apiGet({ action: 'adminPainel' });
-      if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar painel');
-      return res;
-    });
-    return result;
-  }
   function chaveRotaInfo(entregador) { return 'rotainfo_' + diaSP() + '_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase(); }
   function guardarRotaInfo(entregador, info) { if (info && typeof info === 'object') writeCache(chaveRotaInfo(entregador), info); }
   function lerRotaInfoGuardada(entregador) { const c = readCache(chaveRotaInfo(entregador)); return c && c.value && typeof c.value === 'object' ? c.value : null; }
@@ -1717,8 +1658,6 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     clearDriverToken,
     apiLogin,
     saveEntregasCache,
-    setAdminAuth,
-    getAdminAuth,
     apiGet,
     carregarEntregadores,
     verificarMontagem,
@@ -1730,7 +1669,6 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     apiMarcarEntregue,
     apiMarcarNaoEntregue,
     abrirWhatsapp,
-    carregarAdminPainel,
     agruparEntregas,
     apiIniciarRota,
     apiFinalizarRota,
