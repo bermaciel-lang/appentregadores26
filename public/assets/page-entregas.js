@@ -1734,14 +1734,16 @@ async function handleFinalizarRota() {
     state.refreshTimer = null;
   }
 
+  // 28/10/2026: uma consulta de cada vez (a de 15 s empilhava com 3 tentativas × 15 s), e nada de nova consulta com o aviso aberto.
+  let _cancelEmVoo = false;
   async function verificarCancelamentos() {
-    if (!state.driver || document.visibilityState !== 'visible') return;
+    if (!state.driver || document.visibilityState !== 'visible' || _cancelEmVoo) return;
+    _cancelEmVoo = true;
     try {
       var avisos = await api.carregarCancelamentosDaRota(state.driver);
       for (var i = 0; i < avisos.length; i++) {
         var a = avisos[i], chave = 'cancelamento-entregador:' + a.id + ':' + a.canceladoEm;
         if (sessionStorage.getItem(chave)) continue;
-        sessionStorage.setItem(chave, '1');
         var item = state.items.find(function (x) { return Number(x.row) === Number(a.id); });
         if (item) item.status = 'Cancelado';
         api.saveEntregasCache(state.driver, state.items); renderList();
@@ -1751,10 +1753,14 @@ async function handleFinalizarRota() {
           var LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
           if (LN && LN.schedule) await LN.schedule({ notifications: [{ id: 700000 + (Number(a.id) % 200000), title: titulo, body: corpo, schedule: { at: new Date(Date.now() + 300) } }] });
         } catch (e) {}
-        await AppUI.alerta(corpo, { titulo: titulo, tom: 'danger' });
+        // ⛔ 28/10/2026 — o aviso só conta como VISTO depois que APARECEU (`aoAbrir`; antes era marcado antes de abrir — com a tela
+        // escondida ou um toque duplo no fundo ele sumia sem ninguém ler), e o toque no fundo NÃO fecha: só o "Entendi".
+        await AppUI.alerta(corpo, { titulo: titulo, tom: 'danger', fecharNoFundo: false,
+          aoAbrir: function () { try { sessionStorage.setItem(chave, '1'); } catch (e) {} } });
         break;
       }
     } catch (e) { /* rede/Instabuy: tenta no próximo ciclo sem mexer na rota */ }
+    finally { _cancelEmVoo = false; }
   }
 
   function startCancelRefresh() {

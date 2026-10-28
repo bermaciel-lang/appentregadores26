@@ -17,6 +17,8 @@
 //         muda a cor do botão principal.
 // ====================================================================
 (function () {
+  // Quanto tempo depois de abrir o diálogo os toques passam a valer (28/10/2026, toque duplo). Ver `abrir`.
+  var ESPERA_ANTES_DO_TOQUE_MS = 350;
   // Conta quantos modais estão abertos pra travar/destravar a rolagem do fundo.
   var abertos = 0;
   function travarFundo(travar) {
@@ -88,8 +90,20 @@
 
       var input = card.querySelector('.app-modal-input');
 
-      // Anima a entrada (fade + leve subida) no quadro seguinte.
-      requestAnimationFrame(function () { overlay.classList.add('aberto'); });
+      // ⛔ 28/10/2026 — O TOQUE DUPLO CAÍA NO DIÁLOGO RECÉM-ABERTO. O 1º toque abre o diálogo e o 2º (100–300 ms depois, o dedo
+      // nervoso ou o "toque não pegou") cai NELE: numa opção ("🤝 Entregue em mãos" está bem onde ficava o botão) ou no fundo
+      // (= Cancelar). O quadro ainda está invisível (opacity 0 no CSS até `.aberto`) e já aceita o dedo. Ninguém lê e decide em
+      // 350 ms: até lá, cliques nas opções, nos botões e no fundo são ignorados (o teclado continua valendo).
+      var abertoEm = Date.now();
+      function cedoDemais() { return Date.now() - abertoEm < ESPERA_ANTES_DO_TOQUE_MS; }
+
+      // Anima a entrada (fade + leve subida) no quadro seguinte. `aoAbrir` (28/10/2026) avisa quem pediu QUANDO o diálogo de fato
+      // apareceu (com a tela escondida o quadro só é desenhado quando ela volta) — o aviso de cancelado só conta como visto aí.
+      requestAnimationFrame(function () {
+        overlay.classList.add('aberto');
+        abertoEm = Math.max(abertoEm, Date.now() - 16);
+        if (typeof cfg.aoAbrir === 'function') { try { cfg.aoAbrir(); } catch (e) {} }
+      });
 
       var fechado = false;
       function fechar(valor) {
@@ -113,6 +127,7 @@
 
       // Clique nos botões.
       card.addEventListener('click', function (e) {
+        if (cedoDemais()) { e.preventDefault(); e.stopPropagation(); return; } // o 2º toque do toque duplo não decide nada
         // Opção escolhida (modal de escolha) -> resolve com o "valor" daquela opção.
         var op = e.target.closest('button[data-idx]');
         if (op) { fechar((cfg.opcoes || [])[Number(op.getAttribute('data-idx'))].valor); return; }
@@ -121,8 +136,12 @@
         if (btn.getAttribute('data-acao') === 'ok') confirmar();
         else cancelar();
       });
-      // Toque FORA do quadro = cancelar (no alert, apenas fecha).
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) cancelar(); });
+      // Toque FORA do quadro = cancelar (no alert, apenas fecha). `fecharNoFundo: false` (28/10/2026) = o fundo não fecha: aviso
+      // que o entregador PRECISA ler (pedido cancelado na rua) só sai pelo botão.
+      overlay.addEventListener('click', function (e) {
+        if (e.target !== overlay || cedoDemais() || cfg.fecharNoFundo === false) return;
+        cancelar();
+      });
       // Teclado: Esc cancela, Enter confirma.
       function onTecla(e) {
         if (e.key === 'Escape') { e.preventDefault(); cancelar(); }
@@ -183,7 +202,8 @@
     esperar: esperar,
     alerta: function (mensagem, opc) {
       opc = opc || {};
-      return abrir({ tipo: 'alert', mensagem: mensagem, titulo: opc.titulo, textoOk: opc.textoOk || 'Entendi', tom: opc.tom });
+      return abrir({ tipo: 'alert', mensagem: mensagem, titulo: opc.titulo, textoOk: opc.textoOk || 'Entendi', tom: opc.tom,
+        fecharNoFundo: opc.fecharNoFundo, aoAbrir: opc.aoAbrir });
     },
     confirmar: function (mensagem, opc) {
       opc = opc || {};
