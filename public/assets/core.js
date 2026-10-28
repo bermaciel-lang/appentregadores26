@@ -1652,10 +1652,37 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
       continuar: () => !_processamentoFila && (!continuar || continuar()) });
   }
 
+  // Foto do celular → JPEG menor (canvas), a mesma técnica da foto do KM. 28/10/2026: o anexo do chat subia CRU (foto de 4–12 MB
+  // em base64) e passava do limite de 4,5 MB do corpo na Vercel. Devolve { base64, mimeType, bytes }.
+  function comprimirImagem(file, maxLado, qualidade) {
+    return new Promise((resolve, reject) => {
+      if (!file) { reject(new Error('Arquivo não informado')); return; }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Não foi possível ler o arquivo'));
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Não foi possível carregar a imagem'));
+        img.onload = () => {
+          const lado = Math.max(img.width, img.height) || 1;
+          const escala = Math.min(1, (maxLado || 1280) / lado);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * escala));
+          canvas.height = Math.max(1, Math.round(img.height * escala));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const base64 = (canvas.toDataURL('image/jpeg', qualidade || 0.6).split(',')[1] || '').trim();
+          resolve({ base64, mimeType: 'image/jpeg', bytes: Math.floor(base64.length * 3 / 4) });
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   window.AppEntrega = {
     diaSP,
     contarEnviosPendentes,
     limparLapidesAntigas,
+    comprimirImagem,
     proximaMarca,
     acksRecentesDeStatus,
     esquecerAcksAte,

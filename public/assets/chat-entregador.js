@@ -7,15 +7,46 @@
   var driver = api.getSavedDriverName();
   if (!driver) return;
 
-  var POLL_MS = 8000;
-  var LAST_SEEN_KEY = 'app_entregas_chat_lastseen';
+  // ⛔ 28/10/2026 — O CHAT PERGUNTAVA A CADA 8 s, SEMPRE: com a tela apagada no bolso, com o chat fechado, e uma consulta em cima da
+  // outra quando o sinal estava ruim (cada uma com tentativa extra). Agora: só com a tela VISÍVEL; 8 s com o chat ABERTO e ~30 s
+  // fechado (a mensagem com o app fechado chega pelo push); nunca duas ao mesmo tempo; voltou para a tela → pergunta na hora.
+  var POLL_ABERTO_MS = 8000;
+  var POLL_FECHADO_MS = 30000;
+  // A marca de "lidas" é POR ENTREGADOR (28/10/2026): no celular passado de mão, a do anterior escondia as não lidas do próximo.
+  var LAST_SEEN_KEY_ANTIGA = 'app_entregas_chat_lastseen';
+  var LAST_SEEN_KEY = LAST_SEEN_KEY_ANTIGA + '|' + String(driver).trim().toLowerCase();
   var ultimoId = 0;          // maior id já carregado (base do polling)
   var mensagens = [];        // todas carregadas, em ordem cronológica
+  var idsVistos = {};        // id → 1: a mesma mensagem nunca entra duas vezes (resposta atrasada, envio + consulta)
   var aberto = false;
   var primeiraCarga = true;
 
-  function lastSeen() { try { return Number(localStorage.getItem(LAST_SEEN_KEY) || 0) || 0; } catch (e) { return 0; } }
+  function lastSeen() {
+    try {
+      var v = localStorage.getItem(LAST_SEEN_KEY);
+      if (v === null) { v = localStorage.getItem(LAST_SEEN_KEY_ANTIGA); if (v !== null) localStorage.setItem(LAST_SEEN_KEY, v); } // migra a marca de antes
+      return Number(v || 0) || 0;
+    } catch (e) { return 0; }
+  }
   function setLastSeen(id) { try { localStorage.setItem(LAST_SEEN_KEY, String(id || 0)); } catch (e) {} }
+  // Junta mensagens novas sem repetir id (28/10/2026).
+  function juntar(lista) {
+    var novas = [];
+    (lista || []).forEach(function (m) {
+      if (!m || m.id == null || idsVistos[m.id]) return;
+      idsVistos[m.id] = 1; mensagens.push(m); novas.push(m);
+      if (m.id > ultimoId) ultimoId = m.id;
+    });
+    if (novas.length > 1 || (novas.length && mensagens.length > 1 && mensagens[mensagens.length - 2].id > novas[0].id))
+      mensagens.sort(function (a, b) { return a.id - b.id; });
+    return novas;
+  }
+  // Identificador da mensagem gerado no APARELHO (28/10/2026): a tentativa repetida (resposta perdida) leva o MESMO `cid`, e o servidor
+  // da leva 3 ignora a repetida. O servidor atual ignora o campo.
+  function novoCid() {
+    try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch (e) {}
+    return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
   function ehMinha(m) { return String(m.autor || '').indexOf('entregador:') === 0; }
   function nomeAutor(m) { return ehMinha(m) ? 'Você' : (m.autorNome || 'Central'); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -121,6 +152,7 @@
     aberto = true; overlay.style.display = 'block';
     if (mensagens.length) setLastSeen(mensagens[mensagens.length - 1].id);
     pintarBadge(); render();
+    agendar(0); // abriu: pergunta já (e passa a perguntar a cada 8 s)
     setTimeout(function () { try { inputEl.focus(); } catch (e) {} }, 120);
   }
   function fechar() { aberto = false; overlay.style.display = 'none'; }
@@ -134,9 +166,9 @@
     if (!texto) return;
     inputEl.value = '';
     try {
-      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: texto }, { retries: 2 });
+      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: texto, cid: novoCid() }, { retries: 2 });
       if (r && r.ok && r.mensagem) {
-        mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id;
+        juntar([r.mensagem]);
         setLastSeen(ultimoId); render(); pintarBadge();
       } else { inputEl.value = texto; await AppUI.alerta('Não consegui enviar. Tente de novo.'); }
     } catch (e) { inputEl.value = texto; await AppUI.alerta('Sem conexão pra enviar agora.'); }
@@ -153,8 +185,8 @@
       var faltam = 5 * 60000 - (agora - last);
       if (faltam > 0) { await AppUI.alerta('Você já chamou a atenção faz pouco. Espere ' + Math.ceil(faltam / 60000) + ' min pra chamar de novo.'); return; }
       localStorage.setItem('chat_nudge_last', String(agora));
-      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: NUDGE }, { retries: 2 });
-      if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); if (aberto) render(); }
+      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: NUDGE, cid: novoCid() }, { retries: 2 });
+      if (r && r.ok && r.mensagem) { juntar([r.mensagem]); setLastSeen(ultimoId); if (aberto) render(); }
     } catch (e) {}
   }
   overlay.querySelector('#chatEntNudge').addEventListener('click', enviarNudge);
@@ -163,23 +195,37 @@
   var fileEl = overlay.querySelector('#chatEntFile'), anexoEl = overlay.querySelector('#chatEntAnexo');
   anexoEl.addEventListener('click', function () { fileEl.click(); });
   fileEl.addEventListener('change', function () { var f = fileEl.files && fileEl.files[0]; fileEl.value = ''; if (f) enviarArquivo(f); });
+  // ⛔ 28/10/2026 — A FOTO ANEXADA SUBIA CRUA. Uma foto de câmera (4–12 MB) vira ~1,37× isso em base64, e o corpo passava do limite
+  // de 4,5 MB da Vercel: a foto não chegava ("Não consegui enviar"). Agora a foto é reduzida no aparelho como a do KM (JPEG pelo
+  // canvas, ~1600 px), e o que não é foto (áudio, PDF) tem teto de 3 MB — o que ainda cabe no corpo depois do base64.
+  var LIMITE_ARQUIVO_CRU = 3 * 1024 * 1024;
+  function trocarExtensao(nome, ext) { var n = String(nome || 'foto'); return n.replace(/\.[a-z0-9]+\s*$/i, '') + '.' + ext; }
   async function enviarArquivo(file, btnFb) {
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) { await AppUI.alerta('Arquivo muito grande (máximo 8 MB).'); return; }
+    var ehFoto = /^image\//i.test(String(file.type || '')) && !/gif|svg/i.test(String(file.type || ''));
+    if (!ehFoto && file.size > LIMITE_ARQUIVO_CRU) { await AppUI.alerta('Arquivo muito grande (máximo 3 MB). Foto pode mandar: ela é reduzida sozinha.'); return; }
     var fb = btnFb || anexoEl, fbOrig = fb.textContent; // ⏳ no botão que originou (📎 ou 🎤)
     fb.textContent = '⏳';
     try {
-      var base64 = await new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = rej; fr.readAsDataURL(file); });
+      var base64 = null, nome = file.name || 'arquivo', tipo = null;
+      if (ehFoto && api.comprimirImagem) {
+        try { var c = await api.comprimirImagem(file, 1600, 0.7); base64 = 'data:image/jpeg;base64,' + c.base64; tipo = 'image/jpeg'; nome = trocarExtensao(nome, 'jpg'); }
+        catch (e) { base64 = null; } // não deu para reduzir: vai como veio, se couber
+      }
+      if (base64 === null) {
+        if (file.size > LIMITE_ARQUIVO_CRU) { fb.textContent = fbOrig; await AppUI.alerta('Não consegui preparar esta foto (muito grande). Tente tirar de novo.'); return; }
+        base64 = await new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = rej; fr.readAsDataURL(file); });
+      }
       var ti = (api.getDriverTokenInfo && api.getDriverTokenInfo()) || null;
       // Tipo do arquivo: usa o que o celular deu; se veio vazio/genérico (comum em áudio gravado no
       // Android), deduz pela extensão do nome — assim o áudio sobe tocável (Content-Type certo).
       var tipoBruto = String(file.type || '');
-      var tipo = (tipoBruto && tipoBruto !== 'application/octet-stream') ? tipoBruto
+      if (!tipo) tipo = (tipoBruto && tipoBruto !== 'application/octet-stream') ? tipoBruto
         : (mimeAudioPorNome(file.name) || tipoBruto || 'application/octet-stream');
-      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: file.name || 'arquivo', tipo: tipo };
+      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: nome, tipo: tipo, cid: novoCid() };
       if (ti && ti.token) body.token = ti.token;
       var r = await fetch('/api/painel/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }).then(function (x) { return x.json(); });
-      if (r && r.ok && r.mensagem) { mensagens.push(r.mensagem); if (r.mensagem.id > ultimoId) ultimoId = r.mensagem.id; setLastSeen(ultimoId); render(); }
+      if (r && r.ok && r.mensagem) { juntar([r.mensagem]); setLastSeen(ultimoId); render(); }
       else await AppUI.alerta('Não consegui enviar o arquivo. Tente de novo.');
     } catch (e) { await AppUI.alerta('Sem conexão pra enviar o arquivo agora.'); }
     fb.textContent = fbOrig;
@@ -326,20 +372,23 @@
     document.head.appendChild(st);
   })();
 
+  var puxando = false;
   async function puxar() {
+    if (puxando) return; // nunca duas consultas ao mesmo tempo (28/10/2026)
+    puxando = true;
     try {
-      var r = await api.apiGet({ action: 'mensagens', entregador: driver, apos: ultimoId }, { retries: 1 });
+      var r = await api.apiGet({ action: 'mensagens', entregador: driver, apos: ultimoId }, { retries: 0 });
       if (!r || !r.ok || !Array.isArray(r.mensagens)) { primeiraCarga = false; return; }
-      if (r.mensagens.length) {
-        for (var i = 0; i < r.mensagens.length; i++) { mensagens.push(r.mensagens[i]); if (r.mensagens[i].id > ultimoId) ultimoId = r.mensagens[i].id; }
-        var novaDaCentral = r.mensagens.some(function (m) { return !ehMinha(m); });
+      var chegaram = juntar(r.mensagens); // sem repetir id: a resposta atrasada não duplica a conversa
+      if (chegaram.length) {
+        var novaDaCentral = chegaram.some(function (m) { return !ehMinha(m); });
         if (aberto) { setLastSeen(ultimoId); render(); }
         pintarBadge();
         // "Chamar atenção" recebido da Central → treme/pisca/som (mesmo com o chat aberto). Não na 1ª carga.
-        if (!primeiraCarga && r.mensagens.some(function (m) { return !ehMinha(m) && ehNudge(m); })) chamarAtencaoRecebida();
+        if (!primeiraCarga && chegaram.some(function (m) { return !ehMinha(m) && ehNudge(m); })) chamarAtencaoRecebida();
         if (!aberto && novaDaCentral) {
           // POP-UP (banner) pra mensagem NORMAL (nudge já trata no chamarAtencaoRecebida acima).
-          var ult = r.mensagens.filter(function (m) { return !ehMinha(m) && !ehNudge(m); }).slice(-1)[0];
+          var ult = chegaram.filter(function (m) { return !ehMinha(m) && !ehNudge(m); }).slice(-1)[0];
           if (ult && (!primeiraCarga || naoLidas() > 0)) {
             try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
             mostrarToast(nomeAutor(ult), ult.corpo);
@@ -353,9 +402,26 @@
         }
       }
     } catch (e) { /* silencioso */ }
+    finally { puxando = false; }
     primeiraCarga = false;
   }
 
-  puxar();                       // 1ª carga (pop-up se tiver não-lida)
-  setInterval(puxar, POLL_MS);   // e fica escutando
+  // O relógio do chat (28/10/2026): um só, re-agendado ao fim de cada consulta; parado com a tela escondida.
+  var timerChat = null;
+  function agendar(ms) {
+    if (timerChat) clearTimeout(timerChat);
+    timerChat = setTimeout(ciclo, ms);
+  }
+  async function ciclo() {
+    timerChat = null;
+    if (document.visibilityState === 'hidden') return; // volta pelo visibilitychange
+    await puxar();
+    agendar(aberto ? POLL_ABERTO_MS : POLL_FECHADO_MS);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') agendar(0);
+    else if (timerChat) { clearTimeout(timerChat); timerChat = null; }
+  });
+
+  agendar(0);                    // 1ª carga (pop-up se tiver não-lida) — e fica escutando
 })();
