@@ -62,7 +62,9 @@
     precisaMaquininha: null,
     // ⛔ (revisão independente de 06/10, BLOQUEADOR) o painel JÁ conhece a maquininha? Só pergunta quando o servidor mandou o
     // campo alguma vez (lembrado no aparelho: o Iniciar sem sinal também sabe). Painel antigo = não pergunta nada.
-    servidorMaq: (function () { try { return localStorage.getItem('maq_servidor_v1') === '1'; } catch (e) { return false; } })()
+    servidorMaq: (function () { try { return localStorage.getItem('maq_servidor_v1') === '1'; } catch (e) { return false; } })(),
+    // 28/10/2026 — expandir um cartão pago na porta consultava a Instabuy AO VIVO toda vez: no máximo 1× por parada a cada 2 min.
+    conferidoEm: {}
   };
 
   function lerPgCfg() {
@@ -1475,7 +1477,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       renderList();
       if (act === 'expand') {
         const alvo = state.items.find(x => Number(x.row) === Number(row));
-        if (alvo && alvo.naEntrega) await conferirGrupoValores([alvo]);
+        // 28/10/2026: no máximo 1× por parada a cada 2 min (era a Instabuy ao vivo a cada expandir).
+        const conferidos = state.conferidoEm || (state.conferidoEm = {});
+        if (alvo && alvo.naEntrega && !(Date.now() - (conferidos[Number(row)] || 0) < 2 * 60 * 1000)) {
+          conferidos[Number(row)] = Date.now();
+          await conferirGrupoValores([alvo]);
+        }
       }
       return;
     }
@@ -2059,7 +2066,16 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         try { if (navigator.permissions && navigator.permissions.query) { var r = await navigator.permissions.query({ name: 'geolocation' }); gps = r.state === 'granted' ? 'on' : (r.state === 'denied' ? 'off' : 'desconhecido'); } } catch (e) {}
         try { notif = (typeof Notification === 'undefined') ? 'desconhecido' : (Notification.permission === 'granted' ? 'on' : (Notification.permission === 'denied' ? 'off' : 'desconhecido')); } catch (e) {}
       }
-      api.apiGet({ action: 'permissoes', entregador: state.driver, gps: gps, notif: notif, plataforma: plat }, { retries: 1 });
+      // ⭐ 28/10/2026 — só manda quando MUDA (ou a cada 12 h, para outro aparelho do mesmo entregador não deixar o painel com o
+      // estado dele para sempre). Era uma chamada a cada abertura da tela, para dizer a mesma coisa.
+      const chave = 'app_permissoes_enviadas_v1|' + String(state.driver || '').trim().toLowerCase();
+      const agora = gps + '|' + notif + '|' + plat;
+      try {
+        const ult = JSON.parse(localStorage.getItem(chave) || 'null');
+        if (ult && ult.v === agora && Date.now() - Number(ult.em || 0) < 12 * 3600 * 1000) return;
+      } catch (e) {}
+      const res = await api.apiGet({ action: 'permissoes', entregador: state.driver, gps: gps, notif: notif, plataforma: plat }, { retries: 0 });
+      if (res && res.ok) { try { localStorage.setItem(chave, JSON.stringify({ v: agora, em: Date.now() })); } catch (e) {} }
     } catch (e) {}
   }
 
@@ -2202,17 +2218,56 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   const btnFecharMapa = document.getElementById('btnFecharMapa');
   if (btnFecharMapa) btnFecharMapa.addEventListener('click', fecharMapa);
 
+  // ⭐ 28/10/2026 — ABRIR NA HORA: com a rota já começada hoje, a lista guardada de HOJE (mesma chave do plano B offline) aparece
+  // antes da rede — com os valores marcados como NÃO conferidos (o modal de dinheiro não confia neles) — e a recarga corre atrás,
+  // sem o esqueleto. Antes: tela de "carregando" até o servidor responder (com sinal ruim, segundos com a mercadoria no carro).
+  function pintarListaGuardada() {
+    if (!state.rotaIniciada || state.rotaFinalizada || !api.lerEntregasGuardadas) return false;
+    const guardada = api.lerEntregasGuardadas(state.driver);
+    if (!guardada || !guardada.length) return false;
+    state.items = guardada.map(function (x) { return Object.assign({}, x, { valorConferido: false }); });
+    const info = api.lerRotaInfoGuardada && api.lerRotaInfoGuardada(state.driver);
+    if (info) state.rotaInfo = info;
+    setLoading(false);
+    renderList();
+    return true;
+  }
+
+  // ⭐ 28/10/2026 — a faxina das lápides da fila (fila-duravel.js `limparLapides`): com o app aberto e PARADO, no máximo 1× a cada
+  // 20 h, em lotes, desistindo da vez se a fila estiver enviando, se houver um ato em curso ou se a tela sumir. Nunca no toque.
+  function agendarFaxinaDasLapides() {
+    try {
+      const chave = 'fila_lapides_faxina_v1';
+      if (Date.now() - Number(localStorage.getItem(chave) || 0) < 20 * 3600 * 1000) return;
+      const ocioso = window.requestIdleCallback ? function (fn) { window.requestIdleCallback(fn, { timeout: 60000 }); } : function (fn) { window.setTimeout(fn, 0); };
+      let tentativas = 0;
+      const livre = function () { return document.visibilityState === 'visible' && !state.sendingAction && !state.sendingRouteAction; };
+      const rodar = function () {
+        if (!livre() || (api.filaEmEnvio && api.filaEmEnvio())) { if (++tentativas < 10) window.setTimeout(function () { ocioso(rodar); }, 60000); return; }
+        api.limparLapidesAntigas(livre).then(function (r) {
+          if (r && !r.interrompida) { try { localStorage.setItem(chave, String(Date.now())); } catch (e) {} }
+          else if (++tentativas < 10) window.setTimeout(function () { ocioso(rodar); }, 60000);
+        }).catch(function (e) { console.warn('[faxina]', e); });
+      };
+      window.setTimeout(function () { ocioso(rodar); }, 30000);
+    } catch (e) {}
+  }
+
   (async function init() {
     if (redirectIfNoDriver()) return;
     if (driverTitle) driverTitle.textContent = state.driver + ' - ' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde'); // nome + turno na faixa azul
     if (driverNameText) driverNameText.textContent = state.driver; // (elemento antigo removido do HTML; no-op)
-    await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
-    reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off
+    // ⛔ 28/10/2026 — a fila sobe ANTES de esperar as permissões: o porteiro de permissões (.apk) segurava o envio inteiro até
+    // alguém tocar em "Permitir". E a lista guardada de hoje já aparece (ver `pintarListaGuardada`).
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
-    carregarTudo(true);
+    const pintouGuardada = pintarListaGuardada();
+    await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
+    reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off (só quando muda)
+    carregarTudo(!pintouGuardada, true);
     startAutoRefresh();
     startCancelRefresh();
     // GPS (28/10/2026): rota em andamento ao abrir a tela (o Android matou o app, o entregador reabriu) → o rastreio volta a ligar.
     if (state.rotaIniciada && !state.rotaFinalizada) { try { ligarRastreio(); } catch (e) {} }
+    agendarFaxinaDasLapides();
   })();
 })();

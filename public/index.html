@@ -5,6 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>App de Entregas</title>
   <meta name="theme-color" content="#0b1f4d" />
+  <!-- ⭐ 28/10/2026 — REABRIR DIRETO NA ROTA SEM ESPERAR OS 7 SCRIPTS. O .apk sempre abre aqui (/); quando a rota deste aparelho
+       está em andamento, a tela de escolha só existia para mandar para /entregas/ depois de baixar/rodar config, gate, fila, core,
+       ui e page-home. Esta é a MESMA regra de page-home.js `retomarSePuder` (rota começada hoje neste turno, não finalizada,
+       entregador com token, usado há < 3 h; ?escolher=1 fica na escolha) — a régua scripts/test-leva2-abertura.mjs confere que as
+       duas decidem igual. Qualquer erro aqui = não redireciona (a home decide como sempre). Chaves: as do core.js/config.js. -->
+  <script>
+  (function () {
+    try {
+      if (new URLSearchParams(location.search).get('escolher') === '1') return;
+      var ls = window.localStorage, nome = String(ls.getItem('app_entregas_driver_name') || '').trim();
+      if (!nome) return;
+      var tokens = JSON.parse(ls.getItem('app_entregas_tokens_v2') || '{}') || {};
+      var leg = JSON.parse(ls.getItem('app_entregas_driver_token') || 'null');
+      var temToken = !!(tokens[nome] && tokens[nome].token) || !!(leg && leg.token && String(leg.nome || '').trim() === nome);
+      if (!temToken) return;
+      var dia = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+      var turno = ls.getItem('app_turno_v1_' + dia);
+      if (!turno) return;
+      if (ls.getItem('montagem_inicio_confirmado_v1_' + dia + '_' + turno + '_' + nome) !== '1') return;
+      if (ls.getItem('rota_fim_confirmado_v1_' + dia + '_' + turno + '_' + nome) === '1') return;
+      var ativ = Number(ls.getItem('app_atividade_v1_' + nome) || 0);
+      if (!(ativ > 0 && Date.now() - ativ < 3 * 3600 * 1000)) return;
+      location.replace('/entregas/');
+    } catch (e) { /* a home decide */ }
+  })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- 06/10/2026: a fonte NÃO segura mais a tela (era CSS externo bloqueando o primeiro desenho; com sinal ruim, segundos de

@@ -286,11 +286,40 @@ function buildMapsUrl(item) {
     } catch (e) {}
   }
 
+  // 🧹 28/10/2026 — As OUTRAS chaves por dia também acumulavam para sempre: a lista de nomes (`entregadores_<dia>_<turno>`), o
+  // turno escolhido (`app_turno_v1_<dia>`), o início/fim confirmados, a maquininha escolhida e as informações da rota. Nenhuma é
+  // lida em outro dia (todas são montadas com o dia de HOJE). Fica a de ontem por folga; mais velhas saem. A FILA (IndexedDB e a
+  // `fila_v1` antiga), o KM/foto pendentes (`rota_pend_*`) e os tokens não têm dia na chave e nunca entram aqui.
+  const PREFIXOS_POR_DIA = ['entregadores_', 'entregas_', 'rotainfo_'].map(p => C.STORAGE_CACHE_PREFIX + p)
+    .concat(['app_turno_v1_', 'montagem_inicio_confirmado_v1_', 'rota_fim_confirmado_v1_', 'maq_escolha_v1_']);
+  function limparChavesDeDiasAntigos() {
+    try {
+      const hoje = diaSP();
+      const ontem = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(Date.now() - 864e5));
+      const velhas = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const prefixo = PREFIXOS_POR_DIA.find(p => k.indexOf(p) === 0);
+        if (!prefixo) continue;
+        const dia = k.slice(prefixo.length, prefixo.length + 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dia) && dia !== hoje && dia !== ontem) velhas.push(k);
+      }
+      for (const k of velhas) { try { localStorage.removeItem(k); } catch (e) {} }
+      return velhas.length;
+    } catch (e) { return 0; }
+  }
+
+  // ⛔ 28/10/2026 — `setItem` com o localStorage CHEIO lançava QuotaExceededError e derrubava quem chamou — no toque, DEPOIS de a
+  // fila já ter gravado: a tela dizia "Não foi possível concluir essa ação" para uma entrega guardada. O cache é só conforto (a
+  // fonte é a fila): cheio → faxina das chaves de dias antigos e tenta de novo uma vez; se ainda não couber, segue sem cache.
   function writeCache(key, value) {
-    localStorage.setItem(cacheKey(key), JSON.stringify({
-      ts: Date.now(),
-      value
-    }));
+    const texto = JSON.stringify({ ts: Date.now(), value });
+    try { localStorage.setItem(cacheKey(key), texto); return true; }
+    catch (e) {
+      limparChavesDeDiasAntigos(); limparCacheEntregasDeOutrosDias();
+      try { localStorage.setItem(cacheKey(key), texto); return true; } catch (e2) { return false; }
+    }
   }
 
   function readCache(key) {
@@ -732,6 +761,7 @@ async function carregarEntregasPorEntregador(entregador, opcoes) {
     const anteriores = ultimoCache && Array.isArray(ultimoCache.value) ? ultimoCache.value : [];
     const items = (Array.isArray(res.items) ? res.items : []).map(item => manterValorMaisRecente(item, anteriores));
     saveEntregasCache(entregador, items);
+    if (res.rotaInfo) guardarRotaInfo(entregador, res.rotaInfo);
 
     return {
       data: items,
@@ -1488,10 +1518,20 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
 }
 
 
+  // A faxina das chaves de outros dias roda UMA vez por abertura (28/10/2026): antes ela varria o localStorage inteiro a cada
+  // toque (o toque gravava o cache, e o cache varria). Gravar continua sendo uma vez por ato (page-entregas.js).
+  let _faxinaFeita = false;
   function saveEntregasCache(entregador, items) {
-    limparCacheEntregasDeOutrosDias();
+    if (!_faxinaFeita) { _faxinaFeita = true; limparCacheEntregasDeOutrosDias(); limparChavesDeDiasAntigos(); }
     const cacheName = chaveCacheEntregas(entregador);
-    writeCache(cacheName, Array.isArray(items) ? items : []);
+    return writeCache(cacheName, Array.isArray(items) ? items : []);
+  }
+  // ⭐ 28/10/2026 — ABRIR NA HORA: a lista guardada de HOJE (mesma chave do plano B offline: dia + turno + entregador) e as
+  // informações da rota (KM/foto), para a tela pintar antes da rede quando a rota já começou. A recarga corre atrás.
+  function lerEntregasGuardadas(entregador) {
+    const c = readCache(chaveCacheEntregas(entregador));
+    const v = c && c.value !== undefined ? c.value : null;
+    return Array.isArray(v) ? v : null;
   }
 
   async function carregarAdminPainel() {
@@ -1502,6 +1542,11 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     });
     return result;
   }
+  function chaveRotaInfo(entregador) { return 'rotainfo_' + diaSP() + '_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase(); }
+  function guardarRotaInfo(entregador, info) { if (info && typeof info === 'object') writeCache(chaveRotaInfo(entregador), info); }
+  function lerRotaInfoGuardada(entregador) { const c = readCache(chaveRotaInfo(entregador)); return c && c.value && typeof c.value === 'object' ? c.value : null; }
+
+  // (28/10/2026: saiu o `carregarAdminPainel` junto com a página /admin — a tela de administração de verdade é a do painel.)
 
   function agruparEntregas(items) {
     const lista = Array.isArray(items) ? items : [];
@@ -1597,14 +1642,27 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     return { fila: n, rota, total: n + rota, conhecida: fila !== null && fila !== undefined };
   }
 
+  // ⭐ 28/10/2026 — a faxina das lápides (fila-duravel.js `limparLapides`): só ato confirmado há mais de 3 dias, e parando sozinha
+  // se a fila voltar a enviar (a tela chama com o app aberto e parado).
+  const IDADE_LAPIDE_MS = 3 * 24 * 3600 * 1000;
+  async function limparLapidesAntigas(continuar) {
+    await filaPronta();
+    if (!bancoFila.limparLapides) return { apagadas: 0 };
+    return bancoFila.limparLapides({ antesDe: Date.now() - IDADE_LAPIDE_MS,
+      continuar: () => !_processamentoFila && (!continuar || continuar()) });
+  }
+
   window.AppEntrega = {
     diaSP,
     contarEnviosPendentes,
+    limparLapidesAntigas,
     proximaMarca,
     acksRecentesDeStatus,
     esquecerAcksAte,
     filaEmEnvio,
     ehSaiuDaRota,
+    lerEntregasGuardadas,
+    lerRotaInfoGuardada,
     temToken,
     fimConfirmado,
     guardarFimConfirmado,

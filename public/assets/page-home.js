@@ -141,6 +141,8 @@
   // hoje neste turno (confirmado pelo servidor), não foi finalizada, e o app foi usado nas últimas 3 h. Celular passado para outro
   // entregador depois do turno, rota que acabou, ou o escape de emergência (?planilha=1 / ?painel=0) → a tela de escolha, como
   // sempre.
+  // ⚠️ 28/10/2026: a MESMA regra roda antes, no <head> do index.html (sem esperar os 7 scripts) — a régua
+  // scripts/test-leva2-abertura.mjs confere que as duas decidem igual. Mexeu aqui, mexa lá.
   function retomarSePuder() {
     try {
       const q = new URLSearchParams(window.location.search);
