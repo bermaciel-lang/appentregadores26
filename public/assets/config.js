@@ -1,9 +1,15 @@
-// Valores BASE = fluxo ANTIGO (planilha/Apps Script). Servem de ROLLBACK: se um aparelho voltar
-// pro antigo, é isto que vale.
+// Configuração do app de entregas. Todo aparelho fala com o NOSSO sistema (o painel) pelo proxy same-origin /api/painel/
+// (api/painel.js na Vercel).
+//
+// ⛔ 28/10/2026 — SAIU O FLUXO ANTIGO. Este arquivo ainda levava a URL do Apps Script da planilha (o "rollback" de 19/06), o modo
+// JSONP, a senha '1234' da página /admin e o escape de emergência `?planilha=1` / `?painel=0`. O escape não era inofensivo: um
+// acesso com ele mandaria a FILA do aparelho (entregas, pagamentos) para a planilha morta. A planilha, o /admin, o /painel e os
+// proxies antigos (api/proxy.js, api/painel-data.js) saíram do projeto (decisão do dono). A tela de administração de verdade é a
+// do painel. Rollback de verdade = reverter o commit.
 window.APP_CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbytI4amCTInP7RB0nJb0PIOHt85YK3_L_7ZTJsv4IpnCZKNvbRYAVFzd2HXGevki5ls/exec',
-  API_MODE: 'jsonp',
-  ADMIN_PASSWORD: '1234',
+  API_URL: '/api/painel/',
+  POST_URL: '/api/painel/',
+  API_MODE: 'json', // o proxy responde JSON puro
   REFRESH_INTERVAL_MS: 60000,
   GPS_THROTTLE_MS: 30000,
   API_TIMEOUT_MS: 15000,
@@ -11,7 +17,6 @@ window.APP_CONFIG = {
   CACHE_TTL_MS: 300000,
   STORAGE_DRIVER_KEY: 'app_entregas_driver_name',
   STORAGE_TOKEN_KEY: 'app_entregas_driver_token',
-  STORAGE_ADMIN_AUTH_KEY: 'app_entregas_admin_auth',
   STORAGE_CACHE_PREFIX: 'app_entregas_cache_v3_',
   // Porteiro de permissões (gate.js): só abre o app (no .apk Android) se LOCALIZAÇÃO e
   // NOTIFICAÇÕES estiverem ativadas. Kill-switch: pôr false desliga o porteiro na hora
@@ -23,36 +28,9 @@ window.APP_CONFIG = {
   GRAVAR_AUDIO_ATIVO: false
 };
 
-// ====================================================================
-// VIRADA FORÇADA (Bernardo, 19/06/2026): TODOS os aparelhos vão pro NOSSO SISTEMA (painel),
-// via proxy same-origin /api/painel/. O rollback POR APARELHO (flag `app_planilha`) foi
-// APOSENTADO: mesmo um celular que tinha ficado PRESO no fluxo antigo é trazido pro sistema
-// no próximo carregamento (a gente apaga o flag). Sobrou só um escape de EMERGÊNCIA, NÃO
-// grudento: abrir com ?planilha=1 usa o Apps Script SÓ naquele acesso e não fixa nada —
-// recarregou normal, volta pro sistema. (Rollback de verdade agora = reverter este commit.)
-//
-// `app_api_url_override` = '/api/painel/' segue sendo o que o usandoPainel() lê (sync-reversa,
-// espelho, UI), então no padrão a gente GRAVA ela.
-// ====================================================================
+// `app_api_url_override` = '/api/painel/' é o que `usandoPainel()` (core.js) lê — gravado sempre. E some qualquer rollback antigo
+// que tenha ficado preso no aparelho (`app_planilha`).
 try {
-  var _q = new URLSearchParams(location.search);
-  var _emergenciaAntigo = (_q.get('planilha') === '1' || _q.get('painel') === '0');
-  localStorage.removeItem('app_planilha'); // limpa qualquer rollback que tenha ficado preso
-  if (_emergenciaAntigo) {
-    // EMERGÊNCIA: fluxo antigo (Apps Script) só neste acesso — não grava override, não fica preso.
-    localStorage.removeItem('app_api_url_override');
-  } else {
-    // PADRÃO FORÇADO = sistema (painel).
-    localStorage.setItem('app_api_url_override', '/api/painel/');
-    window.APP_CONFIG.API_URL = '/api/painel/';
-    window.APP_CONFIG.POST_URL = '/api/painel/';
-    window.APP_CONFIG.API_MODE = 'json'; // proxy same-origin responde JSON puro (não dá JSONP)
-  }
-} catch (e) {
-  // Se algo falhar, ainda assim força o sistema (não cai no Apps Script por acidente).
-  try {
-    window.APP_CONFIG.API_URL = '/api/painel/';
-    window.APP_CONFIG.POST_URL = '/api/painel/';
-    window.APP_CONFIG.API_MODE = 'json';
-  } catch (e2) {}
-}
+  localStorage.removeItem('app_planilha');
+  localStorage.setItem('app_api_url_override', '/api/painel/');
+} catch (e) { /* sem localStorage: o app segue no painel do mesmo jeito (a URL acima) */ }

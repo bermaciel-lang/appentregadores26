@@ -124,18 +124,26 @@
 
   // O modal só aparece quando o SERVIDOR mandou perguntar (cofre ≥ 1) E o pedido é pago na porta.
   // Cofre em 0 = nada muda no app (rollback sem deploy).
+  // 28/10/2026: reposição/entrega manual (`rep:`/`manual:`) não tem pedido de venda — o servidor SEMPRE recusa a confirmação
+  // ("parada-sem-pedido"). Perguntar só fazia o entregador responder à toa e deixava uma recusa de dinheiro na fila.
+  function ehExtra(item) { return /^\s*(rep|manual):/i.test(String((item && item.pedido) || '')); }
   function devePerguntar(cfg, item) {
+    if (ehExtra(item)) return false;
     return !!(cfg && cfg.perguntar === true && item && item.naEntrega);
   }
 
   // Irmãs pagas na porta (mesmo cliente+endereço = mesmo `numero`), sem repetir row.
-  function irmasNaPorta(irmas) {
+  // 28/10/2026: `rowTocado` (opcional) = a parada que o entregador tocou; ela nunca sai daqui por ser "Saiu da minha rota" (ele
+  // pode estar corrigindo justamente essa). As OUTRAS que saíram da rota (servidor novo: "Não entregue" + o marcador na observação)
+  // não entram na soma da porta, nem as reposições/manuais.
+  function irmasNaPorta(irmas, rowTocado) {
     var vistas = {}, out = [];
     (Array.isArray(irmas) ? irmas : []).forEach(function (x) {
-      if (!x || !x.naEntrega) return;
+      if (!x || !x.naEntrega || ehExtra(x)) return;
       // 21/10/2026: pedido CANCELADO ou que SAIU DA ROTA nunca entra na soma da porta (caso Faní: R$ 233,70 por um de R$ 116,85).
       if (/cancel|removid/i.test(String(x.status || ''))) return;
       var r = Number(x.row);
+      if (r !== Number(rowTocado) && (x._saiuDaRota || /saiu da rota do entregador/i.test(String(x.observacaoPedido || '')))) return;
       if (vistas[r]) return;
       vistas[r] = 1; out.push(x);
     });
@@ -252,6 +260,10 @@
     if (r.grupo && Array.isArray(r.grupoRows) && r.grupoRows.length) p.pg_grupo_rows = r.grupoRows.map(Number).filter(function (n) { return n > 0; }).join(',');
     if (r.obs) p.pg_obs = String(r.obs).slice(0, 200);
     if (r.naoSei) p.pg_naosei = 1;
+    // ⭐ 28/10/2026 — `pg_valor_visto`: o valor DESTA parada com que o modal foi montado (o que o entregador leu na tela; no grupo,
+    // a soma exibida = soma dos `pg_valor_visto` das paradas do mesmo ts_device). Vazio = o modal não mostrou valor (não conferido).
+    // Contrato com o servidor da leva 3 (comparar com o valor do pedido na hora da gravação); o servidor atual ignora o campo.
+    if (r.valorVisto !== undefined) p.pg_valor_visto = valorParaServidor(r.valorVisto);
     // 06/10/2026 — a pergunta única: `pg_forma` é a OPÇÃO (maquininha/dinheiro/cheque/pix/nao-pagou) e o valor vai
     // VAZIO de propósito: o servidor completa com o valor do pedido (resolverRespostaSimples, no painel).
     if (r.simples) { p.pg_simples = 1; p.pg_valor = ''; p.pg_digitado = 0; delete p.pg_cartao_agrupado; delete p.pg_operadora; delete p.pg_grupo; delete p.pg_grupo_rows; }
@@ -298,23 +310,39 @@
       return { valor: o, rotulo: BOTAO_SIMPLES[o].rotulo, tom: BOTAO_SIMPLES[o].tom };
     });
   }
+  // ⭐ 28/10/2026 (revisão da leva 2) — DE QUAL PEDIDO É O VALOR. Tocando no pedido pago online, o modal abre com a irmã paga na
+  // porta (pagamento decidido pelo grupo) — e dizia só "Valor do pedido: R$ X", sem dizer QUAL. Quando a tocada não está entre as
+  // perguntadas, a 1ª linha diz: "Pedido LOJA-2 — o LOJA-1 é pago online". Sem rede.
+  function nomeDoPedido(x) { return String((x && (x.pedido || x.cliente)) || ('parada ' + (x && x.row))); }
+  function linhaDeQualPedido(tocado, grupo) {
+    if (!tocado || !grupo || !grupo.length) return '';
+    if (grupo.some(function (x) { return Number(x.row) === Number(tocado.row); })) return '';
+    var nomes = grupo.map(nomeDoPedido);
+    var lista = nomes.length > 1 ? nomes.slice(0, -1).join(', ') + ' e ' + nomes[nomes.length - 1] : nomes[0];
+    var porque = tocado.naEntrega ? 'não é cobrado aqui' : 'é pago online';
+    return (grupo.length > 1 ? 'Pedidos ' : 'Pedido ') + lista + ' — o ' + nomeDoPedido(tocado) + ' ' + porque;
+  }
   async function perguntarSimples(ctx) {
     var item = ctx.item, ui = ctx.ui;
-    var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item]);
+    var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item], item && item.row);
     if (!grupo.length) grupo = [item];
     var soma = grupo.reduce(function (s, x) { return s + (isFinite(Number(x.valor)) ? Number(x.valor) : 0); }, 0);
     var temValor = grupo.every(function (x) { return x.valor != null && x.valor !== '' && isFinite(Number(x.valor)); });
     var linhaValor = temValor ? '\n\nValor ' + (grupo.length > 1 ? 'dos ' + grupo.length + ' pedidos' : 'do pedido') + ': ' + fmtBRL(soma) : '';
+    // ⭐ 28/10/2026 — o valor que a tela tem pode ser o do cache (sem sinal, consulta falhou): o modal AVISA, em vez de afirmar.
+    if (temValor && grupo.some(function (x) { return x.valorConferido === false; }))
+      linhaValor += '\n⚠️ Valor não conferido agora (sem sinal ou consulta falhou) — confira no pedido antes de cobrar.';
     var esc;
     try {
       // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
-      esc = await ui.escolher(linhaValor.trim(), opcoesSimples(ctx.cfg),
+      esc = await ui.escolher([linhaDeQualPedido(ctx.tocado, grupo), linhaValor.trim()].filter(Boolean).join('\n\n'), opcoesSimples(ctx.cfg),
         { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
     } catch (e) { esc = null; }
     if (cancelou(esc) || !BOTAO_SIMPLES[esc]) return { porRow: {}, manteve: false, cancelado: true };
     var out = { porRow: {}, manteve: false, cancelado: false };
     grupo.forEach(function (x) {
-      out.porRow[Number(x.row)] = { forma: esc, simples: true, valor: null, digitado: false };
+      var visto = temValor && isFinite(Number(x.valor)) ? Number(x.valor) : null;
+      out.porRow[Number(x.row)] = { forma: esc, simples: true, valor: null, digitado: false, valorVisto: visto };
     });
     return out;
   }
@@ -323,9 +351,9 @@
     var item = ctx.item, ui = ctx.ui, formas = formasPermitidas((ctx.cfg || {}).formas);
     var out = { porRow: {}, manteve: false, cancelado: false };
     try {
-      var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item]);
+      var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item], item && item.row);
       if (!grupo.length) grupo = [item];
-      grupo.soma = grupo.reduce(function (s, x) { return s + Number(x.valor || 0); }, 0);
+      grupo.soma =grupo.reduce(function (s, x) { return s + Number(x.valor || 0); }, 0);
       var anteriorValido = respostaCompleta(ctx.anterior, formas);
       if (ctx.anterior && anteriorValido) {
         var esc = await ui.escolher('Você já informou: ' + fraseResposta(ctx.anterior, formas) + '\nQuer manter ou corrigir?', [
@@ -336,17 +364,20 @@
       }
       for (var i = 0; i < grupo.length; i++) {
         var r = await perguntarUm(grupo[i], ui, formas, i === 0 && !ctx.anterior ? grupo : null,
-          grupo.length > 1 ? (i + 1) + ' de ' + grupo.length + ' · ' : '', !!ctx.anterior);
+          grupo.length > 1 ? (i + 1) + ' de ' + grupo.length + ' · ' : '', !!ctx.anterior, i === 0 ? linhaDeQualPedido(ctx.tocado, grupo) : '');
         if (!r) return { porRow: {}, manteve: false, cancelado: true };
         if (r.tudo) {
           var chaveGrupo = String(Number(item.row)) + ':' + String(ctx.tsDevice || '');
           var rowsGrupo = grupo.map(function (x) { return Number(x.row); });
           grupo.forEach(function (x) {
             out.porRow[Number(x.row)] = { forma: x.pgFormaChave, operadora: x.pgOperadora || null,
-              valor: grupo.soma, digitado: false, grupo: chaveGrupo, grupoRows: rowsGrupo, cartaoAgrupado: cartao(x.pgFormaChave) };
+              valor: grupo.soma, digitado: false, grupo: chaveGrupo, grupoRows: rowsGrupo, cartaoAgrupado: cartao(x.pgFormaChave),
+              valorVisto: valorConfirmado(x) ? Number(x.valor) : null };
           });
           return out;
         }
+        // 28/10/2026: o valor do pedido que esta tela mostrou ("Pedido R$ X"); não confirmado = a tela não mostrou valor.
+        if (r.valorVisto === undefined) r.valorVisto = valorConfirmado(grupo[i]) ? Number(grupo[i].valor) : null;
         out.porRow[Number(grupo[i].row)] = r;
       }
       return out;
@@ -356,10 +387,10 @@
     }
   }
 
-  async function perguntarUm(item, ui, formas, grupo, pos, direto) {
+  async function perguntarUm(item, ui, formas, grupo, pos, direto, aviso) {
     for (var volta = 0; volta < MAX_VOLTAS; volta++) {
       if (!direto && formaResolvida(item, formas)) {
-        var e = await ui.escolher(mensagemTela1(item, formas), opcoesTela1(item, grupo, formas),
+        var e = await ui.escolher((aviso ? aviso + '\n\n' : '') + mensagemTela1(item, formas), opcoesTela1(item, grupo, formas),
           { titulo: pos + 'Como o cliente pagou?', textoCancelar: 'Cancelar' });
         if (cancelou(e)) return null;
         if (e === 'tudo' && opcoesTela1(item, grupo, formas).some(function (o) { return o.valor === 'tudo'; })) return { tudo: true };

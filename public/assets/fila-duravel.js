@@ -28,13 +28,15 @@
       r.onblocked = () => reject(Error('Outra versão do aplicativo está usando a fila. Reabra as abas de entregas.'));
       r.onsuccess = () => { banco=r.result; banco.onversionchange=()=>banco.close(); resolve(); };
     });
-    function transacao(stores,modo,executar) {
+    function transacao(stores,modo,executar,relaxada) {
       return new Promise((resolve,reject) => {
         let tx,valor,motivo;
         try {
           // Prefere persistência física antes do complete para dados que não podem ser reconstruídos.
+          // `relaxada` só para a faxina das lápides (28/10/2026): perder uma exclusão numa queda de energia só deixa a
+          // lápide onde estava — nada que precise de disco antes do complete.
           tx=modo==='readwrite'
-            ? banco.transaction(stores,modo,{durability:'strict'})
+            ? banco.transaction(stores,modo,{durability:relaxada?'relaxed':'strict'})
             : banco.transaction(stores,modo);
           tx.oncomplete=()=>resolve(valor);
           tx.onabort=()=>reject(motivo || tx.error || Error('A gravação no aparelho foi interrompida.'));
@@ -126,7 +128,8 @@
           if(tipo==='ack'){
             // ACK e resolução das declarações visadas pertencem ao MESMO commit.
             // Legado sem vetor só confirma a própria entrada; relógio não prova sucessão.
-            const tombstone=(x,resolvidaPor)=>({id:x.id,ordem:x.ordem,assinatura:x.assinatura,estado:'ack',ts:x.ts,
+            // `ackEm` (28/10/2026): a hora do ACK, para a faxina saber a idade da lápide (ver `limparLapides`).
+            const tombstone=(x,resolvidaPor)=>({id:x.id,ordem:x.ordem,assinatura:x.assinatura,estado:'ack',ts:x.ts,ackEm:Date.now(),
               ...(resolvidaPor?{resolvidaPor}:{})});
             store.put(tombstone(item));
             if(item.params && item.params.action==='confirmarPagamento' && Array.isArray(item.declaracoesAnteriores)){
@@ -147,6 +150,52 @@
       });
       await atualizarCache();avisar();
     }
+    /* ⭐ 28/10/2026 — A FAXINA DAS LÁPIDES (pedido do dono: "o app tem que continuar muito rápido").
+     * Todo ACK virava lápide para sempre, e `atualizarCache` lê o índice inteiro a cada toque: 📏 Edge, CPU 4×, 20 mil lápides =
+     * 204 ms por leitura e 217 ms por toque (0 lápides: 3 ms e 2 ms). Um entregador chega a 20 mil em menos de um ano.
+     * Aqui saem as lápides de ato confirmado há mais de `antesDe` (o chamador passa ~3 dias), em lotes pequenos e com um respiro
+     * entre eles — o toque nunca espera a faxina inteira. NUNCA sai:
+     *   · item pendente ou recusado (só `estado === 'ack'`);
+     *   · a lápide de um ID que ainda está na fila ANTIGA do localStorage (`chaveLegada`, a `fila_v1`, que a migração nunca apaga):
+     *     é ela que impede `importarLegado` de ressuscitar o ato já confirmado (inserirItens pula ID conhecido). Fila antiga
+     *     ilegível = não apaga nada (sem saber o que ela protege, não arrisca);
+     *   · o que o chamador mandar proteger (`protegidos`).
+     * `continuar()` é consultado antes de cada lote: o app para a faxina quando a fila volta a enviar ou a tela some. */
+    async function limparLapides({ antesDe, protegidos, lote=200, continuar }={}) {
+      await garantir();
+      const corte=Number(antesDe);
+      if (!Number.isFinite(corte)) return { apagadas:0, motivo:'sem data de corte' };
+      const proteger=new Set(protegidos||[]);
+      try {
+        const raw=localStorage.getItem(chaveLegada);
+        const antigos=raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(antigos)) return { apagadas:0, motivo:'fila antiga ilegível' };
+        antigos.forEach(x=>{ if (x && x.id) proteger.add(x.id); });
+      } catch (e) { return { apagadas:0, motivo:'fila antiga ilegível' }; }
+      let apagadas=0, depoisDe=null, lotes=0;
+      for (;;) {
+        if (continuar && !continuar()) return { apagadas, lotes, interrompida:true };
+        const r=await transacao(['itens'],'readwrite',(tx,resultado)=>{
+          const idx=tx.objectStore('itens').index('ordem');
+          const req=depoisDe===null ? idx.openCursor() : idx.openCursor(IDBKeyRange.lowerBound(depoisDe,true));
+          let n=0, vistos=0, ultimo=depoisDe;
+          resultado({ n:0, ultimo, fim:true });
+          req.onsuccess=()=>{
+            const c=req.result;
+            if (!c) { resultado({ n, ultimo, fim:true }); return; }
+            const x=c.value; ultimo=x.ordem; vistos++;
+            const idade=Math.max(Number(x.ackEm)||0, Number(x.ts)||0);
+            if (x.estado==='ack' && idade<corte && !proteger.has(x.id)) { c.delete(); n++; }
+            if (vistos>=lote) { resultado({ n, ultimo, fim:false }); return; }
+            c.continue();
+          };
+        },true);
+        apagadas+=r.n; lotes++; depoisDe=r.ultimo;
+        if (r.fim) break;
+        await new Promise(ok=>setTimeout(ok,0)); // respiro: um toque que chegar agora passa antes do próximo lote
+      }
+      return { apagadas, lotes };
+    }
     async function exclusivo(trabalho) {
       await garantir();
       if (!navigator.locks || !navigator.locks.request) {
@@ -160,7 +209,7 @@
       if(e.key===chaveLegada)ler().catch(error=>{erro=error.message;if(onChange)onChange();});
     });
     return { pronta:garantir,ler,adicionar,ack:id=>alterar(id,'ack'),recusar:(id,motivo)=>alterar(id,'recusa',motivo),
-      marcarReenvio:id=>alterar(id,'reenvio'),exclusivo,
+      marcarReenvio:id=>alterar(id,'reenvio'),exclusivo,limparLapides,
       snapshot:()=>cache===null?null:copiar(cache),estado:()=>({pronta:cache!==null,erro,sincronizacaoDisponivel:!!(navigator.locks&&navigator.locks.request)}),
       fechar:()=>{if(canal)canal.close();if(banco)banco.close();}
     };

@@ -141,10 +141,12 @@
   // hoje neste turno (confirmado pelo servidor), não foi finalizada, e o app foi usado nas últimas 3 h. Celular passado para outro
   // entregador depois do turno, rota que acabou, ou o escape de emergência (?planilha=1 / ?painel=0) → a tela de escolha, como
   // sempre.
+  // ⚠️ 28/10/2026: a MESMA regra roda antes, no <head> do index.html (sem esperar os 7 scripts) — a régua
+  // scripts/test-leva2-abertura.mjs confere que as duas decidem igual. Mexeu aqui, mexa lá.
   function retomarSePuder() {
     try {
       const q = new URLSearchParams(window.location.search);
-      if (q.get('escolher') === '1' || q.has('planilha') || q.has('painel')) return false;
+      if (q.get('escolher') === '1') return false;
       const saved = api.getSavedDriverName();
       if (!saved || !api.temToken(saved) || !api.turnoEscolhidoHoje()) return false;
       if (!api.inicioConfirmado(saved) || api.fimConfirmado(saved)) return false;
@@ -166,6 +168,59 @@
       box.textContent = '⚠️ Marcações guardadas neste aparelho esperando o PIN: ' + presas.map(function (x) { return x.nome + ' (' + x.n + ')'; }).join(', ')
         + '. Quem for, toque no seu nome e digite o PIN — elas sobem sozinhas.';
       box.classList.remove('hidden');
+    } catch (e) {}
+  }
+
+  // ⭐ 28/10/2026 — A HOME TAMBÉM ENVIA. Quem finalizou sem sinal fechava o app achando que "sobe sozinho"; ao reabrir caía aqui, e
+  // a home NÃO enviava a fila: as marcações e o KM/foto só subiam quando ele entrasse de novo na rota. Agora a home dispara o envio
+  // ao abrir (sem esperar nada) e mostra quantos envios ainda estão só neste aparelho, atualizando enquanto sobem.
+  // Devolve quantos envios ADIANTA tentar agora (os que esperam o PIN não contam).
+  function pintarEnviosPendentes() {
+    try {
+      let box = document.getElementById('enviosPendentesBox');
+      const c = api.contarEnviosPendentes ? api.contarEnviosPendentes() : null;
+      const n = c && c.conhecida ? c.total : 0;
+      if (!n) { if (box) box.classList.add('hidden'); return n; }
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'enviosPendentesBox';
+        box.className = 'warning-box';
+        listEl.parentNode.insertBefore(box, listEl.parentNode.firstChild);
+      }
+      // ⛔ (revisão da leva 2) sem o token do entregador (o servidor pediu o PIN de novo e o token foi apagado), o que falta só sobe
+      // depois do PIN: o aviso diz isso (antes falava em internet) e a home não fica tentando à toa.
+      const semPin = Math.min(n, Number(c.semToken) || 0);
+      box.textContent = semPin
+        ? '🔑 ' + (semPin === 1 ? '1 envio deste aparelho espera' : semPin + ' envios deste aparelho esperam') + ' o seu PIN. Toque no seu nome e digite o PIN (os últimos 4 números do seu telefone): aí ' + (semPin === 1 ? 'ele sobe.' : 'eles sobem.')
+          + (n > semPin ? ' Os outros ' + (n - semPin) + ' sobem com o app aberto e internet.' : '')
+        : '⏳ Faltam ' + n + (n === 1 ? ' envio' : ' envios') + ' deste aparelho (entregas, pagamento ou KM/foto). Deixe o app aberto com internet até este aviso sumir.';
+      box.classList.remove('hidden');
+      return n - semPin;
+    } catch (e) { return 0; }
+  }
+  // ⛔ 28/10/2026 (revisão da leva 2) — a home tentava UMA vez: sem sinal naquela hora, nada mais subia até o entregador entrar na
+  // rota. Agora tenta de novo quando a internet volta (`online`), quando a tela volta a aparecer e a cada ~30 s enquanto houver
+  // pendente — e para quando esvazia. Uma tentativa de cada vez (`processarFila` já não sobrepõe).
+  const REPETIR_HOME_MS = 30000;
+  let _repetirHome = null;
+  function tentarEnviarDaHome() {
+    if (_repetirHome) { window.clearTimeout(_repetirHome); _repetirHome = null; }
+    if (document.visibilityState === 'hidden') return; // volta pelo visibilitychange
+    const depois = function () {
+      const n = pintarEnviosPendentes();
+      if (n > 0) _repetirHome = window.setTimeout(tentarEnviarDaHome, REPETIR_HOME_MS);
+    };
+    if (!pintarEnviosPendentes()) return; // nada a mandar, ou tudo esperando o PIN: tentar não adianta (sem o token, o servidor recusa)
+    try { api.processarFila().then(depois, depois); } catch (e) { depois(); }
+  }
+  async function enviarPendentesDaHome() {
+    try {
+      await api.filaPronta();
+      pintarEnviosPendentes();
+      window.addEventListener('fila-entregas-mudou', pintarEnviosPendentes);
+      window.addEventListener('online', tentarEnviarDaHome);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') tentarEnviarDaHome(); });
+      tentarEnviarDaHome();
     } catch (e) {}
   }
 
@@ -202,5 +257,5 @@
     }
   }
 
-  if (!retomarSePuder()) init();
+  if (!retomarSePuder()) { enviarPendentesDaHome(); init(); }
 })();

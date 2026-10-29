@@ -51,7 +51,11 @@
     // entregador, e só é escrito quando o SERVIDOR confirmou o início — então não inventa rota.
     rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1'
                   || (!!savedDriver && api.inicioConfirmado(savedDriver)),
-    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1',
+    // ⛔ 28/10/2026 (revisão da leva 2) — e a rota JÁ FINALIZADA também vem do aparelho (`fimConfirmado`, localStorage, por
+    // dia+turno+entregador, gravado quando o servidor confirmou o fim). Só com o `sessionStorage` (que o Android apaga ao matar o
+    // WebView), reabrir depois do fim religava o GPS e a notificação "Rota em andamento" — o "início confirmado" fica no aparelho.
+    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
+                    || (!!savedDriver && !!api.fimConfirmado && api.fimConfirmado(savedDriver)),
     // Pagamento na porta (05/09): { perguntar, formas } vem do servidor a cada `entregas` fresco;
     // guardado no aparelho para o modal funcionar SEM SINAL (a resposta sobe pela fila offline).
     pgCfg: lerPgCfg(),
@@ -62,7 +66,9 @@
     precisaMaquininha: null,
     // ⛔ (revisão independente de 06/10, BLOQUEADOR) o painel JÁ conhece a maquininha? Só pergunta quando o servidor mandou o
     // campo alguma vez (lembrado no aparelho: o Iniciar sem sinal também sabe). Painel antigo = não pergunta nada.
-    servidorMaq: (function () { try { return localStorage.getItem('maq_servidor_v1') === '1'; } catch (e) { return false; } })()
+    servidorMaq: (function () { try { return localStorage.getItem('maq_servidor_v1') === '1'; } catch (e) { return false; } })(),
+    // 28/10/2026 — expandir um cartão pago na porta consultava a Instabuy AO VIVO toda vez: no máximo 1× por parada a cada 2 min.
+    conferidoEm: {}
   };
 
   function lerPgCfg() {
@@ -357,14 +363,23 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   //   3. DESFAZ só o item recusado: quando o servidor diz não, aquela declaração sai de `pendente`
   //      e a projeção devolve o `statusAnterior` que foi congelado no instante do toque.
   // Sobrevive a fechar o app, trocar de aba e ficar sem sinal, porque a fonte é o IndexedDB.
+  // ⭐ 28/10/2026 — e os ACKs RECENTES por cima, quando a lista em `state.items` foi pedida ANTES deles (core.js
+  // `acksRecentesDeStatus`): o item já saiu da fila, mas a resposta velha do servidor não pode desfazer na tela o que ele aceitou.
   function itensComFila() {
     const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    if (!mapa || !mapa.size) return state.items;
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;
+    if ((!mapa || !mapa.size) && (!acks || !acks.size)) return state.items;
     return state.items.map(function (item) {
-      const p = mapa.get(Number(item.row));
-      if (!p) return item;
+      const p = mapa && mapa.get(Number(item.row));
+      if (!p) {
+        const a = acks && acks.get(Number(item.row));
+        if (!a) return item;
+        return Object.assign({}, item, { status: a.alvo, observacaoPedido: a.obsAlvo || item.observacaoPedido,
+          _saiuDaRota: !!a.saiuDaRota });
+      }
       if (!p.recusado) {
-        return Object.assign({}, item, { status: p.alvo, observacaoPedido: p.obsAlvo || item.observacaoPedido, _fila: p });
+        return Object.assign({}, item, { status: p.alvo, observacaoPedido: p.obsAlvo || item.observacaoPedido, _fila: p,
+          _saiuDaRota: !!p.saiuDaRota });
       }
       // Recusado. Item legado (gravado antes deste commit) não tem `statusAnterior` guardado — aí a
       // tela não inventa um estado anterior: mostra o motivo e mantém o que o servidor diz.
@@ -411,7 +426,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const emAndamento = key === 'start';
     const expandido = state.expandidos.has(row);
     const naFila = item._fila || null;
-    const pendentesLocais = api.filaRowsPendentes();
+    // 28/10/2026: as pendências são calculadas UMA vez por pintura (`pintarLista` põe em `_pendentesDaPintura`); antes cada cartão
+    // copiava a fila inteira de novo (40 cartões = 40 cópias da fila a cada repintura).
+    const pendentesLocais = _pendentesDaPintura !== undefined ? _pendentesDaPintura : api.filaRowsPendentes();
     const filaDisponivel = pendentesLocais !== null;
     const env = estadoDoEnvio(naFila, filaDisponivel && pendentesLocais.has(row), filaDisponivel, state.aguardando, state.semSincronizacao);
     const dis = env.podeTocar ? '' : 'disabled';
@@ -435,7 +452,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-head">'
         + '<span class="dc-num ' + (ok ? 'ok' : 'nofeito') + '">' + (ok ? ic('check', 15) : (item.numero || '')) + '</span>'
         + '<span style="font-size:15px;color:' + (ok ? '#15803d' : '#b91c1c') + ';font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + nome + '</span>'
-        + '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + api.esc(api.statusLabel(item.status)) + '</span>'
+        + '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + api.esc(api.statusLabel(item.status, item)) + '</span>'
         + (naFila ? '<span class="dc-selo" title="guardado no aparelho, enviando">✓</span>' : '')
         + '</div></article>';
     }
@@ -468,7 +485,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-sec">' + pagamentoHtml(item, true) + pgHtml
         + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
         + cong + ovosHtml(item.ovos) + '</div>'
-        + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist">' + prodList + '</div>' : '')
+        + (prods.length ? '<div class="dc-prodhead"><span>Produtos (' + prods.length + ')</span><span style="font-weight:400;display:inline-flex;align-items:center;gap:4px">' + ic('drag', 13) + 'arraste</span></div><div class="dc-prodlist" data-prodrow="' + row + '">' + prodList + '</div>' : '')
         + envioHtml
         + '<div class="dc-btns" style="margin-top:12px">' + btnEntregue + btnNao + '</div>'
         + ((btnDesfazer || btnPgCorrigir) ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + btnPgCorrigir + '</div>' : '')
@@ -542,7 +559,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     if (el) el.innerHTML = !st.pendente ? ''
       : st.desistiu
         ? '<div class="info-rota-linha" style="justify-content:center;color:#b91c1c;font-weight:700;">📷 A foto não subiu. Toque no botão da rota pra enviar de novo, ou avise o supervisor.</div>'
-        : '<div class="info-rota-linha" style="justify-content:center;color:#92400e;font-weight:700;">⏳ KM/foto salvos no aparelho — sobem sozinhos quando a internet voltar</div>';
+        // 28/10/2026: "sobem sozinhos" era meia verdade — com o app FECHADO nada sobe. Diz a condição de verdade.
+        : '<div class="info-rota-linha" style="justify-content:center;color:#92400e;font-weight:700;">⏳ KM/foto guardados no aparelho — sobem com o app aberto e internet</div>';
     return;
     // eslint-disable-next-line no-unreachable
     const ri = state.rotaInfo || {};
@@ -580,25 +598,70 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   }
 
   async function reenviarFoto(tipo) { // 'inicio' | 'fim'
-    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
     const foto = await pedirFotoObrigatoria();
     if (!foto || !foto.base64) { await AppUI.alerta('Nenhuma foto selecionada.', { tom: 'warn' }); return; }
+    // ⛔ 28/10/2026 (revisão da leva 2) — a etapa AINDA está pendente no aparelho (não subiu): troca só a foto DENTRO do pendente
+    // (KM e hora do toque originais), sem `trocarFoto` e sem rede no toque; ela sobe com a fila. Antes o iniciar/finalizar era
+    // chamado de novo e regravava o pendente com KM vazio e a hora da troca. Ver `trocarFotoNoPendente` (core.js).
+    const noPendente = api.trocarFotoNoPendente ? api.trocarFotoNoPendente(tipo, state.driver, foto.base64, foto.mimeType) : null;
+    if (noPendente) {
+      try { renderInfoRota(); } catch (e) {}
+      if (!noPendente.ok) { await AppUI.alerta('Não consegui guardar a foto nova: a memória do aparelho está cheia. A foto anterior continua guardada e sobe normalmente.', { titulo: 'Foto não trocada', tom: 'warn' }); return; }
+      if (noPendente.parado) { await AppUI.alerta('A foto nova ficou guardada no aparelho, mas o envio desta etapa está parado' + (noPendente.recusa ? ' (o sistema recusou: ' + noPendente.recusa + ')' : '') + '. Avise o escritório.', { titulo: 'Foto trocada no aparelho', tom: 'warn' }); return; }
+      agendarEnvio(); // sobe com a fila, sem esperar
+      await AppUI.alerta('Foto trocada ✅\n\nA foto nova fica guardada no aparelho junto com o KM e a hora que você já registrou, e sobe com o app aberto e internet.', { titulo: 'Foto trocada no aparelho', tom: 'success' });
+      return;
+    }
+    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
     try {
+      // ⛔ 28/10/2026 (revisão da leva 2) — TROCAR é pedido explícito (`trocarFoto=1`): o replay do iniciarRota não mexe na foto já
+      // gravada, e a tela dizia "Foto enviada ✅" assim mesmo. Agora só diz isso quando o servidor CONFIRMA a troca
+      // (`fotoTrocada: true`, servidor da leva 3); sem a confirmação, diz a verdade.
       const res = tipo === 'fim'
-        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
-        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType, { trocarFoto: true })
+        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType, { trocarFoto: true });
       if (!res || !res.ok) throw new Error();
       // A foto NÃO se perde mais quando não sobe na hora: fica guardada no aparelho e o app tenta
       // sozinho. Por isso a mensagem não manda mais "tente de novo com sinal melhor" (o entregador
       // costumava ver isso com sinal ótimo, e refazer não adiantava nada).
       if (res.precisaLogin) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone) — aí ela sobe sozinha.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
-      else if (res.semFoto) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nEla sobe sozinha assim que a conexão permitir. Não precisa tirar de novo.', { titulo: 'Guardada — sobe sozinha', tom: 'warn' });
-      else await AppUI.alerta('Foto enviada. ✅', { tom: 'success' });
+      else if (res.semFoto || res.pendenteEnvio) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nEla sobe sozinha quando a conexão permitir, com o app aberto. Não precisa tirar de novo.', { titulo: 'Guardada — sobe sozinha', tom: 'warn' });
+      else if (res.fotoTrocada === true) await AppUI.alerta('Foto enviada. ✅', { tom: 'success' });
+      else await AppUI.alerta('O sistema não confirmou a troca da foto: a foto que já estava pode ter ficado. Avise o escritório.', { titulo: 'Troca da foto não confirmada', tom: 'warn' });
       await carregarTudo(false);
     } catch (e) { await AppUI.alerta('Não foi possível enviar a foto agora.', { tom: 'danger' }); }
   }
 
+  // ⭐ 28/10/2026 — PINTAR NO MÁXIMO UMA VEZ POR QUADRO. Um toque no Entregue de uma porta com 2 pedidos repintava a lista INTEIRA
+  // (innerHTML de todos os cartões) várias vezes seguidas: uma por irmã, mais a da fila que gravou, mais a da trava que soltou — e
+  // cada pintura copiava a fila uma vez por cartão. Agora `renderList()` só AGENDA: todas as chamadas do mesmo quadro viram UMA
+  // pintura no próximo requestAnimationFrame (com a tela escondida ela espera a tela voltar — nada é pintado à toa).
+  let _pinturaAgendada = 0;
+  let _pendentesDaPintura; // as pendências da fila, calculadas 1× por pintura (lidas por `renderEntregaCard`)
   function renderList() {
+    if (_pinturaAgendada) return;
+    const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function (fn) { return window.setTimeout(fn, 16); };
+    _pinturaAgendada = raf(function () { _pinturaAgendada = 0; pintarLista(); }) || 1;
+  }
+
+  // ⭐ 28/10/2026 — RECUSA SEM CARTÃO. A recusa de uma marcação aparece no cartão da parada; quando a parada SAIU da lista (tirada
+  // da rota, movida para outro entregador), não havia cartão nenhum e a recusa sumia calada — e ainda travava a recarga da lista.
+  // Aqui elas ganham uma faixa no topo, com quem era (cliente/pedido guardados no toque) e o "Entendi".
+  function faixaRecusasSemCartao(vista) {
+    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
+    if (!mapa || !mapa.size) return '';
+    const comCartao = new Set(vista.map(function (x) { return Number(x.row); }));
+    const linhas = [];
+    mapa.forEach(function (p, row) {
+      if (!p.recusado || comCartao.has(Number(row))) return;
+      const quem = [p.cliente, p.pedido].filter(Boolean).join(' · ') || ('parada ' + row);
+      linhas.push('<div class="dc-recusa">⚠️ <span><b>' + api.esc(quem) + ':</b> ' + api.esc(p.erro || 'O sistema não aceitou esta marcação.')
+        + '</span><button type="button" class="dc-recusa-ok" data-act="okrecusa" data-row="' + Number(row) + '">Entendi</button></div>');
+    });
+    return linhas.length ? '<div class="recusas-sem-cartao">' + linhas.join('') + '</div>' : '';
+  }
+
+  function pintarLista() {
     // Tudo abaixo lê a VISTA (servidor + fila do aparelho por cima), nunca `state.items` cru:
     // senão o contador e o lembrete de finalizar voltariam atrás a cada poll enquanto houvesse
     // marcação guardada esperando subir.
@@ -609,9 +672,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     atualizarBotoesRota();
     renderInfoRota();
+    const faixa = faixaRecusasSemCartao(vista);
 
     if (!state.rotaIniciada) {
-      sectionsRoot.innerHTML = '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
+      sectionsRoot.innerHTML = faixa + '<div class="empty-box">Clique em "Iniciar entregas" para ver a lista de entregas.</div>';
       sectionsRoot.classList.remove('hidden');
       return;
     }
@@ -619,35 +683,86 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // Lembrete quando todas as entregas estão marcadas (e a rota ainda não foi
     // finalizada). Fica NO TOPO, grande, fixo na tela e clicável (toca = finaliza).
     const todasMarcadas = vista.length > 0 && vista.every(statusResolvido);
-    const lembrete = (todasMarcadas && !state.rotaFinalizada && !state.sendingRouteAction)
+    const lembrete = (todasMarcadas && !state.rotaFinalizada && !state.enviandoFim)
       ? '<button type="button" class="lembrete-finalizar" data-route="finalizar">✅ Todas as entregas marcadas!<br>👉 Toque aqui para FINALIZAR A ROTA</button>'
       : '';
 
     // Botão grande de Finalizar embaixo da lista.
-    const fimEnviando = state.sendingRouteAction;
+    const fimEnviando = !!state.enviandoFim; // 28/10/2026: só durante o ENVIO do fim (a trava do fluxo cobre também o KM e a foto)
     const fimTxt = state.rotaFinalizada ? '✓ Rota finalizada' : (fimEnviando ? '⏳ Enviando…' : '🏁 Finalizar rota');
     const botaoFim = `<button type="button" class="btn-finalizar-bottom ${state.rotaFinalizada ? 'route-success' : ''}" data-route="finalizar" ${state.rotaFinalizada || fimEnviando ? 'disabled' : ''}>${fimTxt}</button>`;
 
-    sectionsRoot.innerHTML = `
+    // A rolagem da lista de produtos de um cartão aberto não volta ao topo a cada repintura (28/10/2026).
+    const rolagens = {};
+    sectionsRoot.querySelectorAll('.dc-prodlist[data-prodrow]').forEach(function (el) { if (el.scrollTop) rolagens[el.getAttribute('data-prodrow')] = el.scrollTop; });
+    _pendentesDaPintura = api.filaRowsPendentes();
+    try {
+      sectionsRoot.innerHTML = `
+      ${faixa}
       ${lembrete}
       <div class="delivery-list">
         ${vista.map(renderEntregaCard).join('')}
       </div>
       ${botaoFim}
     `;
+    } finally { _pendentesDaPintura = undefined; }
+    Object.keys(rolagens).forEach(function (r) {
+      const el = sectionsRoot.querySelector('.dc-prodlist[data-prodrow="' + r + '"]');
+      if (el) el.scrollTop = rolagens[r];
+    });
 
     sectionsRoot.classList.remove('hidden');
   }
 
-  async function carregarTudo(showSkeleton) {
+  /* ⭐ 28/10/2026 — "A TELA VOLTA ATRÁS". `carregarTudo` corria em PARALELO com o envio da fila (poll, voltar ao app, fila
+   * esvaziou, cada um disparava o seu), valia a ÚLTIMA resposta que chegasse, e `state.items = result.data` apagava o que o
+   * aparelho sabia: uma lista pedida ANTES de um ACK, chegando depois dele, repintava a entrega como pendente.
+   * Agora: UMA recarga em voo por vez (quem pede durante uma, ganha outra logo depois, pedida DEPOIS — nunca se perde o pedido);
+   * cada recarga leva a marca do relógio lógico do instante em que foi PEDIDA; resposta de uma recarga mais velha do que a última
+   * aplicada é descartada; e os ACKs recentes (core.js) ficam por cima até chegar uma lista pedida depois deles. O mesmo vale para
+   * o início/fim da rota: uma lista pedida ANTES do Iniciar/Finalizar confirmado não des-inicia nem des-finaliza a tela.
+   * `insistir` = uma tentativa extra de rede (abertura e o ↻); as recargas periódicas vão com zero (o próximo gatilho tenta). */
+  const recarga = { emVoo: null, pendente: false, pendenteSkeleton: false, pendenteInsistir: false, ultimaAplicada: 0 };
+  function carregarTudo(showSkeleton, insistir) {
+    if (recarga.emVoo) {
+      recarga.pendente = true;
+      if (showSkeleton) { recarga.pendenteSkeleton = true; setLoading(true); }
+      if (insistir || showSkeleton) recarga.pendenteInsistir = true;
+      return recarga.emVoo;
+    }
+    recarga.emVoo = (async function () {
+      let sk = !!showSkeleton, ins = !!(insistir || showSkeleton);
+      for (let voltas = 0; voltas < 10; voltas++) {
+        recarga.pendente = false; recarga.pendenteSkeleton = false; recarga.pendenteInsistir = false;
+        await umaRecarga(sk, ins);
+        if (!recarga.pendente) break;
+        sk = recarga.pendenteSkeleton; ins = recarga.pendenteInsistir;
+      }
+    })().finally(function () { recarga.emVoo = null; });
+    return recarga.emVoo;
+  }
+
+  async function umaRecarga(showSkeleton, insistir) {
     if (showSkeleton) setLoading(true);
     errorBox.classList.add('hidden');
 
     try {
       await api.filaPronta(); // hidrata antes de tratar pendência local como inexistente
-      const result = await api.carregarEntregasPorEntregador(state.driver);
+      const pedidoEm = api.proximaMarca ? api.proximaMarca() : 0; // o instante em que a lista foi PEDIDA
+      // (revisão da leva 2) quem grava o cache é a TELA, depois de aplicar, com os ACKs recentes por cima (ver abaixo)
+      const result = await api.carregarEntregasPorEntregador(state.driver, { retries: insistir ? 1 : 0, gravarCache: false });
+      if (pedidoEm && pedidoEm < recarga.ultimaAplicada) return; // chegou depois de uma mais nova: não pinta por cima
+      recarga.ultimaAplicada = pedidoEm;
+      // ACKs anteriores a ESTE pedido já estão na lista do servidor: saem de cima. (Cache não prova nada: não limpa.)
+      if (!result.stale && api.esquecerAcksAte) api.esquecerAcksAte(pedidoEm);
+      const pedidaAntesDaRota = pedidoEm && pedidoEm < (state.marcaRota || 0);
+      const iniciadaAntes = state.rotaIniciada, finalizadaAntes = state.rotaFinalizada;
       state.items = result.data || [];
-      if (result.rotaInfo) state.rotaInfo = result.rotaInfo;
+      // ⛔ (revisão da leva 2) O CACHE GUARDA O QUE A TELA MOSTRA: a lista com os ACKs recentes por cima (e a fila, que de qualquer
+      // jeito é projetada de novo na leitura). Antes ia a lista CRUA desta resposta — pedida, talvez, antes de um ACK — e a
+      // reabertura do app (que pinta o cache antes da rede) mostrava a entrega já confirmada como pendente.
+      if (!result.stale) api.saveEntregasCache(state.driver, itensComFila().map(function (x) { const c = Object.assign({}, x); delete c._fila; return c; }));
+      if (result.rotaInfo && !pedidaAntesDaRota) state.rotaInfo = result.rotaInfo;
       // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
       // modal some do aparelho no próximo poll (rollback sem deploy). No cache (stale) fica a última.
       if (result.pgConfig) { state.pgCfg = result.pgConfig; salvarPgCfg(result.pgConfig); }
@@ -673,7 +788,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       if (result.rotaIniciada && !state.rotaIniciada) {
         state.rotaIniciada = true;
         sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada
+      } else if (api.usandoPainel() && !result.stale && !result.rotaIniciada && state.rotaIniciada && !pedidaAntesDaRota
                  && !(api.temRotaPendenteFase && api.temRotaPendenteFase('inicio'))) {
         // SÓ no fluxo do PAINEL (Etapa C), onde a resposta SEMPRE traz rotaIniciada de verdade.
         // No fluxo ANTIGO (Apps Script) a resposta NÃO traz esse campo (vem false), então isto
@@ -701,12 +816,16 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // "finalizei e depois de um tempo aparece em aberto de novo"): a sessão local (sessionStorage)
       // some quando o Android mata o app em segundo plano, e sem isto o app esquecia que já tinha
       // finalizado mesmo com o servidor já tendo o KM e a foto certinhos.
+      // ⛔ (revisão da leva 2) e o mesmo guarda do bloco de baixo: com o FIM ainda pendente no aparelho, o `false` do servidor não
+      // apaga a marca. Finalizou sem sinal → a recarga (4 s depois) pedia a lista antes de o fim subir → "não finalizada" apagava a
+      // marca → se o Android matasse o app nessa janela, a reabertura religava o GPS e a notificação "Rota em andamento".
       if (result.rotaFinalizada === true) api.guardarFimConfirmado(state.driver, true);
-      else if (result.rotaFinalizada === false && !result.stale) api.guardarFimConfirmado(state.driver, false);
+      else if (result.rotaFinalizada === false && !result.stale && !pedidaAntesDaRota
+               && !(api.temRotaPendenteFase && api.temRotaPendenteFase('fim'))) api.guardarFimConfirmado(state.driver, false);
       if (result.rotaFinalizada && !state.rotaFinalizada) {
         state.rotaFinalizada = true;
         sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada
+      } else if (api.usandoPainel() && !result.stale && result.rotaFinalizada === false && state.rotaFinalizada && !pedidaAntesDaRota
                  && !(api.temRotaPendenteFase && api.temRotaPendenteFase('fim'))) {
         // Mesmo guarda do início: com um "finalizar" ainda na fila do aparelho, o servidor
         // legitimamente não sabe do fim — o `false` dele não desfaz o que está salvo aqui.
@@ -717,6 +836,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         state.rotaFinalizada = false;
         sessionStorage.removeItem('rota_finalizada_' + state.driver);
       }
+
+      // ⛔ (revisão da leva 2) GPS acompanha o que a recarga descobriu: rota que ACABOU de virar finalizada desliga o rastreio (e a
+      // notificação "Rota em andamento"); rota iniciada e não finalizada liga (idempotente — o rastreio ignora se já está ligado).
+      if (state.rotaFinalizada && !finalizadaAntes) { try { pararRastreio(); } catch (e) {} }
+      else if (!result.stale && state.rotaIniciada && !state.rotaFinalizada && (!iniciadaAntes || finalizadaAntes)) { try { ligarRastreio(); } catch (e) {} }
 
       renderList();
 
@@ -746,20 +870,24 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     }
   }
 
+  // 28/10/2026: só MUDA a lista em memória. Quem chama grava o cache UMA vez por ato (`api.saveEntregasCache`) e pinta (`renderList`,
+  // que já junta tudo num quadro) — antes cada irmã gravava a lista inteira no localStorage e repintava a tela inteira.
+  // `nextObs === null` (Desfazer, "Ainda não fui") = volta a observação DO CLIENTE: a nota do toque ("Entregue em mãos") tinha
+  // tomado o lugar dela no cartão, e o Desfazer apagava as duas ('').
   function updateLocalStatus(row, nextStatus, nextObs) {
     const index = state.items.findIndex((x) => Number(x.row) === Number(row));
     if (index < 0) return null;
 
     const previous = Object.assign({}, state.items[index]);
-    state.items[index] = Object.assign({}, state.items[index], {
+    const atual = state.items[index];
+    const obsCliente = Object.prototype.hasOwnProperty.call(atual, 'obsCliente') ? atual.obsCliente : (atual.observacaoPedido || '');
+    state.items[index] = Object.assign({}, atual, {
       status: nextStatus,
       // a tela lê 'observacaoPedido' (mesma chave da API); gravar em 'observacao' fazia a
       // observação digitada sumir até recarregar.
-      observacaoPedido: nextObs !== undefined ? nextObs : state.items[index].observacaoPedido
+      observacaoPedido: nextObs === null ? obsCliente : (nextObs !== undefined ? nextObs : atual.observacaoPedido),
+      obsCliente: obsCliente
     });
-
-    api.saveEntregasCache(state.driver, state.items);
-    renderList();
     return previous;
   }
 
@@ -790,25 +918,38 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     else await reenviarFoto(fase);
   }
 
+  // ⛔ 28/10/2026 — A TRAVA DO INICIAR COBRE O FLUXO INTEIRO. Ela era solta logo depois da conferência da montagem e só voltava
+  // depois do KM e da foto: no meio (a câmera voltando, a foto sendo comprimida — sem diálogo na tela), um 2º toque em "Iniciar"
+  // abria um 2º fluxo em paralelo (outro KM, outra foto). Agora vale do toque até o fim, inclusive o menu de corrigir KM/foto.
   async function handleIniciarRota() {
     if (state.sendingRouteAction) return;
+    state.sendingRouteAction = true;
+    const loadingRota = document.getElementById('loadingRota');
+    const btnIniciarRota = document.getElementById('btnIniciarRota');
+    try { await fluxoIniciarRota(loadingRota, btnIniciarRota); }
+    finally {
+      loadingRota.classList.add('hidden');
+      btnIniciarRota.disabled = false;
+      state.sendingRouteAction = false;
+      renderList();
+    }
+  }
+  async function fluxoIniciarRota(loadingRota, btnIniciarRota) {
     if (state.rotaIniciada) { await menuEditarRota('inicio'); return; } // já iniciada → tocar edita KM/foto
     // Já tem um "iniciar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
     // novo do zero — senão a segunda tentativa SOBRESCREVE a primeira, que ainda nem tentou subir.
     if (api.temRotaPendenteFase && api.temRotaPendenteFase('inicio')) {
-      await AppUI.alerta('Você já iniciou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
+      await AppUI.alerta('Você já iniciou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Com o app aberto e a conexão de volta, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
       return;
     }
-
-    const loadingRota = document.getElementById('loadingRota');
-    const btnIniciarRota = document.getElementById('btnIniciarRota');
 
     // CONFERE A MONTAGEM ANTES de pedir KM e foto. A trava da montagem (08/09) precisa do servidor
     // responder; se ela vier DEPOIS de o entregador digitar o KM e tirar a foto, uma falha de sinal
     // custava tudo o que ele tinha feito (a foto e o KM só existiam na memória — regressão do commit
     // 71d469e). Aqui, se o servidor não responder ou disser que tem pendência, ele ainda não digitou
     // nada: avisa e volta, sem perda. É o mesmo que a tela inicial já faz ao entrar (page-home.js).
-    state.sendingRouteAction = true;
+    // (28/10/2026: é a ÚNICA conferência do app no Iniciar — a 2ª, que core.js repetia antes de subir o KM, saiu: o servidor
+    // confere de novo no próprio `iniciarRota`.)
     loadingRota.textContent = '⏳ Conferindo a montagem da rota…';
     loadingRota.classList.remove('hidden');
     btnIniciarRota.disabled = true;
@@ -823,8 +964,6 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       return;
     } finally {
       loadingRota.classList.add('hidden');
-      btnIniciarRota.disabled = false;
-      state.sendingRouteAction = false;
     }
 
     let km = await pedirKm('Digite a quilometragem inicial do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
@@ -860,17 +999,26 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // ⛔ (revisão independente de 06/10, M2) O KM E A FOTO SÃO GUARDADOS ANTES DO MODAL: `apiIniciarRota` grava no aparelho de
     // forma SÍNCRONA (antes do 1º await) e o envio corre ENQUANTO o entregador escolhe a maquininha. Se o Android matar o app no
     // meio do modal, nada se perde (a regra do 71d469e: nada só na memória depois de uma etapa de gente).
-    state.sendingRouteAction = true;
-
-loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
-loadingRota.classList.remove('hidden');
-btnIniciarRota.disabled = true;
+    loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+    loadingRota.classList.remove('hidden');
 
     const envioInicio = api.apiIniciarRota(state.driver, km, foto ? foto.base64 : '', foto ? foto.mimeType : 'image/jpeg')
       .then(function (r) { return { r: r }; }, function (e) { return { e: e }; });
     try { api.setTurno(api.getTurno()); } catch (e) {} // o turno da rota que ele INICIOU fica fixo (a home reabre nele)
     await escolherMaquininhaNoInicio();
 
+    // ⭐ 28/10/2026 — a lista aparece NA HORA (já está em memória desde a abertura) e a recarga corre atrás, sem segurar o aviso
+    // (era `await carregarTudo` antes do aviso: mais uma ida e volta inteira ao servidor no caminho do entregador).
+    const marcarIniciada = function () {
+      state.rotaIniciada = true;
+      state.rotaFinalizada = false;
+      state.marcaRota = api.proximaMarca ? api.proximaMarca() : 0; // lista pedida antes disto não des-inicia a tela
+      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
+      sessionStorage.setItem('rota_assinatura_' + state.driver, state.items.map(x => x.row).sort().join(','));
+      sessionStorage.removeItem('rota_finalizada_' + state.driver);
+      renderList();
+      carregarTudo(false);
+    };
     try {
       const enviado = await envioInicio;
       if (enviado.e) throw enviado.e;
@@ -888,18 +1036,11 @@ btnIniciarRota.disabled = true;
         throw new Error((res && res.error) || 'Falha ao iniciar rota');
       }
 
-      state.rotaIniciada = true;
-      state.rotaFinalizada = false;
-      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      const assinaturaRota = state.items.map(x => x.row).sort().join(',');
-      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRota);
-      sessionStorage.removeItem('rota_finalizada_' + state.driver);
-
-      await carregarTudo(false);
+      marcarIniciada();
       if (res.precisaLogin) {
         await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem sozinhos logo depois.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
       } else if (res.pendenteEnvio) {
-        await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto sobem sozinhos quando a conexão voltar. Pode fazer as entregas normalmente.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
+        await AppUI.alerta('Rota iniciada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto sobem sozinhos quando a conexão voltar (com o app aberto). Pode fazer as entregas normalmente.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
       } else if (res.semFoto) {
         await AppUI.alerta('Rota iniciada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe sozinha. Não precisa iniciar de novo — pode seguir com as entregas.', { titulo: 'Iniciada — a foto sobe sozinha', tom: 'warn' });
       } else {
@@ -912,21 +1053,13 @@ btnIniciarRota.disabled = true;
         await AppUI.alerta(error.message, { titulo: 'Montagem da rota', tom: 'warn' });
         return;
       }
-      state.rotaIniciada = true;
-      state.rotaFinalizada = false;
-      sessionStorage.setItem('rota_iniciada_' + state.driver, '1');
-      const assinaturaRotaErr = state.items.map(x => x.row).sort().join(',');
-      sessionStorage.setItem('rota_assinatura_' + state.driver, assinaturaRotaErr);
-      sessionStorage.removeItem('rota_finalizada_' + state.driver);
-      await carregarTudo(false);
+      marcarIniciada();
       await AppUI.alerta('Rota iniciada. Houve um problema ao registrar no servidor, mas você já pode fazer as entregas.', { tom: 'warn' });
     } finally {
-loadingRota.classList.add('hidden');
-btnIniciarRota.disabled = false;
-      state.sendingRouteAction = false;
+      // Liga o rastreamento GPS da rota (não trava nada se falhar). 28/10/2026: com o dia e o TURNO certos (`window.getTurno` não
+      // existia: os pontos iam sem turno e sumiam do mapa).
+      try { if (state.rotaIniciada) ligarRastreio(); } catch (e) {}
     }
-    // Liga o rastreamento GPS da rota (não trava nada se falhar).
-    try { if (state.rotaIniciada && window.Rastreio) window.Rastreio.iniciar(state.driver); } catch (e) {}
   }
 
   // ===== MAQUININHA DA ROTA (06/10/2026) =====
@@ -966,65 +1099,85 @@ btnIniciarRota.disabled = false;
     b.classList.toggle('maq-falta', mostrar && !state.maquininha && state.precisaMaquininha !== false);
   }
 
-async function handleFinalizarRota() {
-  if (state.sendingRouteAction) return;
-  if (state.rotaFinalizada) { await menuEditarRota('fim'); return; } // já finalizada → tocar edita KM/foto
-
-  if (!state.rotaIniciada) {
-    await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
-    return;
-  }
-  // Já tem um "finalizar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
-  // novo do zero — é a causa do "mandei foto e ele pede outra": a sessão local esquece o que já foi
-  // feito, mas o que estava salvo (esperando subir) ainda não confirmou, e uma 2ª tentativa SOBRESCREVE.
-  if (api.temRotaPendenteFase && api.temRotaPendenteFase('fim')) {
-    await AppUI.alerta('Você já finalizou a rota — o KM e a foto estão salvos no aparelho, esperando a internet voltar para enviar.\n\nNão precisa fazer de novo. Assim que a conexão voltar, sobe sozinho.', { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
-    return;
-  }
-
-  let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
-  if (km === null) return; // cancelou o KM -> aborta
-
-  let foto = await pedirFotoObrigatoria();
-  if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
-
-  if (foto) {
-    // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
-    if (!km) {
-      km = await pedirKm('Você enviou a foto. Agora informe o KM final do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
-      if (km === null) {
-        await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
-        return; // não salva nada pela metade
-      }
+  // ⛔ 28/10/2026 — A TRAVA DO FINALIZAR COBRE O FLUXO INTEIRO (como o Iniciar): ela só era ligada DEPOIS do KM e da foto, e um 2º
+  // toque no "Finalizar" (ou no lembrete do topo) no meio abria um 2º fluxo. E o texto do fim deixou de prometer o que não acontece:
+  // "pode fechar o app tranquilo, sobe sozinho" — com o app FECHADO nada sobe, e a home nem enviava a fila.
+  async function handleFinalizarRota() {
+    if (state.sendingRouteAction) return;
+    state.sendingRouteAction = true;
+    const loadingRota = document.getElementById('loadingRota');
+    const btnFinalizarRota = document.getElementById('btnFinalizarRota');
+    try { await fluxoFinalizarRota(loadingRota, btnFinalizarRota); }
+    finally {
+      loadingRota.classList.add('hidden');
+      btnFinalizarRota.disabled = false;
+      state.enviandoFim = false;
+      state.sendingRouteAction = false;
+      renderList();
     }
-  } else {
-    // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
-    const segue = await AppUI.confirmar('A foto do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)', {
-      titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
-    });
-    if (!segue) return;
-    // Mesma proteção do iniciar: foto que chegou enquanto a pergunta estava na tela não se perde.
-    const tardia = pegarFotoAtrasada();
-    if (tardia && km) foto = tardia;
   }
+  // "Faltam N envios": o que ainda está SÓ neste aparelho (fila + KM/foto) do entregador da tela. Zero = nada a dizer.
+  function linhaEnviosFaltando() {
+    const c = api.contarEnviosPendentes ? api.contarEnviosPendentes({ soDoAtivo: true }) : null;
+    if (!c || !c.total) return '';
+    return '\n\n⚠️ Faltam ' + c.total + (c.total === 1 ? ' envio' : ' envios') + ' deste aparelho. Abra o app quando tiver internet — com o app fechado nada sobe.';
+  }
+  async function fluxoFinalizarRota(loadingRota, btnFinalizarRota) {
+    if (state.rotaFinalizada) { await menuEditarRota('fim'); return; } // já finalizada → tocar edita KM/foto
 
-  state.sendingRouteAction = true;
+    if (!state.rotaIniciada) {
+      await AppUI.alerta('Clique primeiro em "Iniciar entregas".', { tom: 'warn' });
+      return;
+    }
+    // ⭐ 28/10/2026 — a fila sobe JÁ, no toque: enquanto o entregador digita o KM e tira a foto, as marcações guardadas vão subindo.
+    agendarEnvio();
+    // Já tem um "finalizar" SALVO nesta fase, esperando subir (sem internet ainda)? Não pede foto de
+    // novo do zero — é a causa do "mandei foto e ele pede outra": a sessão local esquece o que já foi
+    // feito, mas o que estava salvo (esperando subir) ainda não confirmou, e uma 2ª tentativa SOBRESCREVE.
+    if (api.temRotaPendenteFase && api.temRotaPendenteFase('fim')) {
+      await AppUI.alerta('Você já finalizou a rota — o KM e a foto estão salvos no aparelho, esperando a internet para enviar.\n\nNão precisa fazer de novo: eles sobem com o app ABERTO e internet.' + linhaEnviosFaltando(), { titulo: 'Já salvo — aguardando envio', tom: 'warn' });
+      return;
+    }
 
-  const loadingRota = document.getElementById('loadingRota');
-  const btnFinalizarRota = document.getElementById('btnFinalizarRota');
+    let km = await pedirKm('Digite a quilometragem final do carro.\n\nNas rotas sem foto, será considerado o KM calculado pelo sistema.');
+    if (km === null) return; // cancelou o KM -> aborta
 
-  loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
-  loadingRota.classList.remove('hidden');
-  btnFinalizarRota.disabled = true;
-  renderList(); // o botão de baixo mostra "⏳ Enviando…"
+    let foto = await pedirFotoObrigatoria();
+    if (!foto) foto = pegarFotoAtrasada(); // chegou depois da rede de segurança? não joga fora
 
-  try {
-    const res = await api.apiFinalizarRota(
-      state.driver,
-      km,
-      foto ? foto.base64 : '',
-      foto ? foto.mimeType : 'image/jpeg'
-    );
+    if (foto) {
+      // REGRA: enviou FOTO -> o KM é OBRIGATÓRIO (antes muitos mandavam só a foto, sem KM).
+      if (!km) {
+        km = await pedirKm('Você enviou a foto. Agora informe o KM final do carro.\n\n(o KM é obrigatório quando há foto)', '', true);
+        if (km === null) {
+          await AppUI.alerta('Como você enviou a foto, o KM é obrigatório.\n\nNada foi enviado — tente de novo informando o KM.', { titulo: 'Falta o KM', tom: 'warn' });
+          return; // não salva nada pela metade
+        }
+      }
+    } else {
+      // SEM foto: o KM pode ficar em branco (usa o calculado). Mas confirma a falta da foto.
+      const segue = await AppUI.confirmar('A foto do KM final NÃO foi enviada.\n\nFinalizar a rota mesmo assim, SEM foto? (avise o supervisor)', {
+        titulo: '⚠️ Sem foto', tom: 'warn', textoOk: 'Finalizar sem foto', textoCancelar: 'Tirar foto',
+      });
+      if (!segue) return;
+      // Mesma proteção do iniciar: foto que chegou enquanto a pergunta estava na tela não se perde.
+      const tardia = pegarFotoAtrasada();
+      if (tardia && km) foto = tardia;
+    }
+
+    state.enviandoFim = true;
+    loadingRota.textContent = 'Enviando, aguarde um momento, não feche a página!';
+    loadingRota.classList.remove('hidden');
+    btnFinalizarRota.disabled = true;
+    renderList(); // o botão de baixo mostra "⏳ Enviando…"
+
+    try {
+      const res = await api.apiFinalizarRota(
+        state.driver,
+        km,
+        foto ? foto.base64 : '',
+        foto ? foto.mimeType : 'image/jpeg'
+      );
 
       // ⛔ 10/09/2026 — O SERVIDOR RESPONDEU E RECUSOU: isso não é falta de sinal, e não pode virar
       // "salvo, sobe sozinho". Antes o entregador fechava o app achando estar resolvido enquanto a
@@ -1038,37 +1191,48 @@ async function handleFinalizarRota() {
         throw new Error((res && res.error) || 'Falha ao finalizar rota');
       }
 
-    state.rotaFinalizada = true;
-    state.rotaIniciada = false;
-    api.guardarFimConfirmado(state.driver, true);
-    sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
-    sessionStorage.removeItem('rota_iniciada_' + state.driver);
-    sessionStorage.removeItem('rota_assinatura_' + state.driver);
-    // Desliga o rastreamento GPS (rota finalizada).
-    try { if (window.Rastreio) window.Rastreio.parar(); } catch (e) {}
+      state.rotaFinalizada = true;
+      state.rotaIniciada = false;
+      state.marcaRota = api.proximaMarca ? api.proximaMarca() : 0; // lista pedida antes disto não des-finaliza a tela
+      api.guardarFimConfirmado(state.driver, true);
+      sessionStorage.setItem('rota_finalizada_' + state.driver, '1');
+      sessionStorage.removeItem('rota_iniciada_' + state.driver);
+      sessionStorage.removeItem('rota_assinatura_' + state.driver);
+      state.enviandoFim = false;
+      // Desliga o rastreamento GPS (rota finalizada) — inclusive o do Android que ficou de uma abertura anterior do app.
+      try { pararRastreio(); } catch (e) {}
+      renderList();
+      carregarTudo(false); // a recarga corre atrás; o aviso não espera por ela
 
-    await carregarTudo(false);
-    if (res.precisaLogin) {
-      await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem sozinhos logo depois.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
-    } else if (res.pendenteEnvio) {
-      // Sem internet AGORA: o KM e a foto FICARAM SALVOS no aparelho e sobem sozinhos quando a conexão
-      // voltar (o app tenta de novo a cada atualização/quando reconecta/ao reabrir). NADA se perde.
-      await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nVocê está sem internet agora — o KM e a foto vão subir sozinhos assim que a conexão voltar. Pode fechar o app tranquilo.', { titulo: 'Salvo — envia sozinho', tom: 'warn' });
-    } else if (res.semFoto) {
-      await AppUI.alerta('Rota finalizada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe sozinha. Não precisa finalizar de novo — pode fechar o app.', { titulo: 'Finalizada — a foto sobe sozinha', tom: 'warn' });
-    } else {
-      await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+      // ⭐ 28/10/2026 — o que AINDA não subiu deste aparelho (a fila disparada no toque já teve o tempo do KM e da foto).
+      const falta = linhaEnviosFaltando();
+      if (res.precisaLogin) {
+        await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone). O KM e a foto sobem logo depois, com o app aberto.' + falta, { titulo: 'Precisa entrar de novo', tom: 'warn' });
+      } else if (res.pendenteEnvio) {
+        // Sem internet AGORA: o KM e a foto FICARAM SALVOS no aparelho. Eles sobem quando o app estiver ABERTO com internet (a home
+        // também envia ao abrir). NADA se perde — mas fechado, nada sobe: o aviso diz quantos faltam.
+        await AppUI.alerta('Rota finalizada e SALVA no aparelho ✅\n\nVocê está sem internet agora. O KM e a foto ficam guardados neste aparelho e sobem quando o app estiver aberto com internet.' + (falta || '\n\nAbra o app quando tiver internet.'), { titulo: 'Salvo — falta enviar', tom: 'warn' });
+      } else if (res.semFoto) {
+        await AppUI.alerta('Rota finalizada e KM salvo ✅\n\nA foto ainda não subiu, mas ficou GUARDADA no aparelho e sobe com o app aberto e internet. Não precisa finalizar de novo.' + falta, { titulo: 'Finalizada — falta a foto', tom: 'warn' });
+      } else if (falta) {
+        await AppUI.alerta('Rota finalizada ✅' + falta, { titulo: 'Falta enviar', tom: 'warn' });
+      } else {
+        await AppUI.alerta('Rota finalizada com sucesso. ✓', { tom: 'success' });
+      }
+    } catch (error) {
+      console.error(error);
+      await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
     }
-  } catch (error) {
-    console.error(error);
-    await AppUI.alerta('Não foi possível finalizar a rota. Tente de novo.', { tom: 'danger' });
-  } finally {
-    loadingRota.classList.add('hidden');
-    btnFinalizarRota.disabled = false;
-    state.sendingRouteAction = false;
-    renderList();
   }
-}
+
+  // GPS da rota (28/10/2026): dia e TURNO certos (antes `window.getTurno`, que não existe — os pontos iam sem turno e sumiam do
+  // mapa), e o parar também desliga o rastreio que o Android manteve de uma abertura anterior do app (rastreio.js).
+  function ligarRastreio() {
+    if (!window.Rastreio) return;
+    window.Rastreio.iniciar(state.driver, api.diaSP ? api.diaSP() : undefined, api.getTurno());
+  }
+  // (revisão da leva 2) o parar leva a rota DESTA tela: desliga só o rastreio dela, nunca o de outro turno/entregador.
+  function pararRastreio() { if (window.Rastreio) window.Rastreio.parar(state.driver, api.diaSP ? api.diaSP() : undefined, api.getTurno()); }
 
   // ===== PAGAMENTO NA PORTA (05/09/2026) — o entregador confirma FORMA e VALOR ao marcar Entregue =====
   // O modal em si mora em pagamento-porta.js (PgPorta). Aqui: quando abre, com o que, e como a
@@ -1139,12 +1303,14 @@ async function handleFinalizarRota() {
   // espera de rede do caminho do dedo sem tirar o valor conferido do modal de dinheiro: com a rede
   // normal a resposta já chegou quando o modal precisa dela. Nunca rejeita; se falhar ou estourar o
   // orçamento, devolve null e o modal abre no modo degradado (o entregador digita o valor).
+  // 28/10/2026: decide pelo GRUPO da porta (a tocada pode ser paga online e a irmã, na porta) — ver `coletarPagamento`.
   function adiantarConferenciaPg(item, irmas) {
     try {
       const Pg = window.PgPorta;
-      if (!Pg || !api.usandoPainel() || !Pg.devePerguntar(state.pgCfg, item)) return null;
+      if (!Pg || !api.usandoPainel()) return null;
       if (state.pgCfg && state.pgCfg.simples && Pg.perguntarSimples) return null; // pergunta única: o valor não é perguntado
-      const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+      const grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item], item && item.row)
+        .filter(function (x) { return Pg.devePerguntar(state.pgCfg, x); });
       if (!grupo.length) return null;
       const p = conferirGrupoValores(grupo);
       return p && p.then ? p.then(function (g) { return g; }, function () { return null; }) : null;
@@ -1159,29 +1325,56 @@ async function handleFinalizarRota() {
    * A loja cancelou o LOJA-2174 com ele na rua e refez o MESMO pedido (LOJA-2324); os dois ficaram seguidos, mesmo cliente e
    * endereço → o MESMO número de parada (16). As irmãs eram "todas com o mesmo número", e o cancelado entrava junto: a pergunta
    * da cobrança somava os dois ("Valor dos 2 pedidos: R$ 233,70" para um pedido de R$ 116,85) e o Entregue tentava marcar o
-   * cancelado também. Agora: mesmo número E não cancelado/saiu da rota. A própria tocada sempre entra. */
-  function irmasAtivas(vista, item) {
-    if (!item || item.numero == null || api.statusKey(item.status) === 'cancel') return [item];
+   * cancelado também. Agora: mesmo número E não cancelado/saiu da rota. A própria tocada sempre entra.
+   * ⛔ 28/10/2026 — E NUNCA ARRASTAM PEDIDO JÁ DECIDIDO (revisão de 28/10). Mesmo endereço, um "Não entregue" (Cliente não estava,
+   * ou o novo "Saiu da minha rota", que o servidor novo grava como "Não entregue") e outro pendente: tocar Entregue no pendente
+   * marcava os DOIS e a pergunta somava "Valor dos 2 pedidos". Agora só entra junto a irmã no MESMO estado da tocada:
+   *   · Iniciar/Entregue (modo padrão): a tocada ABERTA (pendente ou indo) e as irmãs abertas — pendente e indo são a mesma
+   *     família porque o servidor só deixa UM "Indo" por entregador e a irmã que foi junto pode voltar como pendente. Tocada já
+   *     decidida (corrigindo um "Não entregue", por exemplo) → só ela: um decidido nunca muda por tabela;
+   *   · 'mesmoStatus' (Desfazer, "Ainda não fui", corrigir o pagamento): só as irmãs com EXATAMENTE o status da tocada.
+   * Cancelado e "Saiu da minha rota" nunca andam junto, e tocar num deles mexe só nele. Quem grava RECALCULA o grupo logo antes
+   * de gravar (a lista pode ter mudado com o diálogo aberto). Zero rede. */
+  function irmasAtivas(vista, item, modo) {
+    const k = (x) => api.statusKey(x && x.status);
+    const fora = (x) => k(x) === 'cancel' || (api.ehSaiuDaRota ? api.ehSaiuDaRota(x) : /removid/i.test(String((x && x.status) || '')));
+    if (!item || item.numero == null || fora(item)) return [item];
+    const exato = modo === 'mesmoStatus';
+    const aberta = (x) => k(x) === 'pending' || k(x) === 'start';
+    if (!exato && !aberta(item)) return [item];
+    // (revisão da leva 2) "Não entregue" é marcado UM A UM, então também volta um a um: dois "Cliente não estava" da mesma porta,
+    // marcados separados, não podem voltar juntos num Desfazer só.
+    if (exato && k(item) === 'fail') return [item];
     return vista.filter((x) => Number(x.numero) === Number(item.numero)
-      && (Number(x.row) === Number(item.row) || api.statusKey(x.status) !== 'cancel'));
+      && (Number(x.row) === Number(item.row) || (!fora(x) && (exato ? k(x) === k(item) : aberta(x)))));
   }
 
+  /* ⛔ 28/10/2026 — A PERGUNTA DO PAGAMENTO ERA DECIDIDA SÓ PELA TOCADA. Mesma porta, A pago online e B na entrega: Entregue em A
+   * marcava B também, SEM perguntar como B foi pago (o `devePerguntar` olhava só A). Agora decide pelo GRUPO: havendo qualquer
+   * parada paga na porta entre as que vão junto, pergunta — e o modal abre com a tocada se ela for paga na porta, senão com a
+   * primeira paga na porta. E relê cada parada de `state.items` NA HORA (o valor pode ter mudado com os diálogos abertos). */
   async function coletarPagamento(item, irmas, tsDevice, anterior, conferencia) {
     const Pg = window.PgPorta;
+    const base = irmas && irmas.length ? irmas : [item];
     if (!Pg) {
-      if (state.pgCfg && state.pgCfg.perguntar && item.naEntrega) {
+      if (state.pgCfg && state.pgCfg.perguntar && base.some(function (x) { return x && x.naEntrega; })) {
         await AppUI.alerta('Atualize o app para informar o pagamento antes de salvar.', { tom: 'warn' });
         return { cancelado: true, porRow: {} };
       }
       return null;
     }
-    if (!Pg.devePerguntar(state.pgCfg, item)) return null;
-    let grupo = Pg.irmasNaPorta(irmas && irmas.length ? irmas : [item]);
+    const relidos = base.map(function (x) {
+      const atual = x && state.items.find(function (y) { return Number(y.row) === Number(x.row); });
+      return atual ? Object.assign({}, atual, { status: x.status, observacaoPedido: x.observacaoPedido, _fila: x._fila, _saiuDaRota: x._saiuDaRota }) : x;
+    });
+    let grupo = Pg.irmasNaPorta(relidos, item && item.row).filter(function (x) { return Pg.devePerguntar(state.pgCfg, x); });
     if (!grupo.length) return null;
+    let alvo = grupo.find(function (x) { return Number(x.row) === Number(item.row); }) || grupo[0];
+    if (Number(alvo.row) !== Number(item.row)) anterior = pgRespostaAnterior(alvo.row, alvo);
     // ⭐ 06/10/2026 — A PERGUNTA ÚNICA ("O cliente te pagou de alguma forma?"). Nenhuma rede antes dela: o valor não é
     // mais perguntado (o servidor usa o do pedido), então a conferência de valor não precisa mais ficar na frente do dedo.
     if (state.pgCfg && state.pgCfg.simples && Pg.perguntarSimples) {
-      return Pg.perguntarSimples({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice });
+      return Pg.perguntarSimples({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, tocado: item });
     }
     if (api.usandoPainel()) {
       // ⛔ 23/09/2026 (2ª volta) — ESTA ESPERA ERA INVISÍVEL E LONGA: o "Como foi a entrega?"
@@ -1193,10 +1386,14 @@ async function handleFinalizarRota() {
       const conferido = await comEspera('conferindo o valor a receber…', function () {
         return conferencia ? conferencia : conferirGrupoValores(grupo);
       });
-      if (conferido && conferido.length) grupo = conferido;
-      item = grupo.find(x => Number(x.row) === Number(item.row)) || item;
+      if (conferido && conferido.length) {
+        const rows = new Set(grupo.map(function (x) { return Number(x.row); }));
+        const doGrupo = conferido.filter(function (x) { return rows.has(Number(x.row)); });
+        if (doGrupo.length) grupo = doGrupo;
+      }
+      alvo = grupo.find(function (x) { return Number(x.row) === Number(alvo.row); }) || alvo;
     }
-    return Pg.perguntar({ item, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
+    return Pg.perguntar({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined, tocado: item });
   }
 
   // Congela, NO INSTANTE DA GRAVAÇÃO, o estado que a parada tinha ANTES do toque. É isto que
@@ -1204,10 +1401,15 @@ async function handleFinalizarRota() {
   // até lá já pode ter sido recarregada várias vezes). Vive no `meta` do item da fila, que é
   // durável e imutável junto com o payload. Parada que não está na lista não ganha palpite: sem os
   // campos, a projeção cai no que o servidor disser.
+  // 28/10/2026: e QUEM é (cliente/pedido) — a recusa de uma parada que depois saiu da lista ainda diz de quem era (faixa do topo).
+  // (revisão da leva 2) lido da VISTA (fila e ACKs recentes por cima), não de `state.items` cru: com uma lista velha por baixo, a
+  // recusa de um Desfazer devolvia um "anterior" que o servidor já não tinha (pendente, num pedido entregue) e convidava a marcar
+  // de novo.
   function metaDeStatus(row) {
-    const atual = state.items.find(function (x) { return Number(x.row) === Number(row); });
+    const atual = itensComFila().find(function (x) { return Number(x.row) === Number(row); });
     if (!atual) return { row: Number(row) };
-    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '' };
+    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '',
+      cliente: String(atual.cliente || '').slice(0, 80), pedido: String(atual.pedido || '').slice(0, 40) };
   }
 
   // ⭐ O CAMINHO DO DEDO. Grava a intenção na fila durável e volta. NENHUMA rede aqui: é o `await`
@@ -1268,11 +1470,24 @@ async function handleFinalizarRota() {
     }
     return ids;
   }
-  async function enviarRecebimentoGuardado(ids) {
-    const resultado = await api.processarFila();
+  // (revisão da leva 2) `processarFila` devolve só a PASSADA ATUAL. Em segundo plano (o toque normal), se os meus itens ainda estão
+  // pendentes e há uma volta correndo, acompanho a próxima — a recusa de dinheiro continua avisando. A espera deliberada do
+  // "Corrigir pagamento" (`soEstaPassada`, com a tela dizendo "conferindo o pagamento…") fica só na passada atual.
+  async function enviarRecebimentoGuardado(ids, soEstaPassada) {
+    let resultado = await api.processarFila();
     if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
-    const restantes = await api.filaPorIds(ids);
-    const recusados = restantes.filter(x => x.precisaCorrigir);
+    let restantes = await api.filaPorIds(ids);
+    for (let voltas = 0; !soEstaPassada && voltas < 5 && restantes.some(x => !x.precisaCorrigir); voltas++) {
+      const emVoo = api.passadaEmVoo && api.passadaEmVoo();
+      if (!emVoo) break; // nenhuma volta correndo: o próximo gatilho envia
+      resultado = await emVoo;
+      if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
+      restantes = await api.filaPorIds(ids);
+    }
+    // ⛔ 28/10/2026 — só RECUSA DE PAGAMENTO abre este aviso. A recusa da MARCAÇÃO (parada tirada da rota: `naoEncontrado`) entrava
+    // aqui também e abria "Pagamento precisa de conferência" num pedido sem pagamento nenhum — um modal no meio da rua com o
+    // texto errado. A recusa da marcação aparece no cartão (ou na faixa do topo, se o cartão saiu da lista).
+    const recusados = restantes.filter(x => x.precisaCorrigir && x.params && x.params.action === 'confirmarPagamento');
     for (const x of recusados) {
       const row = Number(x.params.row);
       if (state.pgRespondido[row] && state.pgRespondido[row].tsDevice === x.params.ts_device) delete state.pgRespondido[row];
@@ -1303,7 +1518,7 @@ async function handleFinalizarRota() {
     if (!window.PgPorta || !resposta) return;
     const r = Number(row);
     const ids = await guardarRecebimento([], { [r]: resposta }, tsDevice);
-    if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids);
+    if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids, true);
   }
 
   async function handleAction(act, row) {
@@ -1314,7 +1529,12 @@ async function handleFinalizarRota() {
       renderList();
       if (act === 'expand') {
         const alvo = state.items.find(x => Number(x.row) === Number(row));
-        if (alvo && alvo.naEntrega) await conferirGrupoValores([alvo]);
+        // 28/10/2026: no máximo 1× por parada a cada 2 min (era a Instabuy ao vivo a cada expandir).
+        const conferidos = state.conferidoEm || (state.conferidoEm = {});
+        if (alvo && alvo.naEntrega && !(Date.now() - (conferidos[Number(row)] || 0) < 2 * 60 * 1000)) {
+          conferidos[Number(row)] = Date.now();
+          await conferirGrupoValores([alvo]);
+        }
       }
       return;
     }
@@ -1325,7 +1545,7 @@ async function handleFinalizarRota() {
       const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
       const p = mapa && mapa.get(Number(row));
       if (!p || !p.recusado) { renderList(); return; }
-      if (p.anterior !== undefined) updateLocalStatus(Number(row), p.anterior, p.obsAnterior || '');
+      if (p.anterior !== undefined && updateLocalStatus(Number(row), p.anterior, p.obsAnterior || '')) api.saveEntregasCache(state.driver, state.items);
       try { await api.filaDescartarStatus(p.id); } catch (e) { console.error('[recusa]', e); }
       renderList();
       window.setTimeout(function () { carregarTudo(false); }, 0);
@@ -1356,6 +1576,58 @@ async function handleFinalizarRota() {
     const vistaAgora = itensComFila();
     const item = vistaAgora.find((x) => Number(x.row) === Number(row));
     if (!item) return;
+    // ⭐ 28/10/2026 — O GRUPO É RECALCULADO NA HORA DE GRAVAR. Entre o toque e a gravação há diálogos (segundos, às vezes minutos)
+    // e a lista pode mudar: uma recarga, um cancelamento, a irmã marcada por outro caminho. Grava só quem CONTINUA no grupo (mesmo
+    // estado, ver `irmasAtivas`) E estava no grupo que o entregador viu/respondeu (`vistoAntes`); a tocada sempre.
+    const grupoNaHora = (alvo, modo, vistoAntes) => {
+      const vista = itensComFila();
+      const atual = vista.find((x) => Number(x.row) === Number(alvo.row)) || alvo;
+      const viu = vistoAntes ? new Set(vistoAntes.map((x) => Number(x.row))) : null;
+      return irmasAtivas(vista, atual, modo).filter((x) => Number(x.row) === Number(alvo.row) || !viu || viu.has(Number(x.row)));
+    };
+    // Parada paga na porta que vai junto SEM resposta do pagamento (o grupo mudou entre o modal e a gravação) não é marcada por
+    // tabela: fica para o entregador tocar nela. "Manter" (a resposta anterior vale) conta como respondida.
+    const semRespostaDePagamento = (x, pgRes) => !!(window.PgPorta && window.PgPorta.devePerguntar(state.pgCfg, x))
+      && !(pgRes && pgRes.manteve) && !(pgRes && pgRes.porRow && pgRes.porRow[Number(x.row)]);
+    const soDasRows = (porRow, rows) => {
+      if (!porRow) return null;
+      const out = {};
+      Object.keys(porRow).forEach((r) => { if (rows.indexOf(Number(r)) >= 0) out[r] = porRow[r]; });
+      return out;
+    };
+    // ⛔ (revisão da leva 2) O GRUPO MUDOU COM O MODAL ABERTO (um cancelamento chegou pelo poll, a irmã foi marcada por outro
+    // caminho): a resposta foi dada para OUTRO conjunto de pedidos ("Valor dos 2 pedidos" com um deles já fora). Descarta e
+    // pergunta de novo com o grupo de agora — tudo local, sem rede. Compara as paradas PAGAS NA PORTA de antes e de agora.
+    const portaDe = (grupo, rowTocada) => {
+      const Pg = window.PgPorta;
+      if (!Pg) return '';
+      return Pg.irmasNaPorta(grupo || [], rowTocada).filter((x) => Pg.devePerguntar(state.pgCfg, x)).map((x) => Number(x.row)).sort().join(',');
+    };
+    // O conjunto perguntado é FOTOGRAFADO antes de o modal abrir (texto com as rows): o cancelamento que chega pelo poll muda o
+    // próprio objeto da parada em `state.items`, e comparar depois com os mesmos objetos não veria mudança nenhuma.
+    const perguntarComGrupoEstavel = async (alvo, irmasIniciais, ts, anterior, conferencia) => {
+      let irmas = grupoNaHora(alvo, undefined, irmasIniciais); // o grupo de AGORA (os diálogos de antes levaram segundos)
+      let perguntada = portaDe(irmas, alvo.row);
+      let res = await coletarPagamento(alvo, irmas, ts, anterior, conferencia);
+      for (let refez = 0; refez < 3 && !(res && res.cancelado); refez++) {
+        const agora = grupoNaHora(alvo, undefined, null);
+        const portaAgora = portaDe(agora, alvo.row);
+        if (perguntada === portaAgora) break;
+        irmas = agora; perguntada = portaAgora;
+        res = await coletarPagamento(alvo, irmas, ts, pgRespostaAnterior(alvo.row, alvo), null);
+      }
+      return { res, irmas };
+    };
+    // ⛔ 28/10/2026 — DESFAZER (e "Ainda não fui"): o servidor ANULA a declaração de pagamento da parada (anularPorDesfazer). A
+    // resposta guardada na tela tem de sair junto, senão a próxima entrega oferecia "Manter" e nenhuma declaração nova subia.
+    // E a observação do CLIENTE volta para o cartão (`updateLocalStatus(r, '', null)`), em vez de ser apagada.
+    const desfazerLocal = (r) => {
+      updateLocalStatus(r, '', null);
+      delete state.pgRespondido[r];
+      const it = state.items.find((x) => Number(x.row) === Number(r));
+      if (it && it.pgConfirmado) it.pgConfirmado = null;
+      state.expandidos.delete(r);
+    };
 
     // Corrigir a resposta de pagamento de uma entrega JÁ marcada (tela 4 do desenho). Não mexe em
     // status; sobe uma confirmação nova com ts próprio — no servidor vira ato 'corrigiu'.
@@ -1363,8 +1635,9 @@ async function handleFinalizarRota() {
       const tsC = new Date().toISOString();
       // (revisão de 06/10, menor 1) na pergunta única a correção vale para as IRMÃS pagas na porta (mesmo número = mesma porta,
       // um pagamento) — corrigir "Não pagou" num cartão e deixar a irmã como "Não pagou" mandaria cobrar o cliente
+      // (28/10/2026: só as irmãs no MESMO status — as que foram entregues junto.)
       const simplesC = !!(state.pgCfg && state.pgCfg.simples);
-      const irmasC = simplesC ? irmasAtivas(vistaAgora, item) : [item];
+      const irmasC = simplesC ? irmasAtivas(vistaAgora, item, 'mesmoStatus') : [item];
       const resC = await coletarPagamento(item, irmasC, tsC, pgRespostaAnterior(row, item));
       if (!resC || resC.manteve || resC.cancelado) return;
       // Pergunta única: não há valor digitado para o servidor recusar — grava e segue, sem espera na frente do dedo.
@@ -1397,17 +1670,20 @@ async function handleFinalizarRota() {
 
     // DESFAZER (apertou errado): volta a entrega pra PENDENTE. Vale pra Iniciar/Entregue/Não entregue.
     // Agrupa as duplicadas (mesmo número). Best-effort: a que falhar vai pra fila offline.
+    // 28/10/2026: só as irmãs no MESMO status da tocada (as que foram marcadas junto), e com a hora do toque (`ts_device`).
     if (act === 'desfazer') {
       const esc = await AppUI.escolher('Desfazer a marcação desta entrega? Ela volta a ficar PENDENTE (como se nada tivesse sido tocado).', [
         { valor: 'sim', rotulo: '↩ Sim, desfazer', tom: 'danger' },
       ], { titulo: 'Desfazer' });
       if (esc === null) return;
-      const alvo = irmasAtivas(vistaAgora, item).map((x) => Number(x.row));
+      const alvo = grupoNaHora(item, 'mesmoStatus', irmasAtivas(vistaAgora, item, 'mesmoStatus')).map((x) => Number(x.row));
+      const tsD = new Date().toISOString();
       // Mesmo caminho instantâneo das outras marcações: grava e pinta. Antes eram até 3 tentativas
       // de rede POR LINHA (15 s cada no timeout) antes de a tela responder.
-      try { await guardarNaFila(alvo.map((r) => ({ action: 'desfazer', row: Number(r) }))); }
+      try { await guardarNaFila(alvo.map((r) => ({ action: 'desfazer', row: Number(r), ts_device: tsD }))); }
       catch (e) { await avisarArmazenamento(); return; }
-      alvo.forEach((r) => { updateLocalStatus(r, '', ''); state.expandidos.delete(r); });
+      alvo.forEach((r) => desfazerLocal(r));
+      api.saveEntregasCache(state.driver, state.items);
       renderList();
       agendarEnvio();
       return;
@@ -1455,13 +1731,19 @@ async function handleFinalizarRota() {
         const tsA = new Date().toISOString();
         // ⛔ PORTA 2 do marcarEntregue: sem isto, marcar "Entregue" por aqui pularia a confirmação
         // de pagamento e viraria porta dos fundos. Mesma função, mesmo ts_device.
-        const pgA = esc === 'done' ? await coletarPagamento(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant), conferenciaA) : null;
+        const estavelA = esc === 'done' ? await perguntarComGrupoEstavel(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant), conferenciaA) : null;
+        const pgA = estavelA ? estavelA.res : null;
         if (pgA && pgA.cancelado) return;
         if (esc === 'done') {
           try {
-            const marcacoes = irmasA.map(x => ({ action: 'marcarEntregue', row: Number(x.row), obs: 'Entregue', ts_device: tsA }));
-            const ids = await guardarRecebimento(marcacoes, pgA && !pgA.manteve ? pgA.porRow : null, tsA);
-            irmasA.forEach(x => { updateLocalStatus(Number(x.row), 'Entregue', 'Entregue'); state.expandidos.delete(Number(x.row)); });
+            const finalA = grupoNaHora(ant, undefined, estavelA.irmas)
+              .filter((x) => Number(x.row) === Number(ant.row) || !semRespostaDePagamento(x, pgA));
+            const rowsA = finalA.map((x) => Number(x.row));
+            const marcacoes = rowsA.map((r) => ({ action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }));
+            const ids = await guardarRecebimento(marcacoes, pgA && !pgA.manteve ? soDasRows(pgA.porRow, rowsA) : null, tsA);
+            rowsA.forEach((r) => { updateLocalStatus(r, 'Entregue', 'Entregue'); state.expandidos.delete(r); });
+            api.saveEntregasCache(state.driver, state.items);
+            renderList();
             // NÃO espera: o entregador resolveu a pendência e já segue para a próxima entrega.
             acompanharEnvio(ids);
           } catch (error) {
@@ -1473,16 +1755,19 @@ async function handleFinalizarRota() {
         // Só 'nao' e 'pend' chegam aqui (o 'done' sempre sai no `continue` acima), e nestes dois
         // `pgA` é sempre null — por isso o `enviarConfirmacao` que existia neste laço era código
         // morto e saiu junto. Um commit único para o grupo inteiro, sem rede.
+        // (28/10/2026: "Ainda não fui" = desfazer das irmãs no MESMO status, com `ts_device`; "Não entregue" = as abertas.)
+        const finalA = esc === 'nao' ? grupoNaHora(ant, undefined, irmasA) : grupoNaHora(ant, 'mesmoStatus', irmasAtivas(vistaAgora, ant, 'mesmoStatus'));
         try {
-          await guardarNaFila(irmasA.map(x => (esc === 'nao'
+          await guardarNaFila(finalA.map(x => (esc === 'nao'
             ? { action: 'marcarNaoEntregue', row: Number(x.row), obs: 'Não entregue', ts_device: tsA }
-            : { action: 'desfazer', row: Number(x.row) })));
+            : { action: 'desfazer', row: Number(x.row), ts_device: tsA })));
         } catch (e) { await avisarArmazenamento(); return; }
-        for (const x of irmasA) {
+        for (const x of finalA) {
           const r = Number(x.row);
-          updateLocalStatus(r, esc === 'nao' ? 'Não entregue' : '', esc === 'nao' ? 'Não entregue' : '');
-          state.expandidos.delete(r);
+          if (esc === 'nao') { updateLocalStatus(r, 'Não entregue', 'Não entregue'); state.expandidos.delete(r); }
+          else desfazerLocal(r);
         }
+        api.saveEntregasCache(state.driver, state.items);
         renderList();
         agendarEnvio();
       }
@@ -1497,7 +1782,7 @@ async function handleFinalizarRota() {
     let nextStatus = null, obs;
     // Hora do APARELHO no toque. Para o Entregue ela nasce ANTES do modal de pagamento, porque a
     // confirmação viaja com o MESMO ts_device do marcarEntregue (chave de idempotência no servidor).
-    let tsDevice = null, pgPorRow = null;
+    let tsDevice = null, pgPorRow = null, pgRes = null;
     let irmasPg = null, conferenciaPg = null;
     if (act === 'done') {
       // ⭐ A ÚNICA rede que ainda precede um diálogo (`conferirValores`, que decide o valor do
@@ -1534,24 +1819,33 @@ async function handleFinalizarRota() {
       // ⛔ PORTA 1: "💳 Como o cliente pagou?" — só para pedido pago NA PORTA e só quando o servidor
       // mandou perguntar. Sem uma resposta completa, não confirma a entrega.
       tsDevice = new Date().toISOString();
-      const pgRes = await coletarPagamento(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
+      const estavel = await perguntarComGrupoEstavel(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
+      pgRes = estavel.res; irmasPg = estavel.irmas;
       if (pgRes && pgRes.cancelado) return;
       pgPorRow = pgRes && !pgRes.manteve ? pgRes.porRow : null;
     }
     else if (act === 'fail') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Motivo / observação:', { titulo: 'Cliente não estava', tom: 'danger', placeholder: 'Ex.: cliente ausente', textoOk: 'Marcar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
-    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Por que saiu da sua rota?', { titulo: 'Saiu da minha rota', tom: 'warn', placeholder: 'Ex.: cliente pediu para amanhã', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Removida'; }
+    // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' (o servidor novo grava assim, sem pagar, com ↩ Desfazer); era 'Removida'.
+    else if (act === 'cancelado') { obs = obsPreset != null ? obsPreset : ((await AppUI.perguntar('Por que saiu da sua rota?', { titulo: 'Saiu da minha rota', tom: 'warn', placeholder: 'Ex.: cliente pediu para amanhã', textoOk: 'Confirmar', textoCancelar: 'Pular' })) || ''); nextStatus = 'Não entregue'; }
     else if (act === 'start') { nextStatus = 'Indo para entrega'; state.expandidos.add(Number(row)); }
 
     try {
-      // Maps/Waze: marca "indo" e abre o mapa (navega pra fora).
+      // Maps/Waze: abre o mapa (navega pra fora) e, se a parada está PENDENTE e tem endereço, marca "Indo".
+      // ⛔ 28/10/2026 — antes marcava "Indo" em QUALQUER status: abrir o mapa num cartão Entregue (expandido para ver o endereço)
+      // mandava `iniciarEntrega`, e o servidor trocava "Entregue" por "Indo para entrega". Sem endereço o mapa nem abria e a
+      // marcação já tinha ido. Agora, fora de "pendente com endereço", só abre o mapa.
       if (act === 'maps' || act === 'waze') {
-        if (api.statusKey(item.status) !== 'start') {
+        const url = act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item);
+        if (api.statusKey(item.status) === 'pending' && url && url !== '#') {
           // Antes o mapa só abria DEPOIS de `apiIniciarEntrega` responder (3 tentativas × 15 s).
           // Agora grava, pinta e abre; o envio corre atrás.
-          try { await guardarNaFila([{ action: 'iniciarEntrega', row: Number(row), ts_device: new Date().toISOString() }]); updateLocalStatus(row, 'Indo para entrega'); agendarEnvio(); }
+          try {
+            await guardarNaFila([{ action: 'iniciarEntrega', row: Number(row), ts_device: new Date().toISOString() }]);
+            updateLocalStatus(row, 'Indo para entrega'); api.saveEntregasCache(state.driver, state.items); renderList(); agendarEnvio();
+          }
           catch (e) { console.error('[fila]', e); /* o mapa abre assim mesmo; a marcação não fingiu */ }
         }
-        await openSameTab(act === 'maps' ? api.buildMapsUrl(item) : api.buildWazeUrl(item));
+        await openSameTab(url);
         return;
       }
 
@@ -1575,12 +1869,15 @@ async function handleFinalizarRota() {
       if (!tsDevice) tsDevice = new Date().toISOString();
       // DUPLICADAS vão JUNTAS ao INICIAR / ENTREGAR: pedidos do mesmo cliente+endereço têm o MESMO
       // `numero` (o painel já colapsa e manda). O entregador vai a UM lugar só, então tocar Iniciar/
-      // Entregue numa marca TODAS as do mesmo número de uma vez. (Não-entregue/Cancelado seguem 1 a 1.)
-      const irmas = (act === 'start' || act === 'done') ? irmasAtivas(vistaAgora, item) : [item];
+      // Entregue numa marca as do mesmo número de uma vez — 28/10/2026: só as que estão no MESMO estado (abertas), recalculadas
+      // AGORA (ver `grupoNaHora`). (Não-entregue/Saiu da rota seguem 1 a 1.)
+      const irmas = (act === 'start' || act === 'done') ? grupoNaHora(item, undefined, act === 'done' ? irmasPg : null) : [item];
       // Só as que ainda NÃO estão no status alvo (a própria tocada sempre entra) — evita remarcar/enfileirar à toa.
       const rowsAlvo = irmas
         .filter((x) => Number(x.row) === Number(row) || api.statusKey(x.status) !== api.statusKey(nextStatus))
+        .filter((x) => act !== 'done' || Number(x.row) === Number(row) || !semRespostaDePagamento(x, pgRes))
         .map((x) => Number(x.row));
+      if (act === 'done') pgPorRow = soDasRows(pgPorRow, rowsAlvo);
       const paramsDe = (r) => act === 'start' ? { action: 'iniciarEntrega', row: r, ts_device: tsDevice }
         : act === 'done' ? { action: 'marcarEntregue', row: r, obs: obs || '', ts_device: tsDevice }
         : act === 'fail' ? { action: 'marcarNaoEntregue', row: r, obs: obs || '', ts_device: tsDevice }
@@ -1602,6 +1899,7 @@ async function handleFinalizarRota() {
       // Ao MARCAR (entregue/não entregue/cancelado) o cartão MINIMIZA sozinho (Bernardo). Iniciar NÃO
       // minimiza — pelo contrário, expande (feito acima). Tocar de novo num concluído reabre pra corrigir.
       if (act === 'done' || act === 'fail' || act === 'cancelado') rowsAlvo.forEach((r) => state.expandidos.delete(r));
+      api.saveEntregasCache(state.driver, state.items); // UMA gravação do cache por ato (28/10/2026)
       renderList();
       // ⛔ DAQUI PARA BAIXO NÃO EXISTE MAIS REDE NO CAMINHO DO DEDO.
       // O envio corre em segundo plano e o entregador já pode tocar a próxima entrega.
@@ -1629,13 +1927,23 @@ async function handleFinalizarRota() {
     _filaPendentes = rows.size;
   });
 
+  // ⛔ 28/10/2026 — UMA CONSULTA DE CADA VEZ, E A LISTA DEPOIS DA FILA. O poll disparava a fila e a lista em PARALELO (a lista
+  // podia ser lida antes de as marcações subirem — "a tela volta atrás") e, com sinal ruim, a rodada seguinte começava com a
+  // anterior ainda tentando. Agora: fila primeiro, lista depois (como o `online` já fazia), e um tique com o anterior em voo é pulado.
+  let _pollEmVoo = false;
+  // (revisão da leva 2) com PRAZO: com sinal ruim a fila pode levar dezenas de segundos, e a lista não espera mais que 4 s por
+  // ela — os ACKs recentes por cima já impedem que uma lista pedida antes de um ACK pinte o passado.
+  function filaDepoisLista() {
+    const recarregar = function () { return carregarTudo(false); };
+    const prazo = new Promise(function (ok) { window.setTimeout(ok, 4000); });
+    return Promise.race([api.processarFila(), prazo]).then(recarregar, recarregar);
+  }
   function startAutoRefresh() {
     stopAutoRefresh();
     state.refreshTimer = window.setInterval(function () {
-      if (document.visibilityState === 'visible') {
-        api.processarFila();
-        carregarTudo(false);
-      }
+      if (document.visibilityState !== 'visible' || _pollEmVoo) return;
+      _pollEmVoo = true;
+      filaDepoisLista().finally(function () { _pollEmVoo = false; });
     }, window.APP_CONFIG.REFRESH_INTERVAL_MS);
   }
 
@@ -1644,14 +1952,16 @@ async function handleFinalizarRota() {
     state.refreshTimer = null;
   }
 
+  // 28/10/2026: uma consulta de cada vez (a de 15 s empilhava com 3 tentativas × 15 s), e nada de nova consulta com o aviso aberto.
+  let _cancelEmVoo = false;
   async function verificarCancelamentos() {
-    if (!state.driver || document.visibilityState !== 'visible') return;
+    if (!state.driver || document.visibilityState !== 'visible' || _cancelEmVoo) return;
+    _cancelEmVoo = true;
     try {
       var avisos = await api.carregarCancelamentosDaRota(state.driver);
       for (var i = 0; i < avisos.length; i++) {
         var a = avisos[i], chave = 'cancelamento-entregador:' + a.id + ':' + a.canceladoEm;
         if (sessionStorage.getItem(chave)) continue;
-        sessionStorage.setItem(chave, '1');
         var item = state.items.find(function (x) { return Number(x.row) === Number(a.id); });
         if (item) item.status = 'Cancelado';
         api.saveEntregasCache(state.driver, state.items); renderList();
@@ -1661,10 +1971,14 @@ async function handleFinalizarRota() {
           var LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
           if (LN && LN.schedule) await LN.schedule({ notifications: [{ id: 700000 + (Number(a.id) % 200000), title: titulo, body: corpo, schedule: { at: new Date(Date.now() + 300) } }] });
         } catch (e) {}
-        await AppUI.alerta(corpo, { titulo: titulo, tom: 'danger' });
+        // ⛔ 28/10/2026 — o aviso só conta como VISTO depois que APARECEU (`aoAbrir`; antes era marcado antes de abrir — com a tela
+        // escondida ou um toque duplo no fundo ele sumia sem ninguém ler), e o toque no fundo NÃO fecha: só o "Entendi".
+        await AppUI.alerta(corpo, { titulo: titulo, tom: 'danger', fecharNoFundo: false,
+          aoAbrir: function () { try { sessionStorage.setItem(chave, '1'); } catch (e) {} } });
         break;
       }
     } catch (e) { /* rede/Instabuy: tenta no próximo ciclo sem mexer na rota */ }
+    finally { _cancelEmVoo = false; }
   }
 
   function startCancelRefresh() {
@@ -1747,8 +2061,7 @@ async function handleFinalizarRota() {
 
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') {
-      api.processarFila();
-      carregarTudo(false);
+      filaDepoisLista(); // 28/10/2026: a fila primeiro, a lista depois (eram as duas em paralelo)
     } else {
       despedida(); // no Android trocar de app costuma dar só `hidden`, sem `pagehide`
     }
@@ -1756,7 +2069,7 @@ async function handleFinalizarRota() {
 
   // Quando a internet volta, reenvia o que ficou pendente na fila.
   window.addEventListener('online', function () {
-    api.processarFila().then(function () { carregarTudo(false); });
+    filaDepoisLista();
   });
 
   // Fechou / trocou de app com coisa na fila: último empurrão com `keepalive` (o navegador termina
@@ -1833,7 +2146,16 @@ async function handleFinalizarRota() {
         try { if (navigator.permissions && navigator.permissions.query) { var r = await navigator.permissions.query({ name: 'geolocation' }); gps = r.state === 'granted' ? 'on' : (r.state === 'denied' ? 'off' : 'desconhecido'); } } catch (e) {}
         try { notif = (typeof Notification === 'undefined') ? 'desconhecido' : (Notification.permission === 'granted' ? 'on' : (Notification.permission === 'denied' ? 'off' : 'desconhecido')); } catch (e) {}
       }
-      api.apiGet({ action: 'permissoes', entregador: state.driver, gps: gps, notif: notif, plataforma: plat }, { retries: 1 });
+      // ⭐ 28/10/2026 — só manda quando MUDA (ou a cada 12 h, para outro aparelho do mesmo entregador não deixar o painel com o
+      // estado dele para sempre). Era uma chamada a cada abertura da tela, para dizer a mesma coisa.
+      const chave = 'app_permissoes_enviadas_v1|' + String(state.driver || '').trim().toLowerCase();
+      const agora = gps + '|' + notif + '|' + plat;
+      try {
+        const ult = JSON.parse(localStorage.getItem(chave) || 'null');
+        if (ult && ult.v === agora && Date.now() - Number(ult.em || 0) < 12 * 3600 * 1000) return;
+      } catch (e) {}
+      const res = await api.apiGet({ action: 'permissoes', entregador: state.driver, gps: gps, notif: notif, plataforma: plat }, { retries: 0 });
+      if (res && res.ok) { try { localStorage.setItem(chave, JSON.stringify({ v: agora, em: Date.now() })); } catch (e) {} }
     } catch (e) {}
   }
 
@@ -1976,15 +2298,59 @@ async function handleFinalizarRota() {
   const btnFecharMapa = document.getElementById('btnFecharMapa');
   if (btnFecharMapa) btnFecharMapa.addEventListener('click', fecharMapa);
 
+  // ⭐ 28/10/2026 — ABRIR NA HORA: com a rota já começada hoje, a lista guardada de HOJE (mesma chave do plano B offline) aparece
+  // antes da rede — com os valores marcados como NÃO conferidos (o modal de dinheiro não confia neles) — e a recarga corre atrás,
+  // sem o esqueleto. Antes: tela de "carregando" até o servidor responder (com sinal ruim, segundos com a mercadoria no carro).
+  function pintarListaGuardada() {
+    if (!state.rotaIniciada || state.rotaFinalizada || !api.lerEntregasGuardadas) return false;
+    const guardada = api.lerEntregasGuardadas(state.driver);
+    if (!guardada || !guardada.length) return false;
+    state.items = guardada.map(function (x) { return Object.assign({}, x, { valorConferido: false }); });
+    const info = api.lerRotaInfoGuardada && api.lerRotaInfoGuardada(state.driver);
+    if (info) state.rotaInfo = info;
+    setLoading(false);
+    renderList();
+    return true;
+  }
+
+  // ⭐ 28/10/2026 — a faxina das lápides da fila (fila-duravel.js `limparLapides`): com o app aberto e PARADO, no máximo 1× a cada
+  // 20 h, em lotes, desistindo da vez se a fila estiver enviando, se houver um ato em curso ou se a tela sumir. Nunca no toque.
+  function agendarFaxinaDasLapides() {
+    try {
+      const chave = 'fila_lapides_faxina_v1';
+      if (Date.now() - Number(localStorage.getItem(chave) || 0) < 20 * 3600 * 1000) return;
+      const ocioso = window.requestIdleCallback ? function (fn) { window.requestIdleCallback(fn, { timeout: 60000 }); } : function (fn) { window.setTimeout(fn, 0); };
+      let tentativas = 0;
+      const livre = function () { return document.visibilityState === 'visible' && !state.sendingAction && !state.sendingRouteAction; };
+      const rodar = function () {
+        if (!livre() || (api.filaEmEnvio && api.filaEmEnvio())) { if (++tentativas < 10) window.setTimeout(function () { ocioso(rodar); }, 60000); return; }
+        api.limparLapidesAntigas(livre).then(function (r) {
+          if (r && !r.interrompida) { try { localStorage.setItem(chave, String(Date.now())); } catch (e) {} }
+          else if (++tentativas < 10) window.setTimeout(function () { ocioso(rodar); }, 60000);
+        }).catch(function (e) { console.warn('[faxina]', e); });
+      };
+      window.setTimeout(function () { ocioso(rodar); }, 30000);
+    } catch (e) {}
+  }
+
   (async function init() {
     if (redirectIfNoDriver()) return;
     if (driverTitle) driverTitle.textContent = state.driver + ' - ' + (api.getTurno() === 'MANHÃ' ? 'Manhã' : 'Tarde'); // nome + turno na faixa azul
     if (driverNameText) driverNameText.textContent = state.driver; // (elemento antigo removido do HTML; no-op)
-    await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
-    reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off
+    // ⛔ 28/10/2026 — a fila sobe ANTES de esperar as permissões: o porteiro de permissões (.apk) segurava o envio inteiro até
+    // alguém tocar em "Permitir". E a lista guardada de hoje já aparece (ver `pintarListaGuardada`).
     api.processarFila(); // sobe o que ficou pendente de envios anteriores
-    carregarTudo(true);
+    const pintouGuardada = pintarListaGuardada();
+    await exigirPermissoes();            // .apk: exige notificação + localização; site: passa direto
+    reportarPermissoes();                // conta pro sistema se GPS/notif estão on/off (só quando muda)
+    carregarTudo(!pintouGuardada, true);
     startAutoRefresh();
     startCancelRefresh();
+    // GPS (28/10/2026): rota em andamento ao abrir a tela (o Android matou o app, o entregador reabriu) → o rastreio volta a ligar.
+    // (revisão da leva 2) e nunca numa rota já FINALIZADA (o fim lembrado no aparelho conta, não só o da sessão); se ela acabou, o
+    // rastreio órfão do Android, se houver, é desligado.
+    if (state.rotaIniciada && !state.rotaFinalizada && !(api.fimConfirmado && api.fimConfirmado(state.driver))) { try { ligarRastreio(); } catch (e) {} }
+    else if (state.rotaFinalizada) { try { pararRastreio(); } catch (e) {} }
+    agendarFaxinaDasLapides();
   })();
 })();

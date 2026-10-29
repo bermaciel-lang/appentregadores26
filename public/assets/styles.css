@@ -743,6 +743,9 @@ button, select, input, textarea {
 .dc-recusa span { flex: 1; min-width: 0; }
 .dc-recusa-ok { flex: none; min-height: 34px; padding: 0 12px; border-radius: 9px; border: 1.5px solid #b91c1c;
   background: #fff; color: #b91c1c; font-size: 12.5px; font-weight: 800; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* 28/10/2026 — recusa de uma parada que SAIU da lista (sem cartão onde aparecer): faixa no topo, com quem era e o "Entendi". */
+.recusas-sem-cartao { display: grid; gap: 8px; margin-bottom: 12px; }
+.recusas-sem-cartao .dc-recusa { margin-top: 0; }
 
 /* ===== Painel "o que foi registrado" (KM/foto) embaixo dos botões de rota ===== */
 .info-rota { margin-top: 12px; display: grid; gap: 8px; }
@@ -764,10 +767,17 @@ button, select, input, textarea {
    MODAL PRÓPRIO (ui.js) — substitui os prompt/alert/confirm nativos feios.
    Visual casado com o app: cartão branco arredondado, sombra, botão azul.
    ==================================================================== */
+/* Aviso aberto DE DENTRO do chat ("Sem conexão pra enviar agora.", arquivo grande, microfone): acima da conversa (5000) e do
+   pop-up (6000). Em 1000 ele nascia ATRÁS da conversa, invisível e sem como tocar no "Entendi" (régua N7b). */
+.app-modal-overlay.sobre-chat { z-index: 7000; }
 .app-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;                 /* acima de tudo (lembrete fixo é z-index 30) */
+  /* Camadas (28/10/2026, revisão da leva 2): os diálogos e as janelas longas (ex.: "Aguardando a montagem") ficam em 1000, ACIMA
+     do lembrete fixo (30) e ABAIXO da conversa do chat (5000) e do pop-up de mensagem (6000) — dá para ler e responder a Central
+     com a espera aberta. O diálogo que abre COM A CONVERSA ABERTA ganha `.sobre-chat` (ui.js) e fica acima dela. Tudo abaixo das
+     telas cheias que travam o app (permissões 9000, porteiro, aviso de privacidade). */
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -49,6 +49,8 @@
   // Se não der tempo, o modal abre no modo degradado: o entregador DIGITA o valor, com a trava de
   // 10x sobre o valor de referência. Nada de dinheiro afrouxa; só a espera é que tem limite.
   const TEMPO_CONFERIR_MS = Number(C.API_CONFERIR_TIMEOUT_MS) > 0 ? Number(C.API_CONFERIR_TIMEOUT_MS) : 6000;
+  // Orçamento de UMA tentativa do `confirmarPagamento` na fila (28/10/2026; era 45 s × 2). Ver `apiGet`.
+  const TEMPO_PAGAMENTO_MS = 20000;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,9 +94,23 @@
     return 'pending';
   }
 
-  function statusLabel(status) {
+  // ⭐ 28/10/2026 — "SAIU DA MINHA ROTA" VIROU "NÃO ENTREGUE" (servidor da leva 3: fica na rota, sem pagar, com ↩ Desfazer). O
+  // servidor grava "Não entregue" + o marcador "Saiu da rota do entregador (removido do pagamento)" na observação; o aparelho,
+  // enquanto o toque não sobe, mostra 'Não entregue' com a marca `_saiuDaRota` (projeção da fila) ou a nota "Saiu da minha rota".
+  // O servidor antigo grava "Removida" (e tira da lista). Nos três casos o cartão diz o nome que o entregador tocou, e a parada
+  // NUNCA anda junto com a irmã da mesma porta (page-entregas.js `irmasAtivas`).
+  function ehSaiuDaRota(item) {
+    if (!item) return false;
+    const st = String(item.status || '').trim();
+    if (/^removid/i.test(st)) return true;
+    if (statusKey(st) !== 'fail') return false;
+    const obs = String(item.observacaoPedido || '');
+    return !!item._saiuDaRota || /saiu da rota do entregador/i.test(obs) || /^\s*saiu da minha rota/i.test(obs);
+  }
+  function statusLabel(status, item) {
     const st = String(status || '').trim();
     if (/^removid/i.test(st)) return 'Saiu da minha rota'; // 19/10/2026: o nome que o entregador tocou
+    if (item && ehSaiuDaRota(Object.assign({}, item, { status: st }))) return 'Saiu da minha rota';
     return st || 'Pendente';
   }
 
@@ -233,18 +249,13 @@ function buildMapsUrl(item) {
     return e;
   }
   // Login por PIN. Devolve { ok, token, nome } ou { ok:false, error }. Não anexa token (não tem ainda).
+  // ⛔ 28/10/2026 — O PIN NÃO VAI MAIS NA URL. Ia por GET (`?action=login&pin=1234`), e URL acaba em log (Vercel, Caddy, painel).
+  // Agora vai no CORPO de um POST pelo mesmo proxy (`api/painel.js` já repassa POST com JSON; o POST do painel converte o corpo em
+  // parâmetros e chama o mesmo `executar`). Mesmo contrato de resposta, mesma tentativa extra. Ver `apiGet`: login nunca vira GET.
   async function apiLogin(nome, pin) {
     var aparelho = '';
     try { aparelho = (navigator.userAgent || '').slice(0, 120); } catch (e) {}
-    return apiGet({ action: 'login', entregador: nome, pin: pin, aparelho: aparelho }, { retries: 1 });
-  }
-
-  function setAdminAuth(ok) {
-    localStorage.setItem(C.STORAGE_ADMIN_AUTH_KEY, ok ? '1' : '0');
-  }
-
-  function getAdminAuth() {
-    return localStorage.getItem(C.STORAGE_ADMIN_AUTH_KEY) === '1';
+    return apiPost({ action: 'login', entregador: nome, pin: pin, aparelho: aparelho }, { retries: 1 });
   }
 
   function cacheKey(key) {
@@ -270,11 +281,40 @@ function buildMapsUrl(item) {
     } catch (e) {}
   }
 
+  // 🧹 28/10/2026 — As OUTRAS chaves por dia também acumulavam para sempre: a lista de nomes (`entregadores_<dia>_<turno>`), o
+  // turno escolhido (`app_turno_v1_<dia>`), o início/fim confirmados, a maquininha escolhida e as informações da rota. Nenhuma é
+  // lida em outro dia (todas são montadas com o dia de HOJE). Fica a de ontem por folga; mais velhas saem. A FILA (IndexedDB e a
+  // `fila_v1` antiga), o KM/foto pendentes (`rota_pend_*`) e os tokens não têm dia na chave e nunca entram aqui.
+  const PREFIXOS_POR_DIA = ['entregadores_', 'entregas_', 'rotainfo_'].map(p => C.STORAGE_CACHE_PREFIX + p)
+    .concat(['app_turno_v1_', 'montagem_inicio_confirmado_v1_', 'rota_fim_confirmado_v1_', 'maq_escolha_v1_']);
+  function limparChavesDeDiasAntigos() {
+    try {
+      const hoje = diaSP();
+      const ontem = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(Date.now() - 864e5));
+      const velhas = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const prefixo = PREFIXOS_POR_DIA.find(p => k.indexOf(p) === 0);
+        if (!prefixo) continue;
+        const dia = k.slice(prefixo.length, prefixo.length + 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dia) && dia !== hoje && dia !== ontem) velhas.push(k);
+      }
+      for (const k of velhas) { try { localStorage.removeItem(k); } catch (e) {} }
+      return velhas.length;
+    } catch (e) { return 0; }
+  }
+
+  // ⛔ 28/10/2026 — `setItem` com o localStorage CHEIO lançava QuotaExceededError e derrubava quem chamou — no toque, DEPOIS de a
+  // fila já ter gravado: a tela dizia "Não foi possível concluir essa ação" para uma entrega guardada. O cache é só conforto (a
+  // fonte é a fila): cheio → faxina das chaves de dias antigos e tenta de novo uma vez; se ainda não couber, segue sem cache.
   function writeCache(key, value) {
-    localStorage.setItem(cacheKey(key), JSON.stringify({
-      ts: Date.now(),
-      value
-    }));
+    const texto = JSON.stringify({ ts: Date.now(), value });
+    try { localStorage.setItem(cacheKey(key), texto); return true; }
+    catch (e) {
+      limparChavesDeDiasAntigos(); limparCacheEntregasDeOutrosDias();
+      try { localStorage.setItem(cacheKey(key), texto); return true; } catch (e2) { return false; }
+    }
   }
 
   function readCache(key) {
@@ -296,46 +336,7 @@ function buildMapsUrl(item) {
     return cached.value;
   }
 
-  function loadJSONP(url, timeoutMs = C.API_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
-      const callback = 'cb' + Date.now() + Math.floor(Math.random() * 1000);
-      const script = document.createElement('script');
-      let finished = false;
-
-      function cleanup() {
-        if (finished) return;
-        finished = true;
-        try {
-          if (script.parentNode) script.parentNode.removeChild(script);
-        } catch (e) {}
-        try {
-          delete window[callback];
-        } catch (e) {
-          window[callback] = undefined;
-        }
-      }
-
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Tempo esgotado ao chamar a API'));
-      }, timeoutMs);
-
-      window[callback] = (data) => {
-        clearTimeout(timeout);
-        cleanup();
-        resolve(data);
-      };
-
-      script.onerror = () => {
-        clearTimeout(timeout);
-        cleanup();
-        reject(new Error('Erro ao carregar JSONP'));
-      };
-
-      script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + callback;
-      document.body.appendChild(script);
-    });
-  }
+  // (28/10/2026: saiu o `loadJSONP` — só servia ao Apps Script da planilha, aposentado junto com o escape `?planilha=1`.)
 
   // De QUEM é o token que vai nesta chamada. O servidor resolve o entregador PELO TOKEN e IGNORA o
   // nome mandado — então o token tem de ser o de quem FEZ o ato. Um item da fila carrega o nome de
@@ -353,7 +354,7 @@ function buildMapsUrl(item) {
   }
 
   function buildApiUrl(params) {
-    // Aceita URL absoluta (Apps Script) OU caminho same-origin (/api/painel, no override).
+    // Caminho same-origin (/api/painel/, o proxy da Vercel para o painel).
     const url = new URL(C.API_URL, window.location.origin);
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
@@ -398,10 +399,9 @@ async function postJson(body) {
   const timer = setTimeout(() => controller.abort(), C.API_TIMEOUT_MS);
 
   try {
-    // Se houver override do painel neste aparelho, posta direto pra ele (cross-origin,
-    // com CORS); senão, usa o proxy do Vercel que fala com o Apps Script antigo.
+    // Sempre o proxy do painel (28/10/2026: o `/api/proxy` do Apps Script antigo saiu do projeto).
     const enviado = tokenParaChamada(body); // o token que VAI nesta chamada (comparado na volta, não relido)
-    const res = await fetch(C.POST_URL || '/api/proxy', {
+    const res = await fetch(C.POST_URL || C.API_URL || '/api/painel/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -421,26 +421,21 @@ async function postJson(body) {
   }
 }
 
-// ===== Espelho pro PAINEL (Etapa C, ponte) =====
-// Manda KM/foto pro NOSSO sistema ALÉM da planilha — pra essas infos aparecerem no painel
-// (Resumo de rotas) sem depender de puxar da planilha depois. Só roda quando este aparelho
-// está no fluxo ANTIGO (planilha): se já estiver no painel (override), o envio principal já
-// vai pra lá e duplicar seria à toa. É BEST-EFFORT: dispara e não espera — não trava o
-// entregador nem falha a ação se o painel estiver fora do ar (a planilha é a fonte principal).
-// Obs.: só espelhamos KM/foto (iniciar/finalizar rota), que casam por data+turno+entregador.
-// Os status de cada entrega (entregue/não) NÃO dá pra espelhar: o "row" da planilha é
-// diferente do id do banco — isso só na virada completa (piloto Etapa C).
-function espelharNoPainel(body) {
-  try {
-    if (usandoPainel()) return;
-    fetch('/api/painel/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(corpoComToken(body)),
-      cache: 'no-store'
-    }).catch(function () {});
-  } catch (e) {}
+// POST com as mesmas tentativas do `apiGet` (só o login usa hoje — o PIN não pode ir na URL). Exceção = sem resposta.
+async function apiPost(body, options) {
+  const opt = options || {};
+  const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try { return await postJson(body); }
+    catch (error) { lastError = error; if (attempt < retries) await sleep(600 * (attempt + 1)); }
+  }
+  throw lastError || new Error('Falha na API');
 }
+// (28/10/2026: saiu o `espelharNoPainel` — espelhava KM/foto da planilha antiga no painel e só rodava fora do painel, o que
+// não acontece mais desde que o escape `?planilha=1` foi aposentado.)
+// Ações que levam segredo (PIN) no pedido: NUNCA na URL (ver `apiLogin`).
+const ACOES_SO_POR_POST = ['login', 'loginAdmin'];
 
   // 🕛 Quando o app NÃO manda `turno`, o painel CHUTA pelo relógio dele — e ele vira TARDE às
   // 12:00 enquanto o app só vira às 14:00 (`turnoPadrao`, linha 6). Nessas 2 horas a marcação de
@@ -476,6 +471,7 @@ function espelharNoPainel(body) {
   }
 
   async function apiGet(paramsOriginais, options) {
+    if (paramsOriginais && ACOES_SO_POR_POST.includes(paramsOriginais.action)) return apiPost(paramsOriginais, options);
     const params = comTurno(paramsOriginais);
     const opt = options || {};
     const url = buildApiUrl(params);
@@ -485,8 +481,11 @@ function espelharNoPainel(body) {
     // `opt.timeoutMs` existe para a ÚNICA chamada que ainda precede um diálogo do entregador (a
     // conferência de valor do pagamento na porta): lá 15 s de espera é tela morta na rua, e o
     // modal sabe seguir sem o valor conferido (o entregador digita). Ver TEMPO_CONFERIR_MS.
+    // ⛔ 28/10/2026 — `confirmarPagamento` espera 20 s (era 45 s, e com a tentativa interna da fila eram ~91 s segurando todo o
+    // resto atrás dele). Timeout não é ACK: o item fica e a fila repete; o servidor confere a chave do toque (parada:ts_device)
+    // ANTES da parte lenta (lib/erp-pagamento-na-entrega.ts), então a repetição de um toque que já gravou volta rápida.
     const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
-      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);
+      : (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);
     const retries = Number.isFinite(opt.retries) ? opt.retries : C.API_RETRY_COUNT;
     let lastError = null;
 
@@ -494,7 +493,7 @@ function espelharNoPainel(body) {
       try {
         // As DUAS frentes de 09/09 entram aqui: o timeout longo da fila (recebimento coletivo
         // consulta até 20 pedidos antes da 1ª gravação) E a limpeza do token recusado.
-        const res = (C.API_MODE === 'json') ? await fetchJson(url, timeoutMs) : await loadJSONP(url, timeoutMs);
+        const res = await fetchJson(url, timeoutMs);
         tratarPrecisaLogin(res, enviado); // token recusado → apaga ESSE token (a home volta a pedir o PIN dele)
         return res;
       } catch (error) {
@@ -687,15 +686,18 @@ function manterValorMaisRecente(item, anteriores) {
   return novo;
 }
 
-async function carregarEntregasPorEntregador(entregador) {
+// ⛔ 28/10/2026 — `opcoes.retries`: a consulta PERIÓDICA (poll de 60 s, voltar ao app, fila esvaziou) vai com 0 tentativas extras —
+// eram 3 × 15 s, e a próxima já vinha atrás, empilhando. Falhou, vale o cache e o próximo gatilho tenta de novo.
+async function carregarEntregasPorEntregador(entregador, opcoes) {
   const cacheName = chaveCacheEntregas(entregador);
+  const retries = opcoes && Number.isFinite(opcoes.retries) ? opcoes.retries : undefined;
 
   try {
     const res = await apiGet({
       action: 'entregas',
       entregador,
       turno: getTurno()
-    });
+    }, retries === undefined ? undefined : { retries });
 
     if (res && res.precisaLogin) throw erroLogin(res); // login ≠ montagem (ver erroLogin)
     if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
@@ -709,7 +711,11 @@ async function carregarEntregasPorEntregador(entregador) {
     const ultimoCache = readCache(cacheName);
     const anteriores = ultimoCache && Array.isArray(ultimoCache.value) ? ultimoCache.value : [];
     const items = (Array.isArray(res.items) ? res.items : []).map(item => manterValorMaisRecente(item, anteriores));
-    saveEntregasCache(entregador, items);
+    // (revisão da leva 2) `opcoes.gravarCache === false`: quem grava é a TELA, com os ACKs recentes por cima (page-entregas.js
+    // `umaRecarga`). A lista crua de uma resposta pedida antes de um ACK punha no cache a entrega confirmada como pendente, e a
+    // reabertura (que pinta o cache antes da rede) mostrava o passado.
+    if (!(opcoes && opcoes.gravarCache === false)) saveEntregasCache(entregador, items);
+    if (res.rotaInfo) guardarRotaInfo(entregador, res.rotaInfo);
 
     return {
       data: items,
@@ -764,7 +770,8 @@ async function carregarEntregasPorEntregador(entregador) {
 // Poll leve e separado da lista: cancelamento urgente não espera o refresh de 60 s
 // e uma Instabuy lenta não congela os cards nem o envio da fila offline.
 async function carregarCancelamentosDaRota(entregador) {
-  const res = await apiGet({ action: 'cancelamentos', entregador, turno: getTurno() });
+  // 28/10/2026: consulta periódica (15 s) sem tentativa extra — eram 3 × 15 s e a próxima rodada empilhava em cima.
+  const res = await apiGet({ action: 'cancelamentos', entregador, turno: getTurno() }, { retries: 0 });
   if (res && res.precisaLogin) throw erroLogin(res);
   if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar cancelamentos');
   return Array.isArray(res.avisos) ? res.avisos : [];
@@ -823,7 +830,6 @@ async function apiMarcarCancelado(row, obs) {
 
   // Corrige o KM inicial/final já registrado (tipo = 'inicial' | 'final').
   async function apiEditarKm(entregador, tipo, km) {
-    espelharNoPainel({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() });
     return apiGet({ action: 'editarKm', entregador: entregador, tipo: tipo, km: km, turno: getTurno() }, { retries: 3 });
   }
 
@@ -882,16 +888,24 @@ async function apiMarcarCancelado(row, obs) {
     const dono = nomeLimpo(x && x.params && x.params.entregador);
     return !dono || dono === getSavedDriverName();
   }
+  // ⛔ 28/10/2026 — O RECUSADO NÃO É MAIS "PENDENTE". Ele não vai subir sozinho (espera o "Entendi" ou a correção), e contá-lo
+  // aqui travava para sempre o "a fila esvaziou → recarrega a lista" da tela (page-entregas.js) e punha "enviando…" num pagamento
+  // que o servidor recusou. A recusa continua na tela pelo seu próprio caminho (o cartão, a faixa do topo, "Corrigir pagamento").
   function filaRowsPendentes() {
     const fila = bancoFila && bancoFila.snapshot();
     if (fila === null || !bancoFila) return null; // desconhecida não é uma fila vazia
-    return new Set(fila.filter(doAtivo).map(x => Number(x.meta && x.meta.row)).filter(Boolean));
+    return new Set(fila.filter(x => doAtivo(x) && !x.precisaCorrigir).map(x => Number(x.meta && x.meta.row)).filter(Boolean));
   }
+  // ⛔ 28/10/2026 — Um `desfazer` da MESMA parada depois da declaração a anula no servidor (anularPorDesfazer): a declaração que
+  // ficou ANTES dele na fila não vale mais como "resposta anterior" (o "Manter" não criaria declaração nova e a entrega refeita
+  // ficaria sem pagamento).
   function filaParamsPendentes(row, action) {
     let achado = null;const fila = bancoFila && bancoFila.snapshot();
     if (!fila) return null;
     fila.forEach(x => {
-      if (x.params.action === action && Number(x.params.row) === Number(row))
+      if (Number(x.params.row) !== Number(row)) return;
+      if (x.params.action === 'desfazer' && action !== 'desfazer') { achado = null; return; }
+      if (x.params.action === action)
         achado = { ...x.params, pg_recusado: !!x.precisaCorrigir, pg_recusa: x.erro || null };
     });
     return achado;
@@ -911,7 +925,9 @@ async function apiMarcarCancelado(row, obs) {
     iniciarEntrega: 'Indo para entrega',
     marcarEntregue: 'Entregue',
     marcarNaoEntregue: 'Não entregue',
-    marcarCancelado: 'Removida', // 19/10/2026: "Saiu da minha rota" (o servidor grava a parada fora da rota, não cancela)
+    // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' (era 'Removida', 19/10). O servidor novo grava "Não entregue" sem pagar e
+    // deixa a parada na rota com ↩ Desfazer (o cartão mostra o Desfazer para statusKey 'fail'); o antigo grava "Removida".
+    marcarCancelado: 'Não entregue',
     desfazer: ''
   });
   // Projeção da fila sobre a lista que veio do servidor: row -> o que o aparelho JÁ registrou.
@@ -936,6 +952,9 @@ async function apiMarcarCancelado(row, obs) {
         id: x.id, row, action: acao,
         alvo: ACOES_DE_STATUS[acao],
         obsAlvo: x.params.obs || '',
+        saiuDaRota: acao === 'marcarCancelado', // 28/10/2026: "Saiu da minha rota" pinta 'Não entregue' mas nunca anda com a irmã
+        // Quem era a parada no toque (28/10/2026): a recusa de uma parada que SAIU da lista ainda diz de quem é (faixa do topo).
+        cliente: meta.cliente || '', pedido: meta.pedido || '',
         // Item legado (gravado antes deste commit) não tem `statusAnterior`: aí a tela não inventa
         // um estado anterior — devolve undefined e quem lê cai no status do servidor.
         anterior: Object.prototype.hasOwnProperty.call(meta, 'statusAnterior') ? meta.statusAnterior : undefined,
@@ -964,16 +983,59 @@ async function apiMarcarCancelado(row, obs) {
     await bancoFila.ack(id);
     return true;
   }
-  let _processamentoFila = null;
-  function processarFila() {
-    if (_processamentoFila) return _processamentoFila;
-    _keepaliveFeito = false; // o app voltou a viver: o disparo de fechamento pode acontecer de novo
-    _processamentoFila = filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
+  // ⭐ 28/10/2026 — OS ACKS RECENTES POR CIMA DA LISTA ("a tela volta atrás"). A lista do servidor pedida ANTES de um ACK pode
+  // chegar DEPOIS dele: o item já saiu da fila (nada mais o projeta) e `state.items = result.data` repinta o que o servidor sabia
+  // antes. Cada ACK de STATUS fica aqui, em memória, com uma marca do relógio lógico; a tela o sobrepõe até aplicar uma lista
+  // pedida DEPOIS dele (`esquecerAcksAte(marcaDoPedido)`). É só memória de exibição: o ato já está no servidor.
+  let _marcaLogica = 0;
+  function proximaMarca() { _marcaLogica += 1; return _marcaLogica; }
+  const _acksRecentes = new Map(); // row -> { row, action, alvo, obsAlvo, saiuDaRota, marca }
+  function registrarAckDeStatus(item) {
+    const acao = item && item.params && item.params.action;
+    if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao) || !doAtivo(item)) return;
+    const row = Number(item.params.row);
+    if (!row) return;
+    _acksRecentes.set(row, { row, action: acao, alvo: ACOES_DE_STATUS[acao], obsAlvo: item.params.obs || '',
+      saiuDaRota: acao === 'marcarCancelado', marca: proximaMarca() });
+  }
+  function acksRecentesDeStatus() { return new Map(_acksRecentes); }
+  function esquecerAcksAte(marca) {
+    for (const [row, a] of _acksRecentes) if (a.marca < Number(marca)) _acksRecentes.delete(row);
+  }
+  // ⛔ 28/10/2026 — "RODAR DE NOVO". Um toque feito com o ciclo já no fim (ex.: reenviando o KM/foto, depois do último `ler()`)
+  // recebia a MESMA promessa do ciclo em voo e só subia no próximo gatilho (até 60 s, ou nunca, se a tela fechasse). Agora quem
+  // chama com um ciclo em voo marca "rodar de novo": o ciclo acaba e roda outro, sozinho (a promessa devolvida é a da passada atual).
+  // ⛔ 28/10/2026 (revisão da leva 2) — quem ESPERA o processarFila espera só a PASSADA ATUAL. A volta extra roda atrás, sozinha:
+  // senão o "Corrigir pagamento" (espera deliberada, com a tela dizendo "conferindo o pagamento…") ficava preso também nas voltas
+  // que outros toques pediram. Quem precisa do próprio item enviado confere e pede de novo (page-entregas.js
+  // `enviarRecebimentoGuardado`).
+  let _processamentoFila = null, _rodarDeNovo = false, _passadaAtual = null;
+  function umaPassada() {
+    return filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
       console.error('[fila]', error);
       return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
-    }).finally(() => { _processamentoFila = null; });
-    return _processamentoFila;
+    });
   }
+  function processarFila() {
+    if (_processamentoFila) { _rodarDeNovo = true; return _passadaAtual; }
+    _keepaliveFeito = false; // o app voltou a viver: o disparo de fechamento pode acontecer de novo
+    _rodarDeNovo = false;
+    const primeira = _passadaAtual = umaPassada();
+    _processamentoFila = (async () => {
+      let r = await primeira;
+      // Sem consumidor (outra aba, sem Web Locks) ou com o armazenamento quebrado, repetir não muda nada.
+      for (let voltas = 0; _rodarDeNovo && voltas < 20 && !(r && (r.erroArmazenamento || r.sincronizacaoIndisponivel || r.ocupado)); voltas++) {
+        _rodarDeNovo = false;
+        _passadaAtual = umaPassada();
+        r = await _passadaAtual;
+      }
+      return r;
+    })().finally(() => { _processamentoFila = null; _passadaAtual = null; });
+    return primeira;
+  }
+  function filaEmEnvio() { return !!_processamentoFila; }
+  // A passada que está correndo agora (ou null), SEM pedir volta nova — para quem só quer acompanhar os próprios itens.
+  function passadaEmVoo() { return _passadaAtual || null; }
   // ⛔ 23/09/2026 (2ª volta) — AQUI EXISTIA `MAX_AMBIGUAS_STATUS = 12`: depois de 12 ciclos sem
   // passar, um `ok:false` AMBÍGUO virava RECUSA DURÁVEL, a tela desfazia a marcação e o único botão
   // oferecido ("Entendi") APAGAVA a declaração do aparelho. Só que o catch de topo do painel devolve
@@ -1004,18 +1066,45 @@ async function apiMarcarCancelado(row, obs) {
     // até o próximo ciclo, então dentro de uma parada a fila continua estritamente FIFO.
     const rowsBloqueadas = new Set();
     const bloquearRow = it => { const r = Number(it.params && it.params.row); if (r) rowsBloqueadas.add(r); };
+    // ⛔ 28/10/2026 — O PORTEIRO FECHADO TRAVAVA A FILA INTEIRA PARA SEMPRE. `precisaLogin`/`montagemBloqueada`/
+    // `montagemIndisponivel` davam `break` no ciclo, e o ciclo seguinte começava pelo MESMO item: um toque cuja rota não vale mais
+    // (republicada sem as paradas dele enquanto estava sem sinal; ou de ontem, sem o dia carimbado, batendo na rota de hoje ainda
+    // não iniciada) segurava todas as entregas de trás, de qualquer rota, para sempre. Agora o porteiro trava só o que ele fecha:
+    //   · montagem/rota não iniciada → a ROTA daquele item (entregador|dia|turno), só para ações de status (as únicas que o
+    //     porteiro do servidor confere);
+    //   · login → o ENTREGADOR daquele token (o PIN dele continua sendo esperado, nada se perde).
+    // E segue com as outras rotas/entregadores. Cada item pulado por isso também bloqueia a PARADA dele no ciclo, para o
+    // `confirmarPagamento` dela nunca passar na frente do `marcarEntregue` (que ficou para trás). A tentativa conta no selo.
+    const rotasBloqueadas = new Set(), entregadoresBloqueados = new Set();
+    const donoDe = it => nomeLimpo(it && it.params && it.params.entregador) || getSavedDriverName();
+    const rotaDe = it => {
+      const a = it && it.params && it.params.action;
+      if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, a)) return null;
+      return donoDe(it) + '|' + String(it.params.data || '') + '|' + String(it.params.turno || '');
+    };
+    const travadoPeloPorteiro = it => entregadoresBloqueados.has(donoDe(it)) || (rotaDe(it) !== null && rotasBloqueadas.has(rotaDe(it)));
     for (;;) {
-      const item = (await bancoFila.ler()).find(x => !x.precisaCorrigir && !tentados.has(x.id) &&
-        !rowsBloqueadas.has(Number(x.params && x.params.row)) && podeEnviarAgora(x));
+      let item = null;
+      for (const x of await bancoFila.ler()) {
+        if (x.precisaCorrigir || tentados.has(x.id) || !podeEnviarAgora(x)) continue;
+        if (travadoPeloPorteiro(x)) { bloquearRow(x); continue; } // a parada inteira espera junto (ordem sagrada)
+        if (rowsBloqueadas.has(Number(x.params && x.params.row))) continue;
+        item = x; break;
+      }
       if (!item || !await continua()) break;
       tentados.add(item.id);
       const pagamento = item.params.action === 'confirmarPagamento';
       let res;
-      try { res = await apiGet(item.params, { retries: 1 }); }
+      // ⛔ 28/10/2026 — `confirmarPagamento` sem tentativa interna (era 45 s × 2 = ~91 s segurando tudo atrás dele): a fila
+      // repete sozinha no próximo ciclo e o servidor reconhece o mesmo toque (chave parada:ts_device conferida antes da parte lenta).
+      try { res = await apiGet(item.params, { retries: pagamento ? 0 : 1 }); }
       catch (error) {
         // Exceção = sem resposta (sem sinal, timeout, proxy fora). Não é recusa: nada é perdido,
         // nada é marcado, e parar aqui é certo — se a rede caiu, os itens de trás também não vão.
-        if (pagamento) await bancoFila.marcarReenvio(item.id);
+        // ⛔ 28/10/2026 (revisão da leva 2) — MENOS no pagamento: o timeout dele (20 s) costuma ser o servidor lento numa
+        // declaração de grupo, não a rede. Guarda para reenvio, trava só a PARADA dele (os itens dela que vêm atrás) e segue com
+        // as outras; se a rede caiu mesmo, o próximo item falha e o ciclo para aí.
+        if (pagamento) { await bancoFila.marcarReenvio(item.id); bloquearRow(item); continue; }
         break;
       }
       if (pagamento && res && res.ok && res.pagamento && res.pagamento.gravado === false) {
@@ -1025,6 +1114,7 @@ async function apiMarcarCancelado(row, obs) {
           await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
         }
         _naoPassaram.delete(item.id);
+        registrarAckDeStatus(item); // ANTES do ack: a tela nunca fica um quadro sem a fila e sem o ACK por cima
         await bancoFila.ack(item.id);
       } else if (res && res.naoEncontrado && pagamento) {
         _naoPassaram.delete(item.id);
@@ -1040,11 +1130,17 @@ async function apiMarcarCancelado(row, obs) {
         await bancoFila.recusar(item.id, (res.error && String(res.error)) ||
           'Esta parada não está mais na sua rota. Se você entregou, avise o escritório.');
       } else if (pagamento) {
+        if (res && res.precisaLogin) entregadoresBloqueados.add(donoDe(item)); // sem token, os outros dele também não passam
         await bancoFila.marcarReenvio(item.id);bloquearRow(item);continue;
       } else if (res && (res.precisaLogin || res.montagemBloqueada || res.montagemIndisponivel)) {
-        // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato e vale para a
-        // fila inteira. Guarda tudo como está e para — o próximo ciclo tenta de novo.
-        break;
+        // Porteiro fechado (login/montagem/rota não iniciada): NÃO é recusa deste ato. Guarda tudo como está, trava só o que
+        // o porteiro fecha (a rota deste item, ou o entregador do token) e segue com o resto — ver o comentário no topo.
+        _naoPassaram.set(item.id, tentativasDoItem(item.id) + 1);
+        bloquearRow(item);
+        if (res.precisaLogin) entregadoresBloqueados.add(donoDe(item));
+        else if (rotaDe(item) !== null) rotasBloqueadas.add(rotaDe(item));
+        else entregadoresBloqueados.add(donoDe(item)); // ação sem rota (não deveria vir com montagem*): espera com o entregador
+        continue;
       } else {
         // `ok:false` AMBÍGUO — pode ser recusa e pode ser o servidor engasgado; o painel devolve os
         // dois com o mesmo formato. Então: não descarta, não recusa, não desfaz a tela. Conta a
@@ -1069,6 +1165,12 @@ async function apiMarcarCancelado(row, obs) {
   //    sem ordem garantida e o resultado final poderia ficar invertido;
   //  - NENHUM ack é escrito: sem resposta não há prova de gravação, então o item continua na fila
   //    e sobe de novo no próximo ciclo (o servidor aguenta, é update).
+  //  - ⭐ 28/10/2026: o `confirmarPagamento` também vai, quando cabe — UM só na parada e DEPOIS da única marcação dela na fila. Ele
+  //    só sai depois que a marcação RESPONDEU ok (a ordem é sagrada: nunca na frente do `marcarEntregue`); se a página morrer antes,
+  //    ele sobe na reabertura, como sempre. Parada que só tem o pagamento pendente (a marcação já subiu) manda o pagamento direto.
+  //  - ⛔ (revisão da leva 2) e a marcação também não passa na frente de um pagamento da MESMA parada que ainda está na fila ANTES
+  //    dela (ex.: o "não pagou" e depois o Desfazer): mandar o Desfazer no fechamento fazia o servidor receber o pagamento DEPOIS
+  //    dele, e o pagamento ficava preso/reenviado. Essa parada fica inteira para a fila normal, na ordem.
   const MAX_KEEPALIVE = 6;
   let _keepaliveFeito = false;
   function enviarPendentesNoFechamento() {
@@ -1076,21 +1178,38 @@ async function apiMarcarCancelado(row, obs) {
       if (_keepaliveFeito || C.API_MODE !== 'json') return 0;
       const fila = bancoFila && bancoFila.snapshot();
       if (!fila || !fila.length) return 0;
-      const porRow = new Map();
-      fila.forEach(x => {
+      const porRow = new Map(), pagamentos = new Map(), posicao = new Map();
+      fila.forEach((x, i) => {
         const acao = x.params && x.params.action;
-        if (x.precisaCorrigir || !Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
-        if (!podeEnviarAgora(x)) return; // item de outro entregador sem token aqui: espera, nunca vai com o token errado
+        if (x.precisaCorrigir || !podeEnviarAgora(x)) return; // item de outro entregador sem token aqui: espera, nunca vai com o token errado
         const row = Number(x.params.row);
         if (!row) return;
+        posicao.set(x.id, i);
+        if (acao === 'confirmarPagamento') { pagamentos.set(row, (pagamentos.get(row) || []).concat([x])); return; }
+        if (!Object.prototype.hasOwnProperty.call(ACOES_DE_STATUS, acao)) return;
         porRow.set(row, (porRow.get(row) || []).concat([x]));
       });
+      const disparar = params => fetch(buildApiUrl(params), { method: 'GET', keepalive: true, cache: 'no-store' });
       let enviados = 0;
-      for (const itens of porRow.values()) {
+      for (const [row, itens] of porRow) {
         if (enviados >= MAX_KEEPALIVE) break;
         if (itens.length !== 1) continue; // ambíguo na ordem → deixa para o consumidor serial
-        try { fetch(buildApiUrl(itens[0].params), { method: 'GET', keepalive: true, cache: 'no-store' }).catch(function () {}); enviados++; }
-        catch (e) { /* o item continua na fila */ }
+        const pgs = pagamentos.get(row) || [];
+        if (pgs.some(pg => posicao.get(pg.id) < posicao.get(itens[0].id))) continue; // pagamento pendente ANTES: fica tudo na ordem
+        const pgDepois = pgs.length === 1 && posicao.get(pgs[0].id) > posicao.get(itens[0].id) ? pgs[0] : null;
+        try {
+          const envio = disparar(itens[0].params); enviados++;
+          if (pgDepois && enviados < MAX_KEEPALIVE) {
+            enviados++;
+            envio.then(r => (r && r.ok ? r.json() : null)).then(j => { if (j && j.ok) disparar(pgDepois.params).catch(function () {}); })
+              .catch(function () {});
+          } else envio.catch(function () {});
+        } catch (e) { /* o item continua na fila */ }
+      }
+      for (const [row, pgs] of pagamentos) {
+        if (enviados >= MAX_KEEPALIVE) break;
+        if (porRow.has(row) || pgs.length !== 1) continue; // com marcação pendente, só pelo caminho acima
+        try { disparar(pgs[0].params).catch(function () {}); enviados++; } catch (e) { /* continua na fila */ }
       }
       if (enviados) _keepaliveFeito = true;
       return enviados;
@@ -1205,6 +1324,24 @@ function statusRotaPendente() {
 // refazer (tirar a foto de novo) — o KM dessa tentativa já subiu, então não se perde nada.
 function temRotaPendenteFase(fase) { const p = lerRotaPend(fase); return !!(p && !p.desistiu); }
 
+// ⛔ 28/10/2026 (revisão da leva 2) — "✏️ TROCAR A FOTO" COM A ETAPA AINDA PENDENTE NO APARELHO. O menu de corrigir abre com a rota
+// "iniciada"/"finalizada" na tela mesmo quando o início/fim ainda não subiu, e a troca chamava o iniciar/finalizar de novo: o
+// pendente era REGRAVADO com o KM da tela (vazio — o servidor ainda não tinha a etapa) e a hora da TROCA. Ao subir, o servidor
+// iniciava/finalizava com essa hora e sem KM (no fim, mexendo na janela que a conciliação da maquininha usa). Agora, com pendente
+// daquela etapa, troca SÓ a foto dentro dele: KM, hora do toque (`ts_device`) e dia continuam os originais, e sem `trocarFoto`
+// (o 1º envio já leva a foto nova). Devolve null quando não há pendente: aí a etapa já está no servidor e a troca é lá
+// (`trocarFoto=1`). Nunca usa rede.
+function trocarFotoNoPendente(fase, entregador, fotoBase64, fotoMimeType) {
+  const p = lerRotaPend(fase, entregador);
+  if (!p) return null;
+  const novo = Object.assign({}, p, { fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', fotoTrocadaEm: new Date().toISOString() });
+  // Parou de tentar porque a FOTO não subia (o KM já subiu): a foto nova volta a tentar. Recusa do servidor/montagem: continua parado.
+  if (novo.desistiu && !novo.recusa && Number(novo.tentativas || 0) >= MAX_TENTATIVAS_FOTO) { novo.desistiu = false; novo.tentativas = 0; }
+  try { localStorage.setItem(rotaPendKey(fase, entregador !== undefined ? entregador : getSavedDriverName()), JSON.stringify(novo)); }
+  catch (e) { return { ok: false, semEspaco: true }; } // memória cheia: o pendente (com a foto anterior) fica como estava
+  return { ok: true, parado: !!novo.desistiu, recusa: novo.recusa || null };
+}
+
 // Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok), `{ok:false,
 // precisaLogin:true}` quando o porteiro recusou, ou null (não subiu).
 // Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
@@ -1279,6 +1416,21 @@ async function comRotaEmVoo(fase, entregador, trabalho) {
   _rotaEmVoo.add(k);
   try { return await trabalho(); } finally { _rotaEmVoo.delete(k); }
 }
+// ⛔ 28/10/2026 — "OK" NÃO PROVA QUE A FOTO FOI GRAVADA. Com sinal fraco os envios COM foto estouravam, o GET sem foto gravava o
+// início, e o reenvio seguinte (com a foto) recebia `ok` de um replay que não grava nada (fn_rota_iniciar_cas_rota: "Replay de
+// saída formal não altera hora, foto, km") — e o app APAGAVA a foto pendente. A resposta já traz o cabeçalho da rota
+// (`rotaInfo.fotoInicio`/`fotoFim`, "ok" quando há foto no servidor): a foto do aparelho só sai quando ele confirma.
+// ⛔ (revisão da leva 2) SÓ quando o servidor DECLARA a capacidade: `rotaInfo.fotoConfirma === true` (o da leva 3, que também passa
+// a gravar a foto no replay quando ela está vazia). Com o servidor ATUAL o replay nunca grava a foto: a regra nova reenviaria a
+// foto até 20× (~100 KB + a conferência da montagem no servidor, cada vez) segurando as marcações. Sem o campo, a regra de antes
+// (ok sem `semFoto` = gravou).
+function fotoConfirmada(payload, res) {
+  if (!payload || !payload.fotoBase64) return true; // não havia foto para guardar
+  if (!res || !res.ok || res.semFoto) return false;
+  const info = res.rotaInfo;
+  if (!info || typeof info !== 'object' || info.fotoConfirma !== true) return true;
+  return !!(payload.action === 'finalizarRota' ? info.fotoFim : info.fotoInicio);
+}
 async function reenviarRotaPendente() {
   // De TODOS os entregadores que usaram este aparelho, cada um com o próprio token. O de quem não
   // tem token guardado aqui espera (subiria sem identidade e o servidor recusaria).
@@ -1287,8 +1439,16 @@ async function reenviarRotaPendente() {
     if (_rotaEmVoo.has(fase + '|' + nomeLimpo(entregador))) continue;
     if (entregador !== getSavedDriverName() && !tokenDe(entregador)) continue;
     const res = await enviarRotaPayload(p);
+    // (revisão da leva 2) a foto pode ter sido TROCADA no aparelho enquanto este envio voava (`trocarFotoNoPendente`): o que está
+    // guardado agora vale mais que o `p` deste envio — nunca apagar nem regravar por cima da foto nova. Se a etapa acabou de entrar
+    // com a foto ANTIGA confirmada, a nova sobe depois como troca (`trocarFoto`).
+    const agora = lerRotaPend(fase, entregador);
+    if (agora && agora.fotoTrocadaEm !== p.fotoTrocadaEm) {
+      if (res && res.ok && fotoConfirmada(p, res)) salvarRotaPend(fase, Object.assign({}, agora, { trocarFoto: 1 }));
+      continue;
+    }
     if (!res || !res.ok) continue;                                       // nem o KM subiu → tenta de novo depois
-    if (!res.semFoto || !p.fotoBase64) { limparRotaPend(fase, entregador); continue; } // subiu inteiro → limpa
+    if (fotoConfirmada(p, res)) { limparRotaPend(fase, entregador); continue; } // subiu inteiro (o servidor confirmou a foto) → limpa
     // O KM subiu e a FOTO não. Antes isto era tratado como sucesso e a foto era APAGADA do
     // aparelho (perdida de vez). Agora ela fica salva e continua tentando sozinha.
     const n = Number(p.tentativas || 0) + 1;
@@ -1296,15 +1456,19 @@ async function reenviarRotaPendente() {
   }
 }
 
-function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+// `opcoes.trocarFoto` (28/10/2026, revisão da leva 2): o "✏️ Trocar a foto" pede ao servidor para TROCAR a foto já gravada
+// (`trocarFoto=1`). Só o servidor da leva 3 sabe trocar e responde `fotoTrocada: true`; o atual ignora o campo (o replay do
+// iniciarRota não mexe na foto) — a tela nunca diz "Foto enviada" sem essa confirmação.
+function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes) {
   // ⚠️ SÍNCRONO até salvar o KM/foto (o `_apiIniciarRota` grava antes do 1º await): quem chama pode abrir um diálogo DEPOIS de
   // chamar e o KM/foto já estão no aparelho (ver o modal da maquininha em page-entregas.js).
-  return comRotaEmVoo('inicio', entregador, () => _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType));
+  return comRotaEmVoo('inicio', entregador, () => _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes));
 }
-async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes) {
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+  if (opcoes && opcoes.trocarFoto && payload.fotoBase64) payload.trocarFoto = 1;
   { const d = diaConfiavel(); if (d) payload.data = d; } // o dia do TOQUE (ver comTurno): reenviado amanhã, não vira o início de amanhã
   // 1) PERSISTE ANTES DE QUALQUER REDE. Regressão de 08/09 (commit 71d469e): a conferência da
   //    montagem entrou ANTES deste salvar, e como ela lança quando não há resposta, KM + foto (que
@@ -1312,28 +1476,20 @@ async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) 
   //    digita o KM, tira a foto, toca Iniciar, 15s depois "não foi possível verificar a montagem" —
   //    e tinha que refazer tudo. Salvo aqui, nada mais se perde, aconteça o que acontecer abaixo.
   const salvouCompleto = salvarRotaPend('inicio', payload);
-  // 2) Confere a montagem (best-effort). BLOQUEIO de verdade (o servidor disse "tem pendência") →
-  //    para aqui, sem subir foto à toa (o servidor recusaria de qualquer jeito). SEM RESPOSTA (sem
-  //    sinal, timeout) → NÃO para: o próprio iniciarRota é conferido de novo no servidor, então
-  //    seguir é seguro; e se o envio também não subir, fica salvo e reenvia sozinho (processarFila).
-  //    A tela já conferiu a montagem ANTES de pedir KM/foto (page-entregas.js) — esta é a 2ª rede.
-  try { await verificarMontagem(entregador, false); }
-  catch (e) {
-    if (e && e.montagemBloqueada) {
-      salvarRotaPend('inicio', Object.assign({}, payload, { desistiu: true }));
-      throw e;
-    }
-    // sem resposta → segue pro envio (o servidor confere a montagem no iniciarRota)
-  }
-  espelharNoPainel(payload);
+  // 2) ⛔ 28/10/2026 — SAIU A 2ª CONFERÊNCIA DA MONTAGEM que ficava aqui (um `verificarMontagem` inteiro, ~2 s no servidor com a
+  //    "paciência", e até 15 s de espera sem sinal antes de sequer tentar subir o KM). A tela já conferiu ANTES de pedir KM/foto
+  //    (page-entregas.js) e o próprio `iniciarRota` é conferido no servidor (route.ts: conferirMontagemComPaciencia + CAS da
+  //    rota): montagem que voltou a ficar pendente nesse meio-tempo responde `montagemBloqueada` aqui embaixo e trava igual — o
+  //    único custo é a foto subir uma vez à toa nesse caso raro.
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
     salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
     throw erroMontagem(res);
   }
   if (res && res.ok) guardarInicioConfirmado(entregador, true); // o servidor confirmou o início, mesmo se a foto ficou pendente
-  if (res && res.ok && !res.semFoto) { limparRotaPend('inicio', entregador); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok && fotoConfirmada(payload, res)) { limparRotaPend('inicio', entregador); return res; }
+  // KM subiu, foto NÃO (ou o servidor não confirmou a foto) → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok) return Object.assign({}, res, { semFoto: true });
   // O servidor RESPONDEU e recusou: não é falta de sinal. Mentir "salvo, sobe sozinho" fazia o
   // entregador fechar o app achando que estava resolvido, e a foto era reenviada a cada poll para
   // ser recusada de novo, sem fim. Marca `desistiu` (para o reenvio automático) e devolve o motivo.
@@ -1344,21 +1500,21 @@ async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) 
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
-function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  return comRotaEmVoo('fim', entregador, () => _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType));
+function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes) {
+  return comRotaEmVoo('fim', entregador, () => _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes));
 }
-async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes) {
   const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+  if (opcoes && opcoes.trocarFoto && payload.fotoBase64) payload.trocarFoto = 1;
   { const d = diaConfiavel(); if (d) payload.data = d; }
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
-  espelharNoPainel(payload);
   const res = await enviarRotaPayload(payload);
   if (res && (res.montagemBloqueada || res.montagemIndisponivel)) {
     salvarRotaPend(payload.action === "iniciarRota" ? "inicio" : "fim", Object.assign({}, payload, { desistiu: true }));
     throw erroMontagem(res);
   }
-  if (res && res.ok && !res.semFoto) { limparRotaPend('fim', entregador); return res; }
-  if (res && res.ok) return res; // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
+  if (res && res.ok && fotoConfirmada(payload, res)) { limparRotaPend('fim', entregador); return res; }
+  if (res && res.ok) return Object.assign({}, res, { semFoto: true }); // KM subiu, foto NÃO → deixa salva no aparelho pra subir sozinha
   if (res && res.recusadoPeloServidor) { // ver o comentário em apiIniciarRota
     salvarRotaPend('fim', Object.assign({}, payload, { desistiu: true, recusa: res.error }));
     return { ok: false, error: res.error, recusadoPeloServidor: true };
@@ -1367,20 +1523,26 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
 }
 
 
+  // A faxina das chaves de outros dias roda UMA vez por abertura (28/10/2026): antes ela varria o localStorage inteiro a cada
+  // toque (o toque gravava o cache, e o cache varria). Gravar continua sendo uma vez por ato (page-entregas.js).
+  let _faxinaFeita = false;
   function saveEntregasCache(entregador, items) {
-    limparCacheEntregasDeOutrosDias();
+    if (!_faxinaFeita) { _faxinaFeita = true; limparCacheEntregasDeOutrosDias(); limparChavesDeDiasAntigos(); }
     const cacheName = chaveCacheEntregas(entregador);
-    writeCache(cacheName, Array.isArray(items) ? items : []);
+    return writeCache(cacheName, Array.isArray(items) ? items : []);
   }
+  // ⭐ 28/10/2026 — ABRIR NA HORA: a lista guardada de HOJE (mesma chave do plano B offline: dia + turno + entregador) e as
+  // informações da rota (KM/foto), para a tela pintar antes da rede quando a rota já começou. A recarga corre atrás.
+  function lerEntregasGuardadas(entregador) {
+    const c = readCache(chaveCacheEntregas(entregador));
+    const v = c && c.value !== undefined ? c.value : null;
+    return Array.isArray(v) ? v : null;
+  }
+  function chaveRotaInfo(entregador) { return 'rotainfo_' + diaSP() + '_' + getTurno() + '_' + String(entregador || '').trim().toLowerCase(); }
+  function guardarRotaInfo(entregador, info) { if (info && typeof info === 'object') writeCache(chaveRotaInfo(entregador), info); }
+  function lerRotaInfoGuardada(entregador) { const c = readCache(chaveRotaInfo(entregador)); return c && c.value && typeof c.value === 'object' ? c.value : null; }
 
-  async function carregarAdminPainel() {
-    const result = await withCache('admin_painel', async () => {
-      const res = await apiGet({ action: 'adminPainel' });
-      if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar painel');
-      return res;
-    });
-    return result;
-  }
+  // (28/10/2026: saiu o `carregarAdminPainel` junto com a página /admin — a tela de administração de verdade é a do painel.)
 
   function agruparEntregas(items) {
     const lista = Array.isArray(items) ? items : [];
@@ -1459,7 +1621,78 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     return local;
   }
 
+  // ⭐ 28/10/2026 — QUANTOS ENVIOS AINDA ESTÃO SÓ NO APARELHO (a fila e o KM/foto da rota). O Finalizar e a home dizem o número em
+  // vez de prometer que "sobe sozinho": com o app fechado nada sobe. `soDoAtivo` = só o entregador da tela; sem ele, tudo o que
+  // ESTE aparelho consegue mandar (o de quem não tem token aqui espera o PIN dele — aviso próprio na home). Recusados não contam.
+  // (revisão da leva 2) `semToken` = quantos desses são de quem NÃO tem token neste aparelho (o servidor pediu o PIN de novo e o
+  // token foi apagado): esses só sobem depois do PIN — insistir não adianta e o aviso não pode falar em internet.
+  function contarEnviosPendentes(opcoes) {
+    const so = !!(opcoes && opcoes.soDoAtivo);
+    const fila = bancoFila && bancoFila.snapshot();
+    const tokens = new Map(), temToken = nome => { const k = nomeLimpo(nome) || getSavedDriverName(); if (!tokens.has(k)) tokens.set(k, !!tokenDe(k)); return tokens.get(k); };
+    let n = 0, semToken = 0;
+    (fila || []).forEach(x => {
+      if (x.precisaCorrigir) return; if (so ? !doAtivo(x) : !podeEnviarAgora(x)) return;
+      n += 1; if (!temToken(x && x.params && x.params.entregador)) semToken += 1;
+    });
+    let rota = 0;
+    todosRotaPend().forEach(({ entregador, payload }) => {
+      if (!payload || payload.desistiu) return;
+      if (so ? nomeLimpo(entregador) !== getSavedDriverName() : (nomeLimpo(entregador) !== getSavedDriverName() && !tokenDe(entregador))) return;
+      rota += 1; if (!temToken(entregador)) semToken += 1;
+    });
+    return { fila: n, rota, total: n + rota, semToken, conhecida: fila !== null && fila !== undefined };
+  }
+
+  // ⭐ 28/10/2026 — a faxina das lápides (fila-duravel.js `limparLapides`): só ato confirmado há mais de 3 dias, e parando sozinha
+  // se a fila voltar a enviar (a tela chama com o app aberto e parado).
+  const IDADE_LAPIDE_MS = 3 * 24 * 3600 * 1000;
+  async function limparLapidesAntigas(continuar) {
+    await filaPronta();
+    if (!bancoFila.limparLapides) return { apagadas: 0 };
+    return bancoFila.limparLapides({ antesDe: Date.now() - IDADE_LAPIDE_MS,
+      continuar: () => !_processamentoFila && (!continuar || continuar()) });
+  }
+
+  // Foto do celular → JPEG menor (canvas), a mesma técnica da foto do KM. 28/10/2026: o anexo do chat subia CRU (foto de 4–12 MB
+  // em base64) e passava do limite de 4,5 MB do corpo na Vercel. Devolve { base64, mimeType, bytes }.
+  function comprimirImagem(file, maxLado, qualidade) {
+    return new Promise((resolve, reject) => {
+      if (!file) { reject(new Error('Arquivo não informado')); return; }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Não foi possível ler o arquivo'));
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Não foi possível carregar a imagem'));
+        img.onload = () => {
+          const lado = Math.max(img.width, img.height) || 1;
+          const escala = Math.min(1, (maxLado || 1280) / lado);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * escala));
+          canvas.height = Math.max(1, Math.round(img.height * escala));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const base64 = (canvas.toDataURL('image/jpeg', qualidade || 0.6).split(',')[1] || '').trim();
+          resolve({ base64, mimeType: 'image/jpeg', bytes: Math.floor(base64.length * 3 / 4) });
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   window.AppEntrega = {
+    diaSP,
+    contarEnviosPendentes,
+    limparLapidesAntigas,
+    comprimirImagem,
+    proximaMarca,
+    acksRecentesDeStatus,
+    esquecerAcksAte,
+    filaEmEnvio,
+    passadaEmVoo,
+    ehSaiuDaRota,
+    lerEntregasGuardadas,
+    lerRotaInfoGuardada,
     temToken,
     fimConfirmado,
     guardarFimConfirmado,
@@ -1487,8 +1720,6 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     clearDriverToken,
     apiLogin,
     saveEntregasCache,
-    setAdminAuth,
-    getAdminAuth,
     apiGet,
     carregarEntregadores,
     verificarMontagem,
@@ -1500,7 +1731,6 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     apiMarcarEntregue,
     apiMarcarNaoEntregue,
     abrirWhatsapp,
-    carregarAdminPainel,
     agruparEntregas,
     apiIniciarRota,
     apiFinalizarRota,
@@ -1523,6 +1753,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) 
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
+    trocarFotoNoPendente,
     inicioConfirmado, // 10/09: a tela usa pra saber que a rota do dia JA foi confirmada (localStorage, sobrevive ao kill)
     statusRotaPendente,
     apiEditarKm,

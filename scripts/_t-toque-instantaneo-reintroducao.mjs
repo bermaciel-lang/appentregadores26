@@ -86,25 +86,31 @@ const defeitos = [
   {
     nome: 'a conferência de valor volta ao timeout geral de 15 s (orçamento próprio ignorado)',
     arquivo: 'core.js',
+    // 28/10/2026: o orçamento do pagamento virou TEMPO_PAGAMENTO_MS (20 s, era 45000) — o defeito plantado é o mesmo.
     de: `    const timeoutMs = Number.isFinite(opt.timeoutMs) && opt.timeoutMs > 0 ? opt.timeoutMs
-      : (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`,
-    para: `    const timeoutMs = (params && params.action === 'confirmarPagamento' ? 45000 : C.API_TIMEOUT_MS);`
+      : (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);`,
+    para: `    const timeoutMs = (params && params.action === 'confirmarPagamento' ? TEMPO_PAGAMENTO_MS : C.API_TIMEOUT_MS);`
   },
   // ── page-entregas.js: a TELA ───────────────────────────────────────────────────────────────
   {
     nome: 'a tela volta a ser pintada só pelo servidor (a fila não projeta nada)',
     arquivo: 'page-entregas.js',
+    // 28/10/2026: a projeção ganhou os ACKs recentes por cima (core.js acksRecentesDeStatus) — o defeito plantado continua sendo
+    // "a fila não projeta nada": a primeira linha da projeção deixa de ler a fila.
     de: `    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    if (!mapa || !mapa.size) return state.items;`,
-    para: `    const mapa = api.filaStatusPendentes && api.filaStatusPendentes();
-    return state.items;`
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;`,
+    para: `    const mapa = null;
+    const acks = api.acksRecentesDeStatus ? api.acksRecentesDeStatus() : null;`
   },
   {
     nome: 'o toque não congela mais o estado ANTERIOR: a recusa não tem como desfazer',
     arquivo: 'page-entregas.js',
-    de: `    const atual = state.items.find(function (x) { return Number(x.row) === Number(row); });
+    // 28/10/2026: o meta ganhou cliente/pedido (a faixa das recusas sem cartão) e passou a ler da VISTA (revisão da leva 2) — o
+    // defeito plantado é o mesmo.
+    de: `    const atual = itensComFila().find(function (x) { return Number(x.row) === Number(row); });
     if (!atual) return { row: Number(row) };
-    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '' };`,
+    return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '',
+      cliente: String(atual.cliente || '').slice(0, 80), pedido: String(atual.pedido || '').slice(0, 40) };`,
     para: '    return { row: Number(row) };'
   },
   {

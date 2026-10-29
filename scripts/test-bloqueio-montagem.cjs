@@ -16,7 +16,13 @@ const api=ctx.window.AppEntrega;api.saveDriverName('Camila');localStorage.setIte
  offline=false;response={ok:false,montagemBloqueada:true,error:'FINALIZE',pendentes:[{pedido:'LOJA-1'}]};
  await assert.rejects(()=>api.verificarMontagem('Camila'),/FINALIZE/);
  await assert.rejects(()=>api.carregarEntregasPorEntregador('Camila'),/FINALIZE/);
- await assert.rejects(()=>api.apiIniciarRota('Camila',10,'foto'),/FINALIZE/);assert.equal(posts,0);
+ // ⛔ 28/10/2026 — INVERTIDA (velocidade, leva 2): era `posts===0` (a 2ª conferência da montagem, dentro do apiIniciarRota, barrava
+ // antes de subir a foto). Ela saiu: a tela confere ANTES do KM/foto e o servidor confere no próprio iniciarRota. A montagem
+ // pendente continua TRAVANDO (FINALIZE, pela resposta do iniciarRota) e o pendente não reenvia sozinho (desistiu) — o custo é UMA
+ // chamada (a foto sobe uma vez à toa) só nesse caso raro, em vez de uma conferência inteira a mais em todo Iniciar.
+ const postsAntes=posts;
+ await assert.rejects(()=>api.apiIniciarRota('Camila',10,'foto'),/FINALIZE/);assert.equal(posts-postsAntes,1);
+ assert.equal(api.temRotaPendenteFase('inicio'),false,'bloqueio de verdade não fica reenviando sozinho');
  response={ok:true,montagemVerificada:true,rotaIniciada:false};assert.equal((await api.verificarMontagem('Camila')).ok,true);
  await api.apiIniciarRota('Camila',10,'');
  offline=true;assert.equal((await api.verificarMontagem('Camila')).rotaIniciada,true);offline=false;
