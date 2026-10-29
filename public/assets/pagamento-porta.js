@@ -310,6 +310,18 @@
       return { valor: o, rotulo: BOTAO_SIMPLES[o].rotulo, tom: BOTAO_SIMPLES[o].tom };
     });
   }
+  // ⭐ 28/10/2026 (revisão da leva 2) — DE QUAL PEDIDO É O VALOR. Tocando no pedido pago online, o modal abre com a irmã paga na
+  // porta (pagamento decidido pelo grupo) — e dizia só "Valor do pedido: R$ X", sem dizer QUAL. Quando a tocada não está entre as
+  // perguntadas, a 1ª linha diz: "Pedido LOJA-2 — o LOJA-1 é pago online". Sem rede.
+  function nomeDoPedido(x) { return String((x && (x.pedido || x.cliente)) || ('parada ' + (x && x.row))); }
+  function linhaDeQualPedido(tocado, grupo) {
+    if (!tocado || !grupo || !grupo.length) return '';
+    if (grupo.some(function (x) { return Number(x.row) === Number(tocado.row); })) return '';
+    var nomes = grupo.map(nomeDoPedido);
+    var lista = nomes.length > 1 ? nomes.slice(0, -1).join(', ') + ' e ' + nomes[nomes.length - 1] : nomes[0];
+    var porque = tocado.naEntrega ? 'não é cobrado aqui' : 'é pago online';
+    return (grupo.length > 1 ? 'Pedidos ' : 'Pedido ') + lista + ' — o ' + nomeDoPedido(tocado) + ' ' + porque;
+  }
   async function perguntarSimples(ctx) {
     var item = ctx.item, ui = ctx.ui;
     var grupo = irmasNaPorta(ctx.irmas && ctx.irmas.length ? ctx.irmas : [item], item && item.row);
@@ -323,7 +335,7 @@
     var esc;
     try {
       // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
-      esc = await ui.escolher(linhaValor.trim(), opcoesSimples(ctx.cfg),
+      esc = await ui.escolher([linhaDeQualPedido(ctx.tocado, grupo), linhaValor.trim()].filter(Boolean).join('\n\n'), opcoesSimples(ctx.cfg),
         { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
     } catch (e) { esc = null; }
     if (cancelou(esc) || !BOTAO_SIMPLES[esc]) return { porRow: {}, manteve: false, cancelado: true };
@@ -352,7 +364,7 @@
       }
       for (var i = 0; i < grupo.length; i++) {
         var r = await perguntarUm(grupo[i], ui, formas, i === 0 && !ctx.anterior ? grupo : null,
-          grupo.length > 1 ? (i + 1) + ' de ' + grupo.length + ' · ' : '', !!ctx.anterior);
+          grupo.length > 1 ? (i + 1) + ' de ' + grupo.length + ' · ' : '', !!ctx.anterior, i === 0 ? linhaDeQualPedido(ctx.tocado, grupo) : '');
         if (!r) return { porRow: {}, manteve: false, cancelado: true };
         if (r.tudo) {
           var chaveGrupo = String(Number(item.row)) + ':' + String(ctx.tsDevice || '');
@@ -375,10 +387,10 @@
     }
   }
 
-  async function perguntarUm(item, ui, formas, grupo, pos, direto) {
+  async function perguntarUm(item, ui, formas, grupo, pos, direto, aviso) {
     for (var volta = 0; volta < MAX_VOLTAS; volta++) {
       if (!direto && formaResolvida(item, formas)) {
-        var e = await ui.escolher(mensagemTela1(item, formas), opcoesTela1(item, grupo, formas),
+        var e = await ui.escolher((aviso ? aviso + '\n\n' : '') + mensagemTela1(item, formas), opcoesTela1(item, grupo, formas),
           { titulo: pos + 'Como o cliente pagou?', textoCancelar: 'Cancelar' });
         if (cancelou(e)) return null;
         if (e === 'tudo' && opcoesTela1(item, grupo, formas).some(function (o) { return o.valor === 'tudo'; })) return { tudo: true };

@@ -1349,7 +1349,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // ⭐ 06/10/2026 — A PERGUNTA ÚNICA ("O cliente te pagou de alguma forma?"). Nenhuma rede antes dela: o valor não é
     // mais perguntado (o servidor usa o do pedido), então a conferência de valor não precisa mais ficar na frente do dedo.
     if (state.pgCfg && state.pgCfg.simples && Pg.perguntarSimples) {
-      return Pg.perguntarSimples({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice });
+      return Pg.perguntarSimples({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, tocado: item });
     }
     if (api.usandoPainel()) {
       // ⛔ 23/09/2026 (2ª volta) — ESTA ESPERA ERA INVISÍVEL E LONGA: o "Como foi a entrega?"
@@ -1368,7 +1368,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       }
       alvo = grupo.find(function (x) { return Number(x.row) === Number(alvo.row); }) || alvo;
     }
-    return Pg.perguntar({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined });
+    return Pg.perguntar({ item: alvo, irmas: grupo, cfg: state.pgCfg, ui: window.AppUI, tsDevice, anterior: anterior || undefined, tocado: item });
   }
 
   // Congela, NO INSTANTE DA GRAVAÇÃO, o estado que a parada tinha ANTES do toque. É isto que
@@ -1557,6 +1557,29 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       Object.keys(porRow).forEach((r) => { if (rows.indexOf(Number(r)) >= 0) out[r] = porRow[r]; });
       return out;
     };
+    // ⛔ (revisão da leva 2) O GRUPO MUDOU COM O MODAL ABERTO (um cancelamento chegou pelo poll, a irmã foi marcada por outro
+    // caminho): a resposta foi dada para OUTRO conjunto de pedidos ("Valor dos 2 pedidos" com um deles já fora). Descarta e
+    // pergunta de novo com o grupo de agora — tudo local, sem rede. Compara as paradas PAGAS NA PORTA de antes e de agora.
+    const portaDe = (grupo, rowTocada) => {
+      const Pg = window.PgPorta;
+      if (!Pg) return '';
+      return Pg.irmasNaPorta(grupo || [], rowTocada).filter((x) => Pg.devePerguntar(state.pgCfg, x)).map((x) => Number(x.row)).sort().join(',');
+    };
+    // O conjunto perguntado é FOTOGRAFADO antes de o modal abrir (texto com as rows): o cancelamento que chega pelo poll muda o
+    // próprio objeto da parada em `state.items`, e comparar depois com os mesmos objetos não veria mudança nenhuma.
+    const perguntarComGrupoEstavel = async (alvo, irmasIniciais, ts, anterior, conferencia) => {
+      let irmas = grupoNaHora(alvo, undefined, irmasIniciais); // o grupo de AGORA (os diálogos de antes levaram segundos)
+      let perguntada = portaDe(irmas, alvo.row);
+      let res = await coletarPagamento(alvo, irmas, ts, anterior, conferencia);
+      for (let refez = 0; refez < 3 && !(res && res.cancelado); refez++) {
+        const agora = grupoNaHora(alvo, undefined, null);
+        const portaAgora = portaDe(agora, alvo.row);
+        if (perguntada === portaAgora) break;
+        irmas = agora; perguntada = portaAgora;
+        res = await coletarPagamento(alvo, irmas, ts, pgRespostaAnterior(alvo.row, alvo), null);
+      }
+      return { res, irmas };
+    };
     // ⛔ 28/10/2026 — DESFAZER (e "Ainda não fui"): o servidor ANULA a declaração de pagamento da parada (anularPorDesfazer). A
     // resposta guardada na tela tem de sair junto, senão a próxima entrega oferecia "Manter" e nenhuma declaração nova subia.
     // E a observação do CLIENTE volta para o cartão (`updateLocalStatus(r, '', null)`), em vez de ser apagada.
@@ -1670,11 +1693,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         const tsA = new Date().toISOString();
         // ⛔ PORTA 2 do marcarEntregue: sem isto, marcar "Entregue" por aqui pularia a confirmação
         // de pagamento e viraria porta dos fundos. Mesma função, mesmo ts_device.
-        const pgA = esc === 'done' ? await coletarPagamento(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant), conferenciaA) : null;
+        const estavelA = esc === 'done' ? await perguntarComGrupoEstavel(ant, irmasA, tsA, pgRespostaAnterior(ant.row, ant), conferenciaA) : null;
+        const pgA = estavelA ? estavelA.res : null;
         if (pgA && pgA.cancelado) return;
         if (esc === 'done') {
           try {
-            const finalA = grupoNaHora(ant, undefined, irmasA)
+            const finalA = grupoNaHora(ant, undefined, estavelA.irmas)
               .filter((x) => Number(x.row) === Number(ant.row) || !semRespostaDePagamento(x, pgA));
             const rowsA = finalA.map((x) => Number(x.row));
             const marcacoes = rowsA.map((r) => ({ action: 'marcarEntregue', row: r, obs: 'Entregue', ts_device: tsA }));
@@ -1757,7 +1781,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // ⛔ PORTA 1: "💳 Como o cliente pagou?" — só para pedido pago NA PORTA e só quando o servidor
       // mandou perguntar. Sem uma resposta completa, não confirma a entrega.
       tsDevice = new Date().toISOString();
-      pgRes = await coletarPagamento(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
+      const estavel = await perguntarComGrupoEstavel(item, irmasPg, tsDevice, pgRespostaAnterior(row, item), conferenciaPg);
+      pgRes = estavel.res; irmasPg = estavel.irmas;
       if (pgRes && pgRes.cancelado) return;
       pgPorRow = pgRes && !pgRes.manteve ? pgRes.porRow : null;
     }
