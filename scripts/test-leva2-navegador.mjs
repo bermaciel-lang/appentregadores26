@@ -3,15 +3,20 @@
 // Roda: node scripts/test-leva2-navegador.mjs   (PLAYWRIGHT_MODULE / PLAYWRIGHT_CHANNEL / APP_PUBLIC_DIR opcionais)
 //
 // O QUE ELA PROVA:
-//   N1 toque duplo: o 2º toque que cai no diálogo recém-aberto (na 1ª opção) NÃO escolhe nada; depois de ~350 ms a opção vale;
-//   N2 o aviso "PEDIDO CANCELADO NA RUA" não fecha com toque no fundo, e só conta como visto depois de aparecer;
+//   N1 toque duplo: o 2º toque, no MESMO ponto do 1º, cai no diálogo recém-aberto e NÃO decide nada; depois de ~350 ms vale;
+//   N1b (revisão) um toque rápido de propósito em OUTRO lugar do diálogo vale (antes: todo toque da janela era ignorado);
+//   N2 o aviso "PEDIDO CANCELADO NA RUA" não fecha com toque no fundo nem com o Enter que chega junto (revisão), e só conta
+//      como visto depois de aparecer;
 //   N3 a recusa de uma parada que saiu da lista aparece numa faixa no topo, com o cliente, e o "Entendi" a tira;
 //   N4 no máximo UMA pintura da lista por quadro (antes: várias seguidas no mesmo toque);
 //   N5 rota começada hoje: a lista guardada aparece ANTES da resposta do servidor (antes: esqueleto até a rede responder);
 //   N6 o chat não pergunta com a tela escondida e, fechado, pergunta a cada ~30 s (antes: a cada 8 s, sempre);
 //   N7 chat: `cid` gerado no aparelho, mensagem repetida (mesmo id) não duplica, marca de lidas por entregador;
 //   N8 a foto anexada no chat é reduzida no aparelho (antes subia crua e passava do limite de 4,5 MB da Vercel);
-//   N9 `permissoes` só sobe quando muda (antes: a cada abertura da tela).
+//   N9 `permissoes` só sobe quando muda (antes: a cada abertura da tela);
+//   N7b (revisão) o reenvio à mão do chat depois de "Sem conexão" leva o MESMO cid (antes: um novo — a 1ª podia ter gravado);
+//   N10 (revisão) o GPS não religa numa rota já finalizada (o fim lembrado no aparelho), liga na rota em andamento, e a recarga
+//      que descobre o fim o desliga (antes: reabrir depois do fim religava o GPS e a notificação "Rota em andamento").
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -42,10 +47,20 @@ const browser = await chromium.launch({ headless: true, channel: process.env.PLA
 const paradas = n => Array.from({ length: n }, (_, i) => ({ row: i + 1, numero: i + 1, pedido: 'LOJA-' + (i + 1), cliente: 'Cliente ' + (i + 1),
   endereco: 'Rua Teste, ' + (i + 1), status: '', naEntrega: false, produtos: [{ qtd: 1, nome: 'Alface' }] }));
 
-async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true }), avisos = [], atrasoEntregas = 0, cache = null, relogio = false } = {}) {
+async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true }), avisos = [], atrasoEntregas = 0, cache = null, relogio = false,
+  finalizada = false, fimLembrado = false, gpsNativo = false, antes = null, mensagens = [] } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
-  const api = { itens, avisos, respostaMarcar, chamadas: [], atrasoEntregas };
-  await ctx.addInitScript(({ cache }) => {
+  const api = { itens, avisos, respostaMarcar, chamadas: [], atrasoEntregas, rotaFinalizada: finalizada, falharEnvio: 0, mensagens };
+  // O plugin nativo do GPS dublado (rastreio.js usa `Capacitor.Plugins.BackgroundGeolocation` quando existe). Sem
+  // `isNativePlatform`: o resto do app (porteiro de permissões, push, aviso de privacidade) continua achando que é o navegador.
+  if (gpsNativo) await ctx.addInitScript(() => {
+    window.__gps = { ligou: 0, desligou: [] };
+    window.Capacitor = { Plugins: { BackgroundGeolocation: {
+      addWatcher: () => { window.__gps.ligou++; return Promise.resolve('w' + window.__gps.ligou); },
+      removeWatcher: ({ id }) => { window.__gps.desligou.push(id); return Promise.resolve(); } } } };
+  });
+  if (antes) await ctx.addInitScript(antes); // roda antes de qualquer script da página
+  await ctx.addInitScript(({ cache, fimLembrado }) => {
     const dia = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     localStorage.setItem('app_entregas_driver_name', 'Ana');
     localStorage.setItem('app_entregas_tokens_v2', JSON.stringify({ Ana: { token: 'tok-ana', em: Date.now() } }));
@@ -54,7 +69,9 @@ async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true })
     localStorage.setItem('app_atividade_v1_Ana', String(Date.now()));
     localStorage.setItem('app_dia_servidor_v1', dia);
     if (cache) localStorage.setItem('app_entregas_cache_v3_entregas_' + dia + '_MANHÃ_ana', JSON.stringify({ ts: Date.now(), value: cache }));
-  }, { cache });
+    // o fim da rota que o servidor confirmou fica no aparelho (o sessionStorage morre quando o Android mata o app)
+    if (fimLembrado) localStorage.setItem('rota_fim_confirmado_v1_' + dia + '_MANHÃ_Ana', '1');
+  }, { cache, fimLembrado });
   await ctx.route('**/*', async route => {
     const u = new URL(route.request().url());
     if (u.origin !== BASE) return route.abort();
@@ -68,11 +85,14 @@ async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true })
       case 'entregas':
         if (api.atrasoEntregas) await new Promise(r => setTimeout(r, api.atrasoEntregas));
         return json({ ok: true, data: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()), items: api.itens,
-          rotaIniciada: true, rotaFinalizada: false, rotaInfo: { kmInicial: 10, kmFinal: '', inicio: 'x', fim: null, fotoInicio: 'ok', fotoFim: null },
+          rotaIniciada: true, rotaFinalizada: api.rotaFinalizada,
+          rotaInfo: { kmInicial: 10, kmFinal: api.rotaFinalizada ? 30 : '', inicio: 'x', fim: api.rotaFinalizada ? 'y' : null, fotoInicio: 'ok', fotoFim: api.rotaFinalizada ? 'ok' : null },
           perguntarPagamento: false, formasNaPorta: [] });
       case 'cancelamentos': return json({ ok: true, avisos: api.avisos });
       case 'mensagens': return json({ ok: true, mensagens: api.mensagens || [] });
-      case 'enviarMensagem': return json({ ok: true, mensagem: { id: 900, autor: 'entregador:Ana', autorNome: 'Você', corpo: p.corpo } });
+      case 'enviarMensagem':
+        if (api.falharEnvio > 0) { api.falharEnvio--; return route.abort(); } // sem sinal: o app mostra "Sem conexão"
+        return json({ ok: true, mensagem: { id: 900, autor: 'entregador:Ana', autorNome: 'Você', corpo: p.corpo } });
       case 'marcarEntregue': case 'iniciarEntrega': case 'marcarNaoEntregue': case 'marcarCancelado': case 'desfazer':
         return json(api.respostaMarcar(p));
       default: return json({ ok: true });
@@ -88,17 +108,41 @@ const testes = [];
 const teste = (nome, fn) => testes.push([nome, fn]);
 const cartao = (page, cliente) => page.locator('article.dc', { hasText: cliente });
 
-teste('N1 toque duplo: o 2º toque no diálogo recém-aberto não escolhe nada', async () => {
+// O ponto central do botão "Entregue" de um cartão, para tocar com o "dedo" do Playwright num lugar exato da tela. Mede com a
+// tela parada (rede quieta: nenhuma faixa nova empurrando a lista) e confere que o ponto É o botão — senão o toque cairia em
+// outra coisa (endereço → Maps) e a régua falharia por motivo nenhum.
+async function pontoDoEntregue(page, cliente) {
+  const botao = cartao(page, cliente).getByRole('button', { name: 'Entregue' }).first();
+  await botao.waitFor();
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await botao.scrollIntoViewIfNeeded();
+  const b = await botao.boundingBox();
+  const p = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  const noPonto = await page.evaluate(({ x, y }) => { const el = document.elementFromPoint(x, y); const bt = el && el.closest('button'); return bt ? bt.textContent.trim() : String(el && el.className); }, p);
+  assert.match(noPonto, /Entregue/, 'o ponto do 1º toque é o botão Entregue (achei: ' + noPonto + ')');
+  return p;
+}
+// Marca, dentro da página, QUANDO o diálogo apareceu e quando cada clique chegou (para provar que o toque caiu na janela de 350 ms).
+const relogioDoDialogo = (page) => page.evaluate(() => {
+  window.__dialogoEm = null; window.__cliques = [];
+  new MutationObserver((regs) => { for (const r of regs) for (const n of r.addedNodes) if (n.classList && n.classList.contains('app-modal-overlay') && window.__dialogoEm == null) window.__dialogoEm = performance.now(); })
+    .observe(document.body, { childList: true });
+  document.addEventListener('click', () => window.__cliques.push(performance.now()), true);
+});
+
+// (revisão da leva 2) O toque duplo de verdade: o 2º toque cai NO MESMO PONTO do 1º — no fundo do diálogo (= Cancelar) ou numa
+// opção que estiver ali. Esse é ignorado. (Antes desta régua o "2º toque" era simulado direto na 1ª opção — e TODO toque da janela
+// era ignorado, inclusive o de propósito em outro lugar: ver N1b.)
+teste('N1 toque duplo: o 2º toque, no mesmo ponto, não decide nada no diálogo recém-aberto', async () => {
   const t = await abrir();
   try {
     const { page } = t;
-    await cartao(page, 'Cliente 1').getByRole('button', { name: 'Entregue' }).first().waitFor();
-    await cartao(page, 'Cliente 1').getByRole('button', { name: 'Entregue' }).first().click();
-    // o diálogo acabou de abrir: o "2º toque" cai exatamente na 1ª opção, na mesma hora
-    const caixa = await page.evaluate(() => { const b = document.querySelector('.app-modal-opcao'); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-    await page.mouse.click(caixa.x, caixa.y);
+    const p = await pontoDoEntregue(page, 'Cliente 1');
+    await page.mouse.click(p.x, p.y); // abre o "Como foi a entrega?"
+    await page.locator('.app-modal-overlay', { hasText: 'Como foi a entrega?' }).waitFor({ state: 'attached', timeout: 5000 });
+    await page.mouse.click(p.x, p.y); // o 2º toque do dedo nervoso, no mesmo lugar
     await page.waitForTimeout(80);
-    assert.equal(await page.locator('.app-modal-overlay.aberto .app-modal-opcao').count() > 0, true, 'o diálogo continua aberto: o toque duplo não escolheu "Entregue em mãos"');
+    assert.equal(await page.locator('.app-modal-overlay.aberto .app-modal-opcao').count() > 0, true, 'o diálogo continua aberto (o 2º toque não cancelou nem escolheu)');
     assert.equal(await page.locator('article.dc.feito', { hasText: 'Cliente 1' }).count(), 0, 'e nada foi marcado');
     await page.waitForTimeout(400);
     await page.locator('.app-modal-opcao').first().click();
@@ -106,10 +150,48 @@ teste('N1 toque duplo: o 2º toque no diálogo recém-aberto não escolhe nada',
   } finally { await t.fechar(); }
 });
 
-teste('N2 o aviso de cancelado não fecha com toque no fundo e só conta como visto depois de aparecer', async () => {
-  const t = await abrir({ avisos: [{ id: 2, pedido: 'LOJA-2', cliente: 'Cliente 2', canceladoEm: '2026-10-28T12:00:00Z' }] });
+teste('N1b toque rápido de propósito em outro lugar do diálogo vale (só o do mesmo ponto é ignorado)', async () => {
+  const t = await abrir();
   try {
     const { page } = t;
+    const p = await pontoDoEntregue(page, 'Cliente 1');
+    await relogioDoDialogo(page);
+    await page.mouse.click(p.x, p.y);
+    await page.locator('.app-modal-overlay', { hasText: 'Como foi a entrega?' }).waitFor({ state: 'attached', timeout: 5000 });
+    // a opção mais LONGE do ponto do 1º toque, tocada na hora (dentro dos 350 ms)
+    const alvo = await page.evaluate(({ x, y }) => {
+      let melhor = null;
+      document.querySelectorAll('.app-modal-opcao').forEach((b) => {
+        const r = b.getBoundingClientRect(), c = { x: r.x + r.width / 2, y: r.y + r.height / 2, texto: b.textContent };
+        c.d = Math.hypot(c.x - x, c.y - y);
+        if (!melhor || c.d > melhor.d) melhor = c;
+      });
+      return melhor;
+    }, p);
+    await page.mouse.click(alvo.x, alvo.y);
+    const atraso = await page.evaluate(() => window.__cliques[window.__cliques.length - 1] - window.__dialogoEm);
+    console.log('   medido: 2º toque ' + Math.round(atraso) + ' ms depois de o diálogo abrir, a ' + Math.round(alvo.d) + ' px do 1º');
+    assert.ok(alvo.d > 60, 'a opção tocada está longe do 1º toque');
+    assert.ok(atraso < 350, 'o toque caiu DENTRO da janela de 350 ms (senão a régua não prova nada)');
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('.app-modal-overlay.aberto', { hasText: 'Como foi a entrega?' }).count(), 0,
+      'o toque rápido em outro lugar foi aceito ("' + alvo.texto + '") e o diálogo seguiu');
+  } finally { await t.fechar(); }
+});
+
+teste('N2 o aviso de cancelado não fecha com toque no fundo nem com o Enter que chega junto, e só conta como visto depois de aparecer', async () => {
+  const t = await abrir({ avisos: [{ id: 2, pedido: 'LOJA-2', cliente: 'Cliente 2', canceladoEm: '2026-10-28T12:00:00Z' }],
+    // (revisão da leva 2) um Enter que chega JUNTO com o aviso (que abriu sozinho, sem toque) não o fecha sem ser lido
+    antes: () => new MutationObserver((regs, mo) => {
+      for (const r of regs) for (const n of r.addedNodes) if (n.classList && n.classList.contains('app-modal-overlay') && /CANCELADO NA RUA/.test(n.textContent)) {
+        mo.disconnect(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); window.__enterDisparado = true;
+      }
+    }).observe(document, { childList: true, subtree: true }) });
+  try {
+    const { page } = t;
+    await page.waitForFunction(() => window.__enterDisparado === true, null, { timeout: 5000 });
+    await page.waitForTimeout(400); // o fechar tira o quadro do DOM em 180 ms
+    assert.equal(await page.getByText('PEDIDO CANCELADO NA RUA').count(), 1, 'o Enter dentro da janela não fechou o aviso automático');
     await page.getByText('PEDIDO CANCELADO NA RUA').waitFor({ timeout: 5000 });
     const visto = await page.evaluate(() => Object.keys(sessionStorage).filter(k => k.startsWith('cancelamento-entregador:')).length);
     assert.equal(visto, 1, 'visto = depois de aparecer');
@@ -208,12 +290,13 @@ teste('N6 o chat não pergunta com a tela escondida; fechado, a cada ~30 s', asy
 });
 
 teste('N7 chat: mensagem com id gerado no aparelho (cid), repetida não duplica, "lidas" por entregador', async () => {
-  const t = await abrir();
+  // A mensagem já está no servidor quando o app abre (antes a régua a punha DEPOIS de abrir e disputava corrida com a 1ª
+  // consulta do chat: quando a consulta perdia, o pop-up "Mensagem de Central" cobria o botão do chat e o clique travava).
+  const repetida = { id: 77, autor: 'central', autorNome: 'Central', corpo: 'Passe no CD' };
+  const t = await abrir({ mensagens: [repetida, repetida] });
   try {
     const { page, api } = t;
-    const repetida = { id: 77, autor: 'central', autorNome: 'Central', corpo: 'Passe no CD' };
-    api.mensagens = [repetida, repetida];
-    await page.locator('#btnChatEnt').click();
+    await page.getByText('Toque para abrir e responder').click(); // o pop-up da mensagem nova abre a conversa
     await page.locator('#chatEntLista').getByText('Passe no CD').first().waitFor({ timeout: 5000 });
     assert.equal(await page.locator('#chatEntLista').getByText('Passe no CD').count(), 1, 'a mesma mensagem (mesmo id) aparece uma vez');
     await page.locator('#chatEntInput').fill('Chegando');
@@ -263,7 +346,51 @@ teste('N9 permissões só sobem quando mudam (não a cada abertura)', async () =
   } finally { await t.fechar(); }
 });
 
+teste('N7b chat: o reenvio à mão depois de "Sem conexão" leva o MESMO cid', async () => {
+  const t = await abrir();
+  try {
+    const { page, api } = t;
+    await page.locator('#btnChatEnt').click();
+    await page.locator('#chatEntInput').fill('Estou no portão');
+    api.falharEnvio = 3; // as 3 tentativas da 1ª vez caem (sem sinal)
+    await page.locator('#chatEntEnviar').click();
+    await page.getByText('Sem conexão pra enviar agora.').waitFor({ timeout: 8000 });
+    await page.waitForTimeout(400);
+    await page.getByRole('button', { name: 'Entendi' }).click();
+    assert.equal(await page.locator('#chatEntInput').inputValue(), 'Estou no portão', 'o texto voltou ao campo');
+    await page.locator('#chatEntEnviar').click(); // reenviar à mão
+    await page.locator('#chatEntLista').getByText('Estou no portão').waitFor({ timeout: 5000 });
+    const envios = api.chamadas.filter(c => c.acao === 'enviarMensagem');
+    const cids = [...new Set(envios.map(c => c.cid))];
+    assert.equal(envios.length, 4, '3 tentativas que caíram + o reenvio');
+    assert.equal(cids.length, 1, 'todas com o mesmo cid (o servidor reconhece a repetição): ' + cids.join(', '));
+  } finally { await t.fechar(); }
+});
+
+teste('N10 GPS: não religa numa rota já finalizada; liga na rota em andamento; a recarga que descobre o fim desliga', async () => {
+  // a) finalizou, o Android matou o app e ele foi reaberto: o fim está lembrado no aparelho (o sessionStorage morreu)
+  const a = await abrir({ gpsNativo: true, finalizada: true, fimLembrado: true });
+  try {
+    await a.page.waitForTimeout(1500);
+    assert.equal(await a.page.evaluate(() => window.__gps.ligou), 0, 'rota finalizada: o GPS e a notificação "Rota em andamento" não religam');
+  } finally { await a.fechar(); }
+  // b) rota em andamento: liga ao abrir
+  const b = await abrir({ gpsNativo: true });
+  try {
+    await b.page.waitForTimeout(1500);
+    assert.equal(await b.page.evaluate(() => window.__gps.ligou), 1, 'rota em andamento: liga uma vez');
+    // c) a rota foi finalizada em outro lugar (no painel, em outro aparelho): a recarga descobre e desliga
+    b.api.rotaFinalizada = true;
+    await b.page.locator('#btnRefresh').click();
+    await b.page.waitForTimeout(1500);
+    assert.deepEqual(await b.page.evaluate(() => window.__gps.desligou), ['w1'], 'a recarga que descobriu o fim desligou o rastreio');
+    assert.equal(await b.page.evaluate(() => window.__gps.ligou), 1, 'e não religou');
+  } finally { await b.fechar(); }
+});
+
 let falhas = 0;
+const so = process.env.LEVA2_SO ? new RegExp(process.env.LEVA2_SO) : null; // ex.: LEVA2_SO="^N(7|10)" roda só esses
+if (so) testes.splice(0, testes.length, ...testes.filter(([nome]) => so.test(nome)));
 try {
   for (const [nome, fn] of testes) {
     try { await fn(); console.log('PASS ' + nome); }
