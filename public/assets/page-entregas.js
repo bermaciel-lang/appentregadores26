@@ -816,8 +816,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // "finalizei e depois de um tempo aparece em aberto de novo"): a sessão local (sessionStorage)
       // some quando o Android mata o app em segundo plano, e sem isto o app esquecia que já tinha
       // finalizado mesmo com o servidor já tendo o KM e a foto certinhos.
+      // ⛔ (revisão da leva 2) e o mesmo guarda do bloco de baixo: com o FIM ainda pendente no aparelho, o `false` do servidor não
+      // apaga a marca. Finalizou sem sinal → a recarga (4 s depois) pedia a lista antes de o fim subir → "não finalizada" apagava a
+      // marca → se o Android matasse o app nessa janela, a reabertura religava o GPS e a notificação "Rota em andamento".
       if (result.rotaFinalizada === true) api.guardarFimConfirmado(state.driver, true);
-      else if (result.rotaFinalizada === false && !result.stale && !pedidaAntesDaRota) api.guardarFimConfirmado(state.driver, false);
+      else if (result.rotaFinalizada === false && !result.stale && !pedidaAntesDaRota
+               && !(api.temRotaPendenteFase && api.temRotaPendenteFase('fim'))) api.guardarFimConfirmado(state.driver, false);
       if (result.rotaFinalizada && !state.rotaFinalizada) {
         state.rotaFinalizada = true;
         sessionStorage.setItem('rota_finalizada_' + state.driver, '1');

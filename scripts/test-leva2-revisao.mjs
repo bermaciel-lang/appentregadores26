@@ -14,7 +14,8 @@
 //   V12 (12) quem espera o processarFila espera só a passada atual; poll/volta ao app pedem a lista sem esperar a fila travada;
 //   V13 "Trocar a foto" com o início/fim AINDA pendente no aparelho troca só a foto dentro do pendente (KM e hora originais, sem
 //       `trocarFoto`); antes regravava o pendente com KM vazio e a hora da troca;
-//   V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo.
+//   V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo;
+//   V15 a recarga com o FIM ainda pendente no aparelho não apaga a marca de "fim confirmado" (sem pendente, apaga como antes).
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { app, reguas, ler } from './_harness-leva2.mjs';
@@ -257,6 +258,21 @@ teste('V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada
         'gravou com a foto velha: a nova não é apagada — sobe como troca, com KM e hora originais');
     }
   }
+});
+
+teste('V15 a recarga com o FIM ainda pendente no aparelho não apaga a marca de "fim confirmado"', async () => {
+  const { h, gps } = await comRecarga({ responder: async p => p.action === 'entregas' ? entregas({ rotaFinalizada: false }) : { ok: true } });
+  h.local.setItem(chavePend('fim'), JSON.stringify(pendente('fim'))); // finalizou sem sinal: o fim ainda não subiu
+  h.api.guardarFimConfirmado('Fictício', true);
+  h.state.rotaIniciada = true; h.state.rotaFinalizada = true;
+  await h.pagina.umaRecarga(false, false);
+  assert.equal(h.api.fimConfirmado('Fictício'), true, 'a marca continua (antes: apagada — com o app morto nessa janela, GPS e notificação voltavam)');
+  assert.equal(h.state.rotaFinalizada, true);
+  assert.equal(gps.ligar, 0, 'e o GPS não religa');
+  // sem pendente, o servidor dizendo "não finalizada" (o escritório reabriu a rota) apaga como antes
+  h.local.removeItem(chavePend('fim'));
+  await h.pagina.umaRecarga(false, false);
+  assert.equal(h.api.fimConfirmado('Fictício'), false, 'sem pendente, o "não finalizada" do servidor vale');
 });
 
 await rodar();
