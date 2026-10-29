@@ -937,6 +937,24 @@ async function apiMarcarCancelado(row, obs) {
   // Vale a ÚLTIMA declaração de cada row (a fila é lida em ordem transacional), que é o que o
   // entregador tocou por último. Devolve `null` — e não um mapa vazio — enquanto a fila não
   // hidratou: "não sei" não pode virar "não tem nada guardado".
+  // ⛔ 29/10/2026, 07:22 — A FAIXA VERMELHA DO TOPO MOSTRAVA RECUSA DE SEMANAS ATRÁS. O celular do Altacir abriu a rota da manhã com
+  // três avisos: LOJA-750 (rota de 29/09) e LOJA-1592 / LOJA-1418 (rota de 12/10). Eram recusas antigas guardadas no aparelho, que
+  // antes não apareciam em lugar nenhum (só no cartão, e essas paradas não têm cartão hoje). A faixa da leva 2 (28/10) mostrava
+  // TODA recusa sem cartão, de qualquer dia. Agora só a da rota ABERTA (mesmo dia e mesmo turno do toque): é para ela que a faixa
+  // existe (a parada que saiu da lista de hoje). As antigas continuam guardadas, só não assustam ninguém (o "Entendi" segue valendo).
+  // O dia do toque: o `data` que a fila carimbou (comTurno), senão a hora do toque, senão a hora em que entrou na fila — tudo pelo
+  // relógio do aparelho, o mesmo do `diaSP()` com que é comparado.
+  function diaDoItem(x) {
+    const p = (x && x.params) || {};
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(p.data || ''))) return String(p.data);
+    const t = Date.parse(String(p.ts_device || '')) || Number(x && x.ts) || 0;
+    if (!t) return '';
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(t)); } catch (e) { return ''; }
+  }
+  function recusaDaRotaAtual(p) {
+    if (!p || !p.dia || p.dia !== diaSP()) return false;
+    return !p.turno || p.turno === getTurno();
+  }
   function filaStatusPendentes() {
     const fila = bancoFila && bancoFila.snapshot();
     if (!bancoFila || fila === null) return null;
@@ -961,6 +979,8 @@ async function apiMarcarCancelado(row, obs) {
         obsAnterior: meta.obsAnterior,
         recusado: !!x.precisaCorrigir,
         erro: x.erro || null,
+        // 29/10/2026: o DIA e o TURNO do toque (a faixa do topo só mostra recusa da rota aberta — ver `recusaDaRotaAtual`).
+        dia: diaDoItem(x), turno: x.params.turno || '',
         // Quantos ciclos seguidos este item tentou subir e o servidor devolveu `ok:false` ambíguo.
         // NÃO é recusa e NÃO desfaz nada: serve só para o selo do cartão parar de dizer
         // "enviando…" e passar a dizer a verdade ("ainda não enviou"). Ver `consumirFila`.
@@ -1745,6 +1765,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, 
     filaRowsPendentes,
     filaParamsPendentes,
     filaStatusPendentes,
+    recusaDaRotaAtual,
     filaDescartarStatus,
     enviarPendentesNoFechamento,
     ACOES_DE_STATUS,
