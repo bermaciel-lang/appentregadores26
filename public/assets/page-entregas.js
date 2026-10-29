@@ -598,9 +598,21 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   }
 
   async function reenviarFoto(tipo) { // 'inicio' | 'fim'
-    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
     const foto = await pedirFotoObrigatoria();
     if (!foto || !foto.base64) { await AppUI.alerta('Nenhuma foto selecionada.', { tom: 'warn' }); return; }
+    // ⛔ 28/10/2026 (revisão da leva 2) — a etapa AINDA está pendente no aparelho (não subiu): troca só a foto DENTRO do pendente
+    // (KM e hora do toque originais), sem `trocarFoto` e sem rede no toque; ela sobe com a fila. Antes o iniciar/finalizar era
+    // chamado de novo e regravava o pendente com KM vazio e a hora da troca. Ver `trocarFotoNoPendente` (core.js).
+    const noPendente = api.trocarFotoNoPendente ? api.trocarFotoNoPendente(tipo, state.driver, foto.base64, foto.mimeType) : null;
+    if (noPendente) {
+      try { renderInfoRota(); } catch (e) {}
+      if (!noPendente.ok) { await AppUI.alerta('Não consegui guardar a foto nova: a memória do aparelho está cheia. A foto anterior continua guardada e sobe normalmente.', { titulo: 'Foto não trocada', tom: 'warn' }); return; }
+      if (noPendente.parado) { await AppUI.alerta('A foto nova ficou guardada no aparelho, mas o envio desta etapa está parado' + (noPendente.recusa ? ' (o sistema recusou: ' + noPendente.recusa + ')' : '') + '. Avise o escritório.', { titulo: 'Foto trocada no aparelho', tom: 'warn' }); return; }
+      agendarEnvio(); // sobe com a fila, sem esperar
+      await AppUI.alerta('Foto trocada ✅\n\nA foto nova fica guardada no aparelho junto com o KM e a hora que você já registrou, e sobe com o app aberto e internet.', { titulo: 'Foto trocada no aparelho', tom: 'success' });
+      return;
+    }
+    const km = tipo === 'fim' ? (state.rotaInfo.kmFinal || '') : (state.rotaInfo.kmInicial || '');
     try {
       // ⛔ 28/10/2026 (revisão da leva 2) — TROCAR é pedido explícito (`trocarFoto=1`): o replay do iniciarRota não mexe na foto já
       // gravada, e a tela dizia "Foto enviada ✅" assim mesmo. Agora só diz isso quando o servidor CONFIRMA a troca

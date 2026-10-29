@@ -11,7 +11,10 @@
 //   V9  (9) Desfazer de "Não entregue" é um a um;
 //   V10 (10) o cache guarda a lista que a TELA mostra (com o ACK recente por cima), não a crua de uma resposta velha;
 //   V11 (11) o "anterior" guardado no toque vem da vista (com o ACK por cima), não de `state.items` cru;
-//   V12 (12) quem espera o processarFila espera só a passada atual; poll/volta ao app pedem a lista sem esperar a fila travada.
+//   V12 (12) quem espera o processarFila espera só a passada atual; poll/volta ao app pedem a lista sem esperar a fila travada;
+//   V13 "Trocar a foto" com o início/fim AINDA pendente no aparelho troca só a foto dentro do pendente (KM e hora originais, sem
+//       `trocarFoto`); antes regravava o pendente com KM vazio e a hora da troca;
+//   V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo.
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { app, reguas, ler } from './_harness-leva2.mjs';
@@ -201,6 +204,59 @@ teste('V12 quem espera o processarFila espera só a passada atual; a lista não 
   await g.h.api.enfileirar({ action: 'marcarEntregue', row: 3, ts_device: '2026-10-28T12:00:00.000Z' }, { row: 3 });
   await Promise.race([g.h.pagina.filaDepoisLista(), new Promise(r => setTimeout(r, 1500))]);
   assert.equal(pedidas, 1, 'a lista foi pedida mesmo com a fila travada (antes: esperava a fila inteira)');
+});
+
+const T0 = '2026-10-28T09:00:00.000Z'; // a hora do toque original no Iniciar/Finalizar
+const pendente = (fase, o = {}) => ({ action: fase === 'inicio' ? 'iniciarRota' : 'finalizarRota', entregador: 'Fictício',
+  [fase === 'inicio' ? 'kmInicial' : 'kmFinal']: 4321, turno: 'MANHÃ', data: '2026-10-28', fotoBase64: 'FOTO_VELHA',
+  fotoMimeType: 'image/jpeg', ts_device: T0, ...o });
+const chavePend = fase => 'leva2_rota_pend_' + fase + '|Fictício';
+
+teste('V13 "Trocar a foto" com a etapa AINDA pendente: só a foto muda no pendente (KM e hora originais, sem trocarFoto)', async () => {
+  for (const fase of ['inicio', 'fim']) {
+    const km = fase === 'inicio' ? 'kmInicial' : 'kmFinal';
+    const { h } = await comRecarga();
+    h.semRede(true); // sem sinal: o pendente não sobe agora
+    h.local.setItem(chavePend(fase), JSON.stringify(pendente(fase)));
+    h.state.rotaInfo = {}; // o servidor ainda não tem a etapa: a tela não sabe o KM
+    await Promise.race([h.pagina.reenviarFoto(fase), new Promise(r => setTimeout(r, 1500))]);
+    const p = JSON.parse(h.local.getItem(chavePend(fase)));
+    assert.equal(p.fotoBase64, 'FOTO_NOVA', fase + ': a foto nova ficou no pendente');
+    assert.equal(p[km], 4321, fase + ': o KM digitado continua (antes: vazio)');
+    assert.equal(p.ts_device, T0, fase + ': a hora do toque continua a original (antes: a hora da troca)');
+    assert.equal(p.trocarFoto, undefined, fase + ': sem trocarFoto (o servidor ainda não tem a etapa)');
+    assert.ok(h.avisos.some(a => /Foto trocada/.test(a.mensagem)), fase + ': diz que trocou no aparelho');
+  }
+});
+
+teste('V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo', async () => {
+  for (const resultado of ['falha', 'gravou']) {
+    let soltar; const preso = new Promise(r => { soltar = r; });
+    let chegou; const noEnvio = new Promise(r => { chegou = r; });
+    const { h } = await comRecarga({ responder: async p => {
+      if (p.action !== 'iniciarRota') return { ok: true };
+      chegou(); await preso;
+      if (resultado === 'falha') throw Error('caiu a conexão');
+      return { ok: true, rotaInfo: { fotoConfirma: true, fotoInicio: 'ok' } }; // a etapa entrou com a foto que ESTE envio levava
+    } });
+    h.local.setItem(chavePend('inicio'), JSON.stringify(pendente('inicio')));
+    const envio = h.enviar(); await noEnvio; // o pendente (com a foto velha) está subindo
+    h.state.rotaInfo = {};
+    await Promise.race([h.pagina.reenviarFoto('inicio'), new Promise(r => setTimeout(r, 1500))]); // trocou com o envio voando
+    soltar(); await envio;
+    for (let i = 0; i < 4; i++) { await h.api.processarFila(); await h.assentar(); }
+    const p = JSON.parse(h.local.getItem(chavePend('inicio')) || 'null');
+    if (resultado === 'falha') {
+      assert.ok(p && p.fotoBase64 === 'FOTO_NOVA', 'falhou: o pendente continua com a foto NOVA (o envio em voo não regravou a velha)');
+      assert.equal(p.kmInicial, 4321); assert.equal(p.ts_device, T0);
+    } else {
+      // a nova sobe como TROCA, com o KM e a hora originais (ou ainda está guardada assim, esperando a vez)
+      const troca = h.calls.find(c => c.params.action === 'iniciarRota' && c.params.fotoBase64 === 'FOTO_NOVA');
+      const comoTroca = x => x && String(x.trocarFoto) === '1' && Number(x.kmInicial) === 4321 && x.ts_device === T0;
+      assert.ok(comoTroca(troca && troca.params) || (p && p.fotoBase64 === 'FOTO_NOVA' && comoTroca(p)),
+        'gravou com a foto velha: a nova não é apagada — sobe como troca, com KM e hora originais');
+    }
+  }
 });
 
 await rodar();

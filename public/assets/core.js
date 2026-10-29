@@ -1320,6 +1320,24 @@ function statusRotaPendente() {
 // refazer (tirar a foto de novo) — o KM dessa tentativa já subiu, então não se perde nada.
 function temRotaPendenteFase(fase) { const p = lerRotaPend(fase); return !!(p && !p.desistiu); }
 
+// ⛔ 28/10/2026 (revisão da leva 2) — "✏️ TROCAR A FOTO" COM A ETAPA AINDA PENDENTE NO APARELHO. O menu de corrigir abre com a rota
+// "iniciada"/"finalizada" na tela mesmo quando o início/fim ainda não subiu, e a troca chamava o iniciar/finalizar de novo: o
+// pendente era REGRAVADO com o KM da tela (vazio — o servidor ainda não tinha a etapa) e a hora da TROCA. Ao subir, o servidor
+// iniciava/finalizava com essa hora e sem KM (no fim, mexendo na janela que a conciliação da maquininha usa). Agora, com pendente
+// daquela etapa, troca SÓ a foto dentro dele: KM, hora do toque (`ts_device`) e dia continuam os originais, e sem `trocarFoto`
+// (o 1º envio já leva a foto nova). Devolve null quando não há pendente: aí a etapa já está no servidor e a troca é lá
+// (`trocarFoto=1`). Nunca usa rede.
+function trocarFotoNoPendente(fase, entregador, fotoBase64, fotoMimeType) {
+  const p = lerRotaPend(fase, entregador);
+  if (!p) return null;
+  const novo = Object.assign({}, p, { fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', fotoTrocadaEm: new Date().toISOString() });
+  // Parou de tentar porque a FOTO não subia (o KM já subiu): a foto nova volta a tentar. Recusa do servidor/montagem: continua parado.
+  if (novo.desistiu && !novo.recusa && Number(novo.tentativas || 0) >= MAX_TENTATIVAS_FOTO) { novo.desistiu = false; novo.tentativas = 0; }
+  try { localStorage.setItem(rotaPendKey(fase, entregador !== undefined ? entregador : getSavedDriverName()), JSON.stringify(novo)); }
+  catch (e) { return { ok: false, semEspaco: true }; } // memória cheia: o pendente (com a foto anterior) fica como estava
+  return { ok: true, parado: !!novo.desistiu, recusa: novo.recusa || null };
+}
+
 // Envia UM payload de rota (iniciar/finalizar). NUNCA lança. Devolve o res (ok), `{ok:false,
 // precisaLogin:true}` quando o porteiro recusou, ou null (não subiu).
 // Com foto: POST 2x; se não subir, tenta salvar SÓ o KM (sem foto) pra a rota ao menos fechar.
@@ -1417,6 +1435,14 @@ async function reenviarRotaPendente() {
     if (_rotaEmVoo.has(fase + '|' + nomeLimpo(entregador))) continue;
     if (entregador !== getSavedDriverName() && !tokenDe(entregador)) continue;
     const res = await enviarRotaPayload(p);
+    // (revisão da leva 2) a foto pode ter sido TROCADA no aparelho enquanto este envio voava (`trocarFotoNoPendente`): o que está
+    // guardado agora vale mais que o `p` deste envio — nunca apagar nem regravar por cima da foto nova. Se a etapa acabou de entrar
+    // com a foto ANTIGA confirmada, a nova sobe depois como troca (`trocarFoto`).
+    const agora = lerRotaPend(fase, entregador);
+    if (agora && agora.fotoTrocadaEm !== p.fotoTrocadaEm) {
+      if (res && res.ok && fotoConfirmada(p, res)) salvarRotaPend(fase, Object.assign({}, agora, { trocarFoto: 1 }));
+      continue;
+    }
     if (!res || !res.ok) continue;                                       // nem o KM subiu → tenta de novo depois
     if (fotoConfirmada(p, res)) { limparRotaPend(fase, entregador); continue; } // subiu inteiro (o servidor confirmou a foto) → limpa
     // O KM subiu e a FOTO não. Antes isto era tratado como sucesso e a foto era APAGADA do
@@ -1717,6 +1743,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, 
     reenviarRotaPendente,
     temRotaPendente,
     temRotaPendenteFase,
+    trocarFotoNoPendente,
     inicioConfirmado, // 10/09: a tela usa pra saber que a rota do dia JA foi confirmada (localStorage, sobrevive ao kill)
     statusRotaPendente,
     apiEditarKm,
