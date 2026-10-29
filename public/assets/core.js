@@ -1380,13 +1380,16 @@ async function comRotaEmVoo(fase, entregador, trabalho) {
 // ⛔ 28/10/2026 — "OK" NÃO PROVA QUE A FOTO FOI GRAVADA. Com sinal fraco os envios COM foto estouravam, o GET sem foto gravava o
 // início, e o reenvio seguinte (com a foto) recebia `ok` de um replay que não grava nada (fn_rota_iniciar_cas_rota: "Replay de
 // saída formal não altera hora, foto, km") — e o app APAGAVA a foto pendente. A resposta já traz o cabeçalho da rota
-// (`rotaInfo.fotoInicio`/`fotoFim`, "ok" quando há foto no servidor): a foto do aparelho só sai quando ele confirma. Servidor que
-// não manda `rotaInfo` (versão antiga) segue a regra de antes.
+// (`rotaInfo.fotoInicio`/`fotoFim`, "ok" quando há foto no servidor): a foto do aparelho só sai quando ele confirma.
+// ⛔ (revisão da leva 2) SÓ quando o servidor DECLARA a capacidade: `rotaInfo.fotoConfirma === true` (o da leva 3, que também passa
+// a gravar a foto no replay quando ela está vazia). Com o servidor ATUAL o replay nunca grava a foto: a regra nova reenviaria a
+// foto até 20× (~100 KB + a conferência da montagem no servidor, cada vez) segurando as marcações. Sem o campo, a regra de antes
+// (ok sem `semFoto` = gravou).
 function fotoConfirmada(payload, res) {
   if (!payload || !payload.fotoBase64) return true; // não havia foto para guardar
   if (!res || !res.ok || res.semFoto) return false;
   const info = res.rotaInfo;
-  if (!info || typeof info !== 'object') return true;
+  if (!info || typeof info !== 'object' || info.fotoConfirma !== true) return true;
   return !!(payload.action === 'finalizarRota' ? info.fotoFim : info.fotoInicio);
 }
 async function reenviarRotaPendente() {
@@ -1406,15 +1409,19 @@ async function reenviarRotaPendente() {
   }
 }
 
-function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+// `opcoes.trocarFoto` (28/10/2026, revisão da leva 2): o "✏️ Trocar a foto" pede ao servidor para TROCAR a foto já gravada
+// (`trocarFoto=1`). Só o servidor da leva 3 sabe trocar e responde `fotoTrocada: true`; o atual ignora o campo (o replay do
+// iniciarRota não mexe na foto) — a tela nunca diz "Foto enviada" sem essa confirmação.
+function apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes) {
   // ⚠️ SÍNCRONO até salvar o KM/foto (o `_apiIniciarRota` grava antes do 1º await): quem chama pode abrir um diálogo DEPOIS de
   // chamar e o KM/foto já estão no aparelho (ver o modal da maquininha em page-entregas.js).
-  return comRotaEmVoo('inicio', entregador, () => _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType));
+  return comRotaEmVoo('inicio', entregador, () => _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes));
 }
-async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) {
+async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType, opcoes) {
   // ts_device = hora do CELULAR no toque (mesma proteção do marcarEntregue): se ficar na fila e
   // reenviar só depois, o carimbo continua sendo o do CLIQUE, não o do reenvio.
   const payload = { action: 'iniciarRota', entregador: entregador, kmInicial: kmInicial, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+  if (opcoes && opcoes.trocarFoto && payload.fotoBase64) payload.trocarFoto = 1;
   { const d = diaConfiavel(); if (d) payload.data = d; } // o dia do TOQUE (ver comTurno): reenviado amanhã, não vira o início de amanhã
   // 1) PERSISTE ANTES DE QUALQUER REDE. Regressão de 08/09 (commit 71d469e): a conferência da
   //    montagem entrou ANTES deste salvar, e como ela lança quando não há resposta, KM + foto (que
@@ -1446,11 +1453,12 @@ async function _apiIniciarRota(entregador, kmInicial, fotoBase64, fotoMimeType) 
   return { ok: true, pendenteEnvio: true, semFotoLocal: !salvouCompleto, precisaLogin: !!(res && res.precisaLogin) };
 }
 
-function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
-  return comRotaEmVoo('fim', entregador, () => _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType));
+function apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes) {
+  return comRotaEmVoo('fim', entregador, () => _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes));
 }
-async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType) {
+async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, opcoes) {
   const payload = { action: 'finalizarRota', entregador: entregador, kmFinal: kmFinal, turno: getTurno(), fotoBase64: fotoBase64 || '', fotoMimeType: fotoMimeType || 'image/jpeg', ts_device: new Date().toISOString() };
+  if (opcoes && opcoes.trocarFoto && payload.fotoBase64) payload.trocarFoto = 1;
   { const d = diaConfiavel(); if (d) payload.data = d; }
   const salvouCompleto = salvarRotaPend('fim', payload); // PERSISTE antes de enviar (não perde KM/foto)
   const res = await enviarRotaPayload(payload);

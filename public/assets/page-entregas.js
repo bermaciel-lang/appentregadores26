@@ -51,7 +51,11 @@
     // entregador, e só é escrito quando o SERVIDOR confirmou o início — então não inventa rota.
     rotaIniciada: sessionStorage.getItem('rota_iniciada_' + savedDriver) === '1'
                   || (!!savedDriver && api.inicioConfirmado(savedDriver)),
-    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1',
+    // ⛔ 28/10/2026 (revisão da leva 2) — e a rota JÁ FINALIZADA também vem do aparelho (`fimConfirmado`, localStorage, por
+    // dia+turno+entregador, gravado quando o servidor confirmou o fim). Só com o `sessionStorage` (que o Android apaga ao matar o
+    // WebView), reabrir depois do fim religava o GPS e a notificação "Rota em andamento" — o "início confirmado" fica no aparelho.
+    rotaFinalizada: sessionStorage.getItem('rota_finalizada_' + savedDriver) === '1'
+                    || (!!savedDriver && !!api.fimConfirmado && api.fimConfirmado(savedDriver)),
     // Pagamento na porta (05/09): { perguntar, formas } vem do servidor a cada `entregas` fresco;
     // guardado no aparelho para o modal funcionar SEM SINAL (a resposta sobe pela fila offline).
     pgCfg: lerPgCfg(),
@@ -598,16 +602,20 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const foto = await pedirFotoObrigatoria();
     if (!foto || !foto.base64) { await AppUI.alerta('Nenhuma foto selecionada.', { tom: 'warn' }); return; }
     try {
+      // ⛔ 28/10/2026 (revisão da leva 2) — TROCAR é pedido explícito (`trocarFoto=1`): o replay do iniciarRota não mexe na foto já
+      // gravada, e a tela dizia "Foto enviada ✅" assim mesmo. Agora só diz isso quando o servidor CONFIRMA a troca
+      // (`fotoTrocada: true`, servidor da leva 3); sem a confirmação, diz a verdade.
       const res = tipo === 'fim'
-        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType)
-        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType);
+        ? await api.apiFinalizarRota(state.driver, km, foto.base64, foto.mimeType, { trocarFoto: true })
+        : await api.apiIniciarRota(state.driver, km, foto.base64, foto.mimeType, { trocarFoto: true });
       if (!res || !res.ok) throw new Error();
       // A foto NÃO se perde mais quando não sobe na hora: fica guardada no aparelho e o app tenta
       // sozinho. Por isso a mensagem não manda mais "tente de novo com sinal melhor" (o entregador
       // costumava ver isso com sinal ótimo, e refazer não adiantava nada).
       if (res.precisaLogin) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nO sistema pediu seu acesso de novo. Volte na tela inicial, toque no seu nome e digite seu PIN (os últimos 4 números do seu telefone) — aí ela sobe sozinha.', { titulo: 'Precisa entrar de novo', tom: 'warn' });
-      else if (res.semFoto) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nEla sobe sozinha assim que a conexão permitir. Não precisa tirar de novo.', { titulo: 'Guardada — sobe sozinha', tom: 'warn' });
-      else await AppUI.alerta('Foto enviada. ✅', { tom: 'success' });
+      else if (res.semFoto || res.pendenteEnvio) await AppUI.alerta('A foto ficou GUARDADA no aparelho ✅\n\nEla sobe sozinha quando a conexão permitir, com o app aberto. Não precisa tirar de novo.', { titulo: 'Guardada — sobe sozinha', tom: 'warn' });
+      else if (res.fotoTrocada === true) await AppUI.alerta('Foto enviada. ✅', { tom: 'success' });
+      else await AppUI.alerta('O sistema não confirmou a troca da foto: a foto que já estava pode ter ficado. Avise o escritório.', { titulo: 'Troca da foto não confirmada', tom: 'warn' });
       await carregarTudo(false);
     } catch (e) { await AppUI.alerta('Não foi possível enviar a foto agora.', { tom: 'danger' }); }
   }
@@ -735,6 +743,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // ACKs anteriores a ESTE pedido já estão na lista do servidor: saem de cima. (Cache não prova nada: não limpa.)
       if (!result.stale && api.esquecerAcksAte) api.esquecerAcksAte(pedidoEm);
       const pedidaAntesDaRota = pedidoEm && pedidoEm < (state.marcaRota || 0);
+      const iniciadaAntes = state.rotaIniciada, finalizadaAntes = state.rotaFinalizada;
       state.items = result.data || [];
       if (result.rotaInfo && !pedidaAntesDaRota) state.rotaInfo = result.rotaInfo;
       // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
@@ -806,6 +815,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         state.rotaFinalizada = false;
         sessionStorage.removeItem('rota_finalizada_' + state.driver);
       }
+
+      // ⛔ (revisão da leva 2) GPS acompanha o que a recarga descobriu: rota que ACABOU de virar finalizada desliga o rastreio (e a
+      // notificação "Rota em andamento"); rota iniciada e não finalizada liga (idempotente — o rastreio ignora se já está ligado).
+      if (state.rotaFinalizada && !finalizadaAntes) { try { pararRastreio(); } catch (e) {} }
+      else if (!result.stale && state.rotaIniciada && !state.rotaFinalizada && (!iniciadaAntes || finalizadaAntes)) { try { ligarRastreio(); } catch (e) {} }
 
       renderList();
 
@@ -2267,7 +2281,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     startAutoRefresh();
     startCancelRefresh();
     // GPS (28/10/2026): rota em andamento ao abrir a tela (o Android matou o app, o entregador reabriu) → o rastreio volta a ligar.
-    if (state.rotaIniciada && !state.rotaFinalizada) { try { ligarRastreio(); } catch (e) {} }
+    // (revisão da leva 2) e nunca numa rota já FINALIZADA (o fim lembrado no aparelho conta, não só o da sessão); se ela acabou, o
+    // rastreio órfão do Android, se houver, é desligado.
+    if (state.rotaIniciada && !state.rotaFinalizada && !(api.fimConfirmado && api.fimConfirmado(state.driver))) { try { ligarRastreio(); } catch (e) {} }
+    else if (state.rotaFinalizada) { try { pararRastreio(); } catch (e) {} }
     agendarFaxinaDasLapides();
   })();
 })();

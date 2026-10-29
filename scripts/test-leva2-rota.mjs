@@ -16,7 +16,8 @@ import { app, reguas, ler, PREFIXO } from './_harness-leva2.mjs';
 
 const { teste, rodar } = reguas('cenários do KM/foto e do GPS (leva 2)');
 const pend = (h, fase) => JSON.parse(h.local.getItem(PREFIXO + 'rota_pend_' + fase + '|Fictício') || 'null');
-const cabecalho = foto => ({ ok: true, rotaIniciada: true, rotaInfo: { kmInicial: 123, kmFinal: '', inicio: '2026-10-28T10:00:00Z', fim: null, fotoInicio: foto ? 'ok' : null, fotoFim: null } });
+// `confirma` = o servidor DECLARA a capacidade (`rotaInfo.fotoConfirma`, servidor da leva 3). Sem ela, vale a regra de antes.
+const cabecalho = (foto, confirma = true) => ({ ok: true, rotaIniciada: true, rotaInfo: { kmInicial: 123, kmFinal: '', inicio: '2026-10-28T10:00:00Z', fim: null, fotoInicio: foto ? 'ok' : null, fotoFim: null, ...(confirma ? { fotoConfirma: true } : {}) } });
 
 teste('K1 a foto pendente só sai quando o servidor confirma a foto', async () => {
   let servidorGravaFoto = false, fotoNoServidor = false;
@@ -44,15 +45,33 @@ teste('K1 a foto pendente só sai quando o servidor confirma a foto', async () =
   assert.equal(pend(h, 'inicio'), null, 'confirmada no servidor: sai do aparelho');
 });
 
+teste('K1b servidor ATUAL (sem fotoConfirma): ok do replay apaga a foto pendente, como antes — sem reenviar 20 vezes', async () => {
+  // (revisão da leva 2) com o servidor de hoje o replay do iniciarRota nunca grava a foto: exigir `fotoInicio` reenviaria a foto
+  // (~100 KB + a conferência da montagem no servidor) até 20 vezes, segurando as marcações.
+  const h = await app({ responder: async (p, n, reg) => {
+    if (p.action !== 'iniciarRota') return { ok: true };
+    if (reg.metodo === 'POST' && !h.ctx.sinalBom) throw Error('timeout fictício da foto');
+    return cabecalho(false, false);
+  } });
+  const r = await h.api.apiIniciarRota('Fictício', '123', 'FOTO_BASE64', 'image/jpeg');
+  assert.equal(r.semFoto, true, 'sem sinal para a foto: fica guardada');
+  h.ctx.sinalBom = true;
+  await h.api.reenviarRotaPendente();
+  assert.equal(pend(h, 'inicio'), null, 'servidor sem a capacidade: ok = gravou (a regra de antes)');
+  const posts = h.calls.filter(c => c.metodo === 'POST').length;
+  await h.api.reenviarRotaPendente();
+  assert.equal(h.calls.filter(c => c.metodo === 'POST').length, posts, 'e não fica reenviando a foto');
+});
+
 teste('K2 "Trocar a foto": sem a confirmação da foto, o fim volta como semFoto e fica guardado', async () => {
   const h = await app({ responder: async p => p.action === 'finalizarRota'
-    ? { ok: true, rotaFinalizada: true, rotaInfo: { kmFinal: 200, fotoFim: null } } : { ok: true } });
+    ? { ok: true, rotaFinalizada: true, rotaInfo: { kmFinal: 200, fotoFim: null, fotoConfirma: true } } : { ok: true } });
   const r = await h.api.apiFinalizarRota('Fictício', '200', 'FOTO_FIM', 'image/jpeg');
   assert.equal(r.ok, true);
   assert.equal(r.semFoto, true, 'a tela diz "a foto ficou guardada" em vez de "Foto enviada ✅"');
   assert.equal(pend(h, 'fim').fotoBase64, 'FOTO_FIM');
   const h2 = await app({ responder: async p => p.action === 'finalizarRota'
-    ? { ok: true, rotaFinalizada: true, rotaInfo: { kmFinal: 200, fotoFim: 'ok' } } : { ok: true } });
+    ? { ok: true, rotaFinalizada: true, rotaInfo: { kmFinal: 200, fotoFim: 'ok', fotoConfirma: true } } : { ok: true } });
   const r2 = await h2.api.apiFinalizarRota('Fictício', '200', 'FOTO_FIM', 'image/jpeg');
   assert.ok(!r2.semFoto); assert.equal(pend(h2, 'fim'), null);
 });
