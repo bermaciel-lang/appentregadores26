@@ -161,17 +161,26 @@
   overlay.querySelector('#chatEntFechar').addEventListener('click', fechar);
   overlay.addEventListener('click', function (e) { if (e.target === overlay) fechar(); });
 
+  // (revisão da leva 2) O reenvio à mão depois de "Sem conexão" é a MESMA mensagem: leva o MESMO `cid` da que falhou (a 1ª pode ter
+  // chegado ao servidor com a resposta perdida — com o mesmo cid, o servidor da leva 3 não a duplica). Texto mudado = mensagem nova.
+  var falhou = { texto: null, cid: null, anexo: null, cidAnexo: null };
+  function cidPara(chave, campoChave, campoCid) {
+    if (falhou[campoChave] !== null && falhou[campoChave] === chave && falhou[campoCid]) return falhou[campoCid];
+    return novoCid();
+  }
   async function enviar() {
     var texto = String(inputEl.value || '').trim();
     if (!texto) return;
     inputEl.value = '';
+    var cid = cidPara(texto, 'texto', 'cid');
     try {
-      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: texto, cid: novoCid() }, { retries: 2 });
+      var r = await api.apiGet({ action: 'enviarMensagem', entregador: driver, corpo: texto, cid: cid }, { retries: 2 });
       if (r && r.ok && r.mensagem) {
+        falhou.texto = null; falhou.cid = null;
         juntar([r.mensagem]);
         setLastSeen(ultimoId); render(); pintarBadge();
-      } else { inputEl.value = texto; await AppUI.alerta('Não consegui enviar. Tente de novo.'); }
-    } catch (e) { inputEl.value = texto; await AppUI.alerta('Sem conexão pra enviar agora.'); }
+      } else { falhou.texto = texto; falhou.cid = cid; inputEl.value = texto; await AppUI.alerta('Não consegui enviar. Tente de novo.'); }
+    } catch (e) { falhou.texto = texto; falhou.cid = cid; inputEl.value = texto; await AppUI.alerta('Sem conexão pra enviar agora.'); }
   }
   overlay.querySelector('#chatEntEnviar').addEventListener('click', enviar);
   inputEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); enviar(); } });
@@ -222,11 +231,16 @@
       var tipoBruto = String(file.type || '');
       if (!tipo) tipo = (tipoBruto && tipoBruto !== 'application/octet-stream') ? tipoBruto
         : (mimeAudioPorNome(file.name) || tipoBruto || 'application/octet-stream');
-      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: nome, tipo: tipo, cid: novoCid() };
+      // o mesmo arquivo de novo (nome, tamanho, tipo e data) depois de uma falha = a mesma mensagem, o mesmo cid
+      var assinatura = [file.name, file.size, file.type, file.lastModified].join('|');
+      var cidAnexo = cidPara(assinatura, 'anexo', 'cidAnexo');
+      var body = { action: 'enviarAnexo', entregador: driver, arquivo: base64, nome: nome, tipo: tipo, cid: cidAnexo };
       if (ti && ti.token) body.token = ti.token;
-      var r = await fetch('/api/painel/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }).then(function (x) { return x.json(); });
-      if (r && r.ok && r.mensagem) { juntar([r.mensagem]); setLastSeen(ultimoId); render(); }
-      else await AppUI.alerta('Não consegui enviar o arquivo. Tente de novo.');
+      var r;
+      try { r = await fetch('/api/painel/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' }).then(function (x) { return x.json(); }); }
+      catch (e) { falhou.anexo = assinatura; falhou.cidAnexo = cidAnexo; throw e; }
+      if (r && r.ok && r.mensagem) { falhou.anexo = null; falhou.cidAnexo = null; juntar([r.mensagem]); setLastSeen(ultimoId); render(); }
+      else { falhou.anexo = assinatura; falhou.cidAnexo = cidAnexo; await AppUI.alerta('Não consegui enviar o arquivo. Tente de novo.'); }
     } catch (e) { await AppUI.alerta('Sem conexão pra enviar o arquivo agora.'); }
     fb.textContent = fbOrig;
   }

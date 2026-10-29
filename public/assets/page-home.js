@@ -179,7 +179,7 @@
       let box = document.getElementById('enviosPendentesBox');
       const c = api.contarEnviosPendentes ? api.contarEnviosPendentes() : null;
       const n = c && c.conhecida ? c.total : 0;
-      if (!n) { if (box) box.classList.add('hidden'); return; }
+      if (!n) { if (box) box.classList.add('hidden'); return n; }
       if (!box) {
         box = document.createElement('div');
         box.id = 'enviosPendentesBox';
@@ -188,14 +188,31 @@
       }
       box.textContent = '⏳ Faltam ' + n + (n === 1 ? ' envio' : ' envios') + ' deste aparelho (entregas, pagamento ou KM/foto). Deixe o app aberto com internet até este aviso sumir.';
       box.classList.remove('hidden');
-    } catch (e) {}
+      return n;
+    } catch (e) { return 0; }
+  }
+  // ⛔ 28/10/2026 (revisão da leva 2) — a home tentava UMA vez: sem sinal naquela hora, nada mais subia até o entregador entrar na
+  // rota. Agora tenta de novo quando a internet volta (`online`), quando a tela volta a aparecer e a cada ~30 s enquanto houver
+  // pendente — e para quando esvazia. Uma tentativa de cada vez (`processarFila` já não sobrepõe).
+  const REPETIR_HOME_MS = 30000;
+  let _repetirHome = null;
+  function tentarEnviarDaHome() {
+    if (_repetirHome) { window.clearTimeout(_repetirHome); _repetirHome = null; }
+    if (document.visibilityState === 'hidden') return; // volta pelo visibilitychange
+    const depois = function () {
+      const n = pintarEnviosPendentes();
+      if (n > 0) _repetirHome = window.setTimeout(tentarEnviarDaHome, REPETIR_HOME_MS);
+    };
+    try { api.processarFila().then(depois, depois); } catch (e) { depois(); }
   }
   async function enviarPendentesDaHome() {
     try {
       await api.filaPronta();
       pintarEnviosPendentes();
       window.addEventListener('fila-entregas-mudou', pintarEnviosPendentes);
-      api.processarFila().then(pintarEnviosPendentes, pintarEnviosPendentes);
+      window.addEventListener('online', tentarEnviarDaHome);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') tentarEnviarDaHome(); });
+      tentarEnviarDaHome();
     } catch (e) {}
   }
 

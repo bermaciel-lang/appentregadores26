@@ -1325,6 +1325,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const exato = modo === 'mesmoStatus';
     const aberta = (x) => k(x) === 'pending' || k(x) === 'start';
     if (!exato && !aberta(item)) return [item];
+    // (revisão da leva 2) "Não entregue" é marcado UM A UM, então também volta um a um: dois "Cliente não estava" da mesma porta,
+    // marcados separados, não podem voltar juntos num Desfazer só.
+    if (exato && k(item) === 'fail') return [item];
     return vista.filter((x) => Number(x.numero) === Number(item.numero)
       && (Number(x.row) === Number(item.row) || (!fora(x) && (exato ? k(x) === k(item) : aberta(x)))));
   }
