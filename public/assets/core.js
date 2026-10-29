@@ -711,7 +711,10 @@ async function carregarEntregasPorEntregador(entregador, opcoes) {
     const ultimoCache = readCache(cacheName);
     const anteriores = ultimoCache && Array.isArray(ultimoCache.value) ? ultimoCache.value : [];
     const items = (Array.isArray(res.items) ? res.items : []).map(item => manterValorMaisRecente(item, anteriores));
-    saveEntregasCache(entregador, items);
+    // (revisão da leva 2) `opcoes.gravarCache === false`: quem grava é a TELA, com os ACKs recentes por cima (page-entregas.js
+    // `umaRecarga`). A lista crua de uma resposta pedida antes de um ACK punha no cache a entrega confirmada como pendente, e a
+    // reabertura (que pinta o cache antes da rede) mostrava o passado.
+    if (!(opcoes && opcoes.gravarCache === false)) saveEntregasCache(entregador, items);
     if (res.rotaInfo) guardarRotaInfo(entregador, res.rotaInfo);
 
     return {
@@ -1001,27 +1004,38 @@ async function apiMarcarCancelado(row, obs) {
   }
   // ⛔ 28/10/2026 — "RODAR DE NOVO". Um toque feito com o ciclo já no fim (ex.: reenviando o KM/foto, depois do último `ler()`)
   // recebia a MESMA promessa do ciclo em voo e só subia no próximo gatilho (até 60 s, ou nunca, se a tela fechasse). Agora quem
-  // chama com um ciclo em voo marca "rodar de novo": o ciclo acaba e roda outro, e a promessa devolvida só resolve depois dele.
-  let _processamentoFila = null, _rodarDeNovo = false;
+  // chama com um ciclo em voo marca "rodar de novo": o ciclo acaba e roda outro, sozinho (a promessa devolvida é a da passada atual).
+  // ⛔ 28/10/2026 (revisão da leva 2) — quem ESPERA o processarFila espera só a PASSADA ATUAL. A volta extra roda atrás, sozinha:
+  // senão o "Corrigir pagamento" (espera deliberada, com a tela dizendo "conferindo o pagamento…") ficava preso também nas voltas
+  // que outros toques pediram. Quem precisa do próprio item enviado confere e pede de novo (page-entregas.js
+  // `enviarRecebimentoGuardado`).
+  let _processamentoFila = null, _rodarDeNovo = false, _passadaAtual = null;
+  function umaPassada() {
+    return filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
+      console.error('[fila]', error);
+      return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
+    });
+  }
   function processarFila() {
-    if (_processamentoFila) { _rodarDeNovo = true; return _processamentoFila; }
+    if (_processamentoFila) { _rodarDeNovo = true; return _passadaAtual; }
     _keepaliveFeito = false; // o app voltou a viver: o disparo de fechamento pode acontecer de novo
+    _rodarDeNovo = false;
+    const primeira = _passadaAtual = umaPassada();
     _processamentoFila = (async () => {
-      let r;
-      for (let voltas = 0; ; voltas++) {
+      let r = await primeira;
+      // Sem consumidor (outra aba, sem Web Locks) ou com o armazenamento quebrado, repetir não muda nada.
+      for (let voltas = 0; _rodarDeNovo && voltas < 20 && !(r && (r.erroArmazenamento || r.sincronizacaoIndisponivel || r.ocupado)); voltas++) {
         _rodarDeNovo = false;
-        r = await filaPronta().then(() => bancoFila.exclusivo(consumirFila)).catch(error => {
-          console.error('[fila]', error);
-          return { erroArmazenamento: 'Não foi possível atualizar a fila do aparelho. As declarações precisam de conferência.' };
-        });
-        // Sem consumidor (outra aba, sem Web Locks) ou com o armazenamento quebrado, repetir não muda nada.
-        if (!_rodarDeNovo || voltas >= 20 || (r && (r.erroArmazenamento || r.sincronizacaoIndisponivel || r.ocupado))) break;
+        _passadaAtual = umaPassada();
+        r = await _passadaAtual;
       }
       return r;
-    })().finally(() => { _processamentoFila = null; });
-    return _processamentoFila;
+    })().finally(() => { _processamentoFila = null; _passadaAtual = null; });
+    return primeira;
   }
   function filaEmEnvio() { return !!_processamentoFila; }
+  // A passada que está correndo agora (ou null), SEM pedir volta nova — para quem só quer acompanhar os próprios itens.
+  function passadaEmVoo() { return _passadaAtual || null; }
   // ⛔ 23/09/2026 (2ª volta) — AQUI EXISTIA `MAX_AMBIGUAS_STATUS = 12`: depois de 12 ciclos sem
   // passar, um `ok:false` AMBÍGUO virava RECUSA DURÁVEL, a tela desfazia a marcação e o único botão
   // oferecido ("Entendi") APAGAVA a declaração do aparelho. Só que o catch de topo do painel devolve
@@ -1087,7 +1101,10 @@ async function apiMarcarCancelado(row, obs) {
       catch (error) {
         // Exceção = sem resposta (sem sinal, timeout, proxy fora). Não é recusa: nada é perdido,
         // nada é marcado, e parar aqui é certo — se a rede caiu, os itens de trás também não vão.
-        if (pagamento) await bancoFila.marcarReenvio(item.id);
+        // ⛔ 28/10/2026 (revisão da leva 2) — MENOS no pagamento: o timeout dele (20 s) costuma ser o servidor lento numa
+        // declaração de grupo, não a rede. Guarda para reenvio, trava só a PARADA dele (os itens dela que vêm atrás) e segue com
+        // as outras; se a rede caiu mesmo, o próximo item falha e o ciclo para aí.
+        if (pagamento) { await bancoFila.marcarReenvio(item.id); bloquearRow(item); continue; }
         break;
       }
       if (pagamento && res && res.ok && res.pagamento && res.pagamento.gravado === false) {
@@ -1636,6 +1653,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, 
     acksRecentesDeStatus,
     esquecerAcksAte,
     filaEmEnvio,
+    passadaEmVoo,
     ehSaiuDaRota,
     lerEntregasGuardadas,
     lerRotaInfoGuardada,

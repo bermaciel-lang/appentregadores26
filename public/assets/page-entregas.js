@@ -737,7 +737,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     try {
       await api.filaPronta(); // hidrata antes de tratar pendência local como inexistente
       const pedidoEm = api.proximaMarca ? api.proximaMarca() : 0; // o instante em que a lista foi PEDIDA
-      const result = await api.carregarEntregasPorEntregador(state.driver, { retries: insistir ? 1 : 0 });
+      // (revisão da leva 2) quem grava o cache é a TELA, depois de aplicar, com os ACKs recentes por cima (ver abaixo)
+      const result = await api.carregarEntregasPorEntregador(state.driver, { retries: insistir ? 1 : 0, gravarCache: false });
       if (pedidoEm && pedidoEm < recarga.ultimaAplicada) return; // chegou depois de uma mais nova: não pinta por cima
       recarga.ultimaAplicada = pedidoEm;
       // ACKs anteriores a ESTE pedido já estão na lista do servidor: saem de cima. (Cache não prova nada: não limpa.)
@@ -745,6 +746,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       const pedidaAntesDaRota = pedidoEm && pedidoEm < (state.marcaRota || 0);
       const iniciadaAntes = state.rotaIniciada, finalizadaAntes = state.rotaFinalizada;
       state.items = result.data || [];
+      // ⛔ (revisão da leva 2) O CACHE GUARDA O QUE A TELA MOSTRA: a lista com os ACKs recentes por cima (e a fila, que de qualquer
+      // jeito é projetada de novo na leitura). Antes ia a lista CRUA desta resposta — pedida, talvez, antes de um ACK — e a
+      // reabertura do app (que pinta o cache antes da rede) mostrava a entrega já confirmada como pendente.
+      if (!result.stale) api.saveEntregasCache(state.driver, itensComFila().map(function (x) { const c = Object.assign({}, x); delete c._fila; return c; }));
       if (result.rotaInfo && !pedidaAntesDaRota) state.rotaInfo = result.rotaInfo;
       // Só a resposta FRESCA traz a configuração; com cofre 0 o servidor manda perguntar=false e o
       // modal some do aparelho no próximo poll (rollback sem deploy). No cache (stale) fica a última.
@@ -1377,8 +1382,11 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   // durável e imutável junto com o payload. Parada que não está na lista não ganha palpite: sem os
   // campos, a projeção cai no que o servidor disser.
   // 28/10/2026: e QUEM é (cliente/pedido) — a recusa de uma parada que depois saiu da lista ainda diz de quem era (faixa do topo).
+  // (revisão da leva 2) lido da VISTA (fila e ACKs recentes por cima), não de `state.items` cru: com uma lista velha por baixo, a
+  // recusa de um Desfazer devolvia um "anterior" que o servidor já não tinha (pendente, num pedido entregue) e convidava a marcar
+  // de novo.
   function metaDeStatus(row) {
-    const atual = state.items.find(function (x) { return Number(x.row) === Number(row); });
+    const atual = itensComFila().find(function (x) { return Number(x.row) === Number(row); });
     if (!atual) return { row: Number(row) };
     return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '',
       cliente: String(atual.cliente || '').slice(0, 80), pedido: String(atual.pedido || '').slice(0, 40) };
@@ -1442,10 +1450,20 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     }
     return ids;
   }
-  async function enviarRecebimentoGuardado(ids) {
-    const resultado = await api.processarFila();
+  // (revisão da leva 2) `processarFila` devolve só a PASSADA ATUAL. Em segundo plano (o toque normal), se os meus itens ainda estão
+  // pendentes e há uma volta correndo, acompanho a próxima — a recusa de dinheiro continua avisando. A espera deliberada do
+  // "Corrigir pagamento" (`soEstaPassada`, com a tela dizendo "conferindo o pagamento…") fica só na passada atual.
+  async function enviarRecebimentoGuardado(ids, soEstaPassada) {
+    let resultado = await api.processarFila();
     if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
-    const restantes = await api.filaPorIds(ids);
+    let restantes = await api.filaPorIds(ids);
+    for (let voltas = 0; !soEstaPassada && voltas < 5 && restantes.some(x => !x.precisaCorrigir); voltas++) {
+      const emVoo = api.passadaEmVoo && api.passadaEmVoo();
+      if (!emVoo) break; // nenhuma volta correndo: o próximo gatilho envia
+      resultado = await emVoo;
+      if (resultado && resultado.erroArmazenamento) throw new Error(resultado.erroArmazenamento);
+      restantes = await api.filaPorIds(ids);
+    }
     // ⛔ 28/10/2026 — só RECUSA DE PAGAMENTO abre este aviso. A recusa da MARCAÇÃO (parada tirada da rota: `naoEncontrado`) entrava
     // aqui também e abria "Pagamento precisa de conferência" num pedido sem pagamento nenhum — um modal no meio da rua com o
     // texto errado. A recusa da marcação aparece no cartão (ou na faixa do topo, se o cartão saiu da lista).
@@ -1480,7 +1498,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     if (!window.PgPorta || !resposta) return;
     const r = Number(row);
     const ids = await guardarRecebimento([], { [r]: resposta }, tsDevice);
-    if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids);
+    if (!marcacaoNaFila) await enviarRecebimentoGuardado(ids, true);
   }
 
   async function handleAction(act, row) {
@@ -1893,9 +1911,12 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   // podia ser lida antes de as marcações subirem — "a tela volta atrás") e, com sinal ruim, a rodada seguinte começava com a
   // anterior ainda tentando. Agora: fila primeiro, lista depois (como o `online` já fazia), e um tique com o anterior em voo é pulado.
   let _pollEmVoo = false;
+  // (revisão da leva 2) com PRAZO: com sinal ruim a fila pode levar dezenas de segundos, e a lista não espera mais que 4 s por
+  // ela — os ACKs recentes por cima já impedem que uma lista pedida antes de um ACK pinte o passado.
   function filaDepoisLista() {
     const recarregar = function () { return carregarTudo(false); };
-    return api.processarFila().then(recarregar, recarregar);
+    const prazo = new Promise(function (ok) { window.setTimeout(ok, 4000); });
+    return Promise.race([api.processarFila(), prazo]).then(recarregar, recarregar);
   }
   function startAutoRefresh() {
     stopAutoRefresh();

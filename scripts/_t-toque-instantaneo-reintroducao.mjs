@@ -105,8 +105,9 @@ const defeitos = [
   {
     nome: 'o toque não congela mais o estado ANTERIOR: a recusa não tem como desfazer',
     arquivo: 'page-entregas.js',
-    // 28/10/2026: o meta ganhou cliente/pedido (a faixa das recusas sem cartão) — o defeito plantado é o mesmo.
-    de: `    const atual = state.items.find(function (x) { return Number(x.row) === Number(row); });
+    // 28/10/2026: o meta ganhou cliente/pedido (a faixa das recusas sem cartão) e passou a ler da VISTA (revisão da leva 2) — o
+    // defeito plantado é o mesmo.
+    de: `    const atual = itensComFila().find(function (x) { return Number(x.row) === Number(row); });
     if (!atual) return { row: Number(row) };
     return { row: Number(row), statusAnterior: atual.status || '', obsAnterior: atual.observacaoPedido || '',
       cliente: String(atual.cliente || '').slice(0, 80), pedido: String(atual.pedido || '').slice(0, 40) };`,

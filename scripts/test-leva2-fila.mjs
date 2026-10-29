@@ -125,7 +125,10 @@ teste('F6 "rodar de novo": o toque feito durante o reenvio do KM sobe no mesmo p
   await h.tocar('done', 71);         // o toque chega com o ciclo JÁ no fim
   soltar();
   await ciclo;
-  assert.ok(h.calls.some(c => c.params.action === 'marcarEntregue'), 'subiu no mesmo processarFila (antes: só no próximo gatilho)');
+  // (revisão da leva 2) quem espera o processarFila espera só a passada atual; a volta extra roda atrás, sozinha — sem esperar
+  // o próximo gatilho (poll de 60 s, voltar ao app).
+  await h.assentar();
+  assert.ok(h.calls.some(c => c.params.action === 'marcarEntregue'), 'subiu sem esperar o próximo gatilho (antes: só no próximo)');
   assert.equal(h.fila().length, 0);
 });
 
