@@ -1168,6 +1168,9 @@ async function apiMarcarCancelado(row, obs) {
   //  - ⭐ 28/10/2026: o `confirmarPagamento` também vai, quando cabe — UM só na parada e DEPOIS da única marcação dela na fila. Ele
   //    só sai depois que a marcação RESPONDEU ok (a ordem é sagrada: nunca na frente do `marcarEntregue`); se a página morrer antes,
   //    ele sobe na reabertura, como sempre. Parada que só tem o pagamento pendente (a marcação já subiu) manda o pagamento direto.
+  //  - ⛔ (revisão da leva 2) e a marcação também não passa na frente de um pagamento da MESMA parada que ainda está na fila ANTES
+  //    dela (ex.: o "não pagou" e depois o Desfazer): mandar o Desfazer no fechamento fazia o servidor receber o pagamento DEPOIS
+  //    dele, e o pagamento ficava preso/reenviado. Essa parada fica inteira para a fila normal, na ordem.
   const MAX_KEEPALIVE = 6;
   let _keepaliveFeito = false;
   function enviarPendentesNoFechamento() {
@@ -1192,6 +1195,7 @@ async function apiMarcarCancelado(row, obs) {
         if (enviados >= MAX_KEEPALIVE) break;
         if (itens.length !== 1) continue; // ambíguo na ordem → deixa para o consumidor serial
         const pgs = pagamentos.get(row) || [];
+        if (pgs.some(pg => posicao.get(pg.id) < posicao.get(itens[0].id))) continue; // pagamento pendente ANTES: fica tudo na ordem
         const pgDepois = pgs.length === 1 && posicao.get(pgs[0].id) > posicao.get(itens[0].id) ? pgs[0] : null;
         try {
           const envio = disparar(itens[0].params); enviados++;

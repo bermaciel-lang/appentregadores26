@@ -16,7 +16,8 @@
 //       `trocarFoto`); antes regravava o pendente com KM vazio e a hora da troca;
 //   V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo;
 //   V15 a recarga com o FIM ainda pendente no aparelho não apaga a marca de "fim confirmado" (sem pendente, apaga como antes);
-//   V16 a home sem o token do entregador (precisa do PIN) diz isso e não fica tentando a cada 30 s.
+//   V16 a home sem o token do entregador (precisa do PIN) diz isso e não fica tentando a cada 30 s;
+//   V17 fechar o app: o keepalive não manda uma marcação (ex.: Desfazer) na frente de um pagamento AINDA pendente da mesma parada.
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { app, reguas, ler } from './_harness-leva2.mjs';
@@ -164,6 +165,22 @@ teste('V16 a home sem o token do entregador (precisa do PIN) diz isso e não fic
   for (let i = 0; i < 4; i++) await h.assentar();
   assert.equal(h.calls.filter(c => c.params.action === 'marcarEntregue').length, h.calls.slice(0, chamadas).filter(c => c.params.action === 'marcarEntregue').length,
     'sem o token, a internet voltando não manda de novo');
+});
+
+teste('V17 fechar o app: o keepalive não manda a marcação na frente de um pagamento AINDA pendente da mesma parada', async () => {
+  const h = await app();
+  h.semRede(true);
+  // o pagamento da parada 7 ainda na fila e, DEPOIS dele, o Desfazer da mesma parada; a parada 8 só tem a marcação
+  await h.api.enfileirar(h.window.PgPorta.montarParams(7, '2026-10-28T12:00:00.000Z', { forma: 'dinheiro', valor: 10, digitado: true }, false), { row: 7 });
+  await h.api.enfileirar({ action: 'desfazer', row: 7, ts_device: '2026-10-28T12:00:05.000Z' }, { row: 7 });
+  await h.api.enfileirar({ action: 'marcarEntregue', row: 8, ts_device: '2026-10-28T12:00:06.000Z' }, { row: 8 });
+  await h.assentar();
+  h.api.enviarPendentesNoFechamento(); await h.assentar();
+  const seq = h.keepalive.map(k => k.params.action + ':' + k.params.row);
+  assert.equal(seq.includes('desfazer:7'), false, 'o Desfazer não passa na frente do pagamento pendente (antes: ia, e o pagamento chegava depois dele)');
+  assert.equal(seq.includes('confirmarPagamento:7'), false, 'nem o pagamento sozinho, com marcação pendente atrás');
+  assert.ok(seq.includes('marcarEntregue:8'), 'a outra parada vai normalmente: ' + seq.join(', '));
+  assert.equal(h.fila().length, 3, 'tudo continua guardado (keepalive não escreve ACK)');
 });
 
 teste('V9 Desfazer de "Não entregue" é um a um', async () => {
