@@ -12,14 +12,18 @@
 //    Agora quem liga passa dia e turno (page-entregas.js `ligarRastreio`), com `AppEntrega.getTurno()` de reserva;
 //  - o id do rastreio NATIVO fica guardado no aparelho: quando o Android mata a tela e o app volta, o rastreio antigo (órfão,
 //    com a notificação "Rota em andamento" presa) é desligado antes de ligar outro, e o Finalizar desliga os dois;
-//  - o lote leva o TOKEN do entregador (o servidor da leva 3 passa a exigir; o atual ignora o campo).
+//  - o lote leva o TOKEN do entregador (o servidor da leva 3 passa a exigir; o atual ignora o campo);
+//  - o id guardado é POR ROTA (entregador + dia + turno), e o parar desliga só o da própria rota. Com uma chave só por aparelho,
+//    abrir a MANHÃ já finalizada ("Trocar turno") desligava o GPS da TARDE em andamento — e o mesmo trocando de entregador
+//    no mesmo celular. A chave antiga (sem rota) ainda é desligada uma vez, na transição.
 // ====================================================================
 (function () {
   'use strict';
 
   var FLUSH_MS = 30000;     // manda o lote a cada 30s
   var MAX_FILA = 20;        // se acumular 20 pontos antes disso, manda já
-  var CHAVE_WATCHER = 'rastreio_watcher_nativo_v1';
+  var CHAVE_WATCHER = 'rastreio_watcher_nativo_v1';     // LEGADO: uma chave só por aparelho (sem rota); sai na transição
+  var PREFIXO_WATCHER = 'rastreio_watcher_nativo_v2|';  // + entregador|dia|turno
   var fila = [];
   var st = { ativo: false, entregador: '', data: '', turno: '', watchId: null, timer: null, nativo: false };
 
@@ -43,8 +47,15 @@
     } catch (e) { return ''; }
   }
 
-  function lerWatcherGuardado() { try { return localStorage.getItem(CHAVE_WATCHER); } catch (e) { return null; } }
-  function guardarWatcher(id) { try { if (id == null) localStorage.removeItem(CHAVE_WATCHER); else localStorage.setItem(CHAVE_WATCHER, String(id)); } catch (e) {} }
+  function chaveDaRota(entregador, data, turno) { return PREFIXO_WATCHER + String(entregador || '').trim() + '|' + (data || '') + '|' + (turno || ''); }
+  function lerWatcherGuardado(chave) { try { return localStorage.getItem(chave); } catch (e) { return null; } }
+  function guardarWatcher(chave, id) { try { if (id == null) localStorage.removeItem(chave); else localStorage.setItem(chave, String(id)); } catch (e) {} }
+  // Desliga e esquece o rastreio guardado numa chave (órfão de uma abertura anterior), menos o que esta tela está usando.
+  function desligarGuardado(chave) {
+    var guardado = lerWatcherGuardado(chave);
+    if (guardado != null && String(guardado) !== String(st.watchId)) desligarNativo(guardado);
+    guardarWatcher(chave, null);
+  }
   function pluginNativo() { return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundGeolocation; }
   // Desliga um rastreio nativo pelo id (o desta tela ou o órfão de uma abertura anterior). Nunca lança.
   function desligarNativo(id) {
@@ -96,10 +107,12 @@
 
     var BG = pluginNativo();
     if (BG) {
-      // APP ANDROID: plugin nativo (segundo plano, tela apagada). Um rastreio que ficou de uma abertura anterior sai antes.
+      // APP ANDROID: plugin nativo (segundo plano, tela apagada). O rastreio que ficou de uma abertura anterior DESTA rota sai
+      // antes (e o da chave antiga, sem rota). O de outra rota/entregador não é desta tela e fica.
       st.nativo = true;
-      desligarNativo(lerWatcherGuardado());
-      guardarWatcher(null);
+      var chave = chaveDaRota(st.entregador, st.data, st.turno);
+      desligarGuardado(chave);
+      desligarGuardado(CHAVE_WATCHER);
       BG.addWatcher({
         backgroundMessage: 'Registrando o trajeto da rota.',
         backgroundTitle: 'Rota em andamento',
@@ -111,7 +124,7 @@
         if (loc) enfileirar(loc.latitude, loc.longitude, loc.accuracy, loc.speed, loc.bearing);
       }).then(function (id) {
         if (!st.ativo) { desligarNativo(id); return; } // parou enquanto ligava
-        st.watchId = id; guardarWatcher(id);
+        st.watchId = id; guardarWatcher(chave, id);
       }).catch(function (e) { console.warn('[rastreio] addWatcher', e); });
     } else if (window.APP_CONFIG && window.APP_CONFIG.RASTREIO_WEB && navigator.geolocation) {
       // NAVEGADOR/iPhone: só com o app ABERTO, e SÓ se RASTREIO_WEB estiver ligado.
@@ -132,12 +145,19 @@
     console.log('[rastreio] iniciado', st.entregador, st.data, st.turno, st.nativo ? '(nativo)' : '(web)');
   }
 
-  function parar() {
-    // O órfão de uma abertura anterior (nativo) sai SEMPRE — mesmo que esta tela nunca tenha ligado o rastreio.
-    var guardado = lerWatcherGuardado();
-    if (guardado != null && String(guardado) !== String(st.watchId)) desligarNativo(guardado);
-    guardarWatcher(null);
+  // `parar(entregador, dia, turno)`: a rota que parou (a da tela). Sem argumentos, a do rastreio ligado.
+  function parar(entregador, data, turno) {
+    var rota = {
+      entregador: String(entregador || st.entregador || (window.state && window.state.driver) || '').trim(),
+      data: data || st.data || dataLocal(),
+      turno: turno || st.turno || turnoAtual()
+    };
+    // O órfão DESTA rota (de uma abertura anterior) sai SEMPRE — mesmo que esta tela nunca tenha ligado o rastreio. O de OUTRA
+    // rota fica: a TARDE em andamento quando se abre a MANHÃ já finalizada; outro entregador no mesmo celular.
+    desligarGuardado(chaveDaRota(rota.entregador, rota.data, rota.turno));
+    desligarGuardado(CHAVE_WATCHER); // legado, sem rota: sai como antes (uma vez, na transição)
     if (!st.ativo) return;
+    if (String(st.entregador || '').trim() !== rota.entregador || st.data !== rota.data || st.turno !== rota.turno) return; // o ligado é de outra rota
     st.ativo = false;
     if (st.timer) { clearInterval(st.timer); st.timer = null; }
     if (st.nativo && st.watchId != null) desligarNativo(st.watchId);

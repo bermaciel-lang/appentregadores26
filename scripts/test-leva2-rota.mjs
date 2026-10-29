@@ -9,7 +9,9 @@
 //   K4 servidor sem `rotaInfo` (versão antiga): vale a regra de antes (ok com foto = gravou);
 //   G1 GPS: o lote vai com o TURNO e o dia certos (antes `window.getTurno`, que não existe: pontos sem turno, fora do mapa) e com o
 //      token do entregador;
-//   G2 GPS: o rastreio nativo que ficou de uma abertura anterior é desligado ao ligar de novo, e o Finalizar desliga o órfão.
+//   G2 GPS: o rastreio nativo que ficou de uma abertura anterior é desligado ao ligar de novo, e o Finalizar desliga o órfão;
+//   G3 GPS (revisão): o parar desliga só o rastreio da PRÓPRIA rota — abrir a MANHÃ finalizada não desliga a TARDE em andamento,
+//      nem outro entregador no mesmo celular (antes: uma chave só por aparelho, e o parar desligava qualquer um).
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { app, reguas, ler, PREFIXO } from './_harness-leva2.mjs';
@@ -124,19 +126,39 @@ teste('G1 o lote do GPS vai com o turno, o dia e o token do entregador', async (
   assert.equal(g.lotes[0].token, 'tok-ficticio', 'o token do entregador vai no lote (o servidor da leva 3 exige)');
 });
 
+// (revisão da leva 2) o id do rastreio nativo fica guardado POR ROTA: entregador|dia|turno
+const chaveW = (entregador, dia, turno) => 'rastreio_watcher_nativo_v2|' + entregador + '|' + dia + '|' + turno;
+
 teste('G2 o rastreio órfão de uma abertura anterior é desligado (ao ligar e no Finalizar)', async () => {
   const h = await app();
-  const g = await comRastreio(h, { guardado: 'w-velho' });
+  const g = await comRastreio(h, { guardado: 'w-velho' }); // o da versão anterior (chave sem rota)
   g.R.iniciar('Fictício', '2026-10-28', 'TARDE');
   await h.assentar();
   assert.ok(g.removidos.includes('w-velho'), 'o de antes sai antes de ligar outro (antes: dois rastreios e a notificação presa)');
-  assert.equal(h.local.getItem('rastreio_watcher_nativo_v1'), 'w-novo', 'o id novo fica guardado');
-  // o Android matou a tela: uma tela nova, que nunca ligou o rastreio, finaliza a rota
+  assert.equal(h.local.getItem(chaveW('Fictício', '2026-10-28', 'TARDE')), 'w-novo', 'o id novo fica guardado, com a rota');
+  assert.equal(h.local.getItem('rastreio_watcher_nativo_v1'), null, 'a chave antiga sai');
+  // o Android matou a tela: uma tela nova, que nunca ligou o rastreio, finaliza a rota (a tela passa a rota dela)
   const h2 = await app({ store: h.store });
   const g2 = await comRastreio(h2);
-  g2.R.parar();
+  g2.R.parar('Fictício', '2026-10-28', 'TARDE');
   assert.ok(g2.removidos.includes('w-novo'), 'o Finalizar desliga o rastreio órfão');
-  assert.equal(h2.local.getItem('rastreio_watcher_nativo_v1'), null);
+  assert.equal(h2.local.getItem(chaveW('Fictício', '2026-10-28', 'TARDE')), null);
+});
+
+teste('G3 o parar desliga só o rastreio da PRÓPRIA rota (não o da TARDE em andamento, nem o de outro entregador)', async () => {
+  const h = await app();
+  const g = await comRastreio(h);
+  g.R.iniciar('Fictício', '2026-10-28', 'TARDE'); // a TARDE em andamento
+  await h.assentar();
+  // "Trocar turno": uma tela nova abre a MANHÃ, já finalizada, e para o rastreio DELA
+  const h2 = await app({ store: h.store });
+  const g2 = await comRastreio(h2);
+  g2.R.parar('Fictício', '2026-10-28', 'MANHÃ');
+  assert.equal(g2.removidos.includes('w-novo'), false, 'o GPS da TARDE continua (antes: desligado ao abrir a MANHÃ finalizada)');
+  g2.R.parar('Outro', '2026-10-28', 'TARDE'); // outro entregador no mesmo celular, com a rota dele finalizada
+  assert.equal(g2.removidos.includes('w-novo'), false, 'nem pelo outro entregador');
+  g2.R.parar('Fictício', '2026-10-28', 'TARDE'); // a própria TARDE finalizada
+  assert.ok(g2.removidos.includes('w-novo'), 'a TARDE finalizada desliga o dela');
 });
 
 await rodar();

@@ -16,7 +16,8 @@
 //   N9 `permissoes` só sobe quando muda (antes: a cada abertura da tela);
 //   N7b (revisão) o reenvio à mão do chat depois de "Sem conexão" leva o MESMO cid (antes: um novo — a 1ª podia ter gravado);
 //   N10 (revisão) o GPS não religa numa rota já finalizada (o fim lembrado no aparelho), liga na rota em andamento, e a recarga
-//      que descobre o fim o desliga (antes: reabrir depois do fim religava o GPS e a notificação "Rota em andamento").
+//      que descobre o fim o desliga (antes: reabrir depois do fim religava o GPS e a notificação "Rota em andamento");
+//   N11 (revisão) abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GPS da TARDE em andamento (o id é por rota).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -48,30 +49,33 @@ const paradas = n => Array.from({ length: n }, (_, i) => ({ row: i + 1, numero: 
   endereco: 'Rua Teste, ' + (i + 1), status: '', naEntrega: false, produtos: [{ qtd: 1, nome: 'Alface' }] }));
 
 async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true }), avisos = [], atrasoEntregas = 0, cache = null, relogio = false,
-  finalizada = false, fimLembrado = false, gpsNativo = false, antes = null, mensagens = [] } = {}) {
+  finalizada = false, fimLembrado = false, gpsNativo = false, antes = null, mensagens = [], turno = 'MANHÃ', fixarTurno = true,
+  finalizadaPorTurno = null } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
-  const api = { itens, avisos, respostaMarcar, chamadas: [], atrasoEntregas, rotaFinalizada: finalizada, falharEnvio: 0, mensagens };
+  const api = { itens, avisos, respostaMarcar, chamadas: [], atrasoEntregas, rotaFinalizada: finalizada, falharEnvio: 0, mensagens, finalizadaPorTurno };
   // O plugin nativo do GPS dublado (rastreio.js usa `Capacitor.Plugins.BackgroundGeolocation` quando existe). Sem
   // `isNativePlatform`: o resto do app (porteiro de permissões, push, aviso de privacidade) continua achando que é o navegador.
+  // Os ids contam no aparelho (localStorage): o rastreio nativo sobrevive à tela recarregada, como no Android.
   if (gpsNativo) await ctx.addInitScript(() => {
     window.__gps = { ligou: 0, desligou: [] };
     window.Capacitor = { Plugins: { BackgroundGeolocation: {
-      addWatcher: () => { window.__gps.ligou++; return Promise.resolve('w' + window.__gps.ligou); },
+      addWatcher: () => { window.__gps.ligou++; const n = Number(localStorage.getItem('__gps_ids') || 0) + 1; localStorage.setItem('__gps_ids', String(n)); return Promise.resolve('w' + n); },
       removeWatcher: ({ id }) => { window.__gps.desligou.push(id); return Promise.resolve(); } } } };
   });
   if (antes) await ctx.addInitScript(antes); // roda antes de qualquer script da página
-  await ctx.addInitScript(({ cache, fimLembrado }) => {
+  await ctx.addInitScript(({ cache, fimLembrado, turno, fixarTurno }) => {
     const dia = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     localStorage.setItem('app_entregas_driver_name', 'Ana');
     localStorage.setItem('app_entregas_tokens_v2', JSON.stringify({ Ana: { token: 'tok-ana', em: Date.now() } }));
-    localStorage.setItem('app_turno_v1_' + dia, 'MANHÃ');
+    // `fixarTurno: false` = o turno só é posto na 1ª abertura (a régua troca o turno e recarrega, como o "Trocar turno")
+    if (fixarTurno || !localStorage.getItem('app_turno_v1_' + dia)) localStorage.setItem('app_turno_v1_' + dia, turno);
     localStorage.setItem('montagem_inicio_confirmado_v1_' + dia + '_MANHÃ_Ana', '1');
     localStorage.setItem('app_atividade_v1_Ana', String(Date.now()));
     localStorage.setItem('app_dia_servidor_v1', dia);
     if (cache) localStorage.setItem('app_entregas_cache_v3_entregas_' + dia + '_MANHÃ_ana', JSON.stringify({ ts: Date.now(), value: cache }));
     // o fim da rota que o servidor confirmou fica no aparelho (o sessionStorage morre quando o Android mata o app)
     if (fimLembrado) localStorage.setItem('rota_fim_confirmado_v1_' + dia + '_MANHÃ_Ana', '1');
-  }, { cache, fimLembrado });
+  }, { cache, fimLembrado, turno, fixarTurno });
   await ctx.route('**/*', async route => {
     const u = new URL(route.request().url());
     if (u.origin !== BASE) return route.abort();
@@ -84,10 +88,11 @@ async function abrir({ itens = paradas(5), respostaMarcar = () => ({ ok: true })
     switch (p.action) {
       case 'entregas':
         if (api.atrasoEntregas) await new Promise(r => setTimeout(r, api.atrasoEntregas));
-        return json({ ok: true, data: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()), items: api.itens,
-          rotaIniciada: true, rotaFinalizada: api.rotaFinalizada,
-          rotaInfo: { kmInicial: 10, kmFinal: api.rotaFinalizada ? 30 : '', inicio: 'x', fim: api.rotaFinalizada ? 'y' : null, fotoInicio: 'ok', fotoFim: api.rotaFinalizada ? 'ok' : null },
-          perguntarPagamento: false, formasNaPorta: [] });
+        { const fin = api.finalizadaPorTurno ? !!api.finalizadaPorTurno[p.turno] : api.rotaFinalizada;
+          return json({ ok: true, data: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()), items: api.itens,
+            rotaIniciada: true, rotaFinalizada: fin,
+            rotaInfo: { kmInicial: 10, kmFinal: fin ? 30 : '', inicio: 'x', fim: fin ? 'y' : null, fotoInicio: 'ok', fotoFim: fin ? 'ok' : null },
+            perguntarPagamento: false, formasNaPorta: [] }); }
       case 'cancelamentos': return json({ ok: true, avisos: api.avisos });
       case 'mensagens': return json({ ok: true, mensagens: api.mensagens || [] });
       case 'enviarMensagem':
@@ -386,6 +391,24 @@ teste('N10 GPS: não religa numa rota já finalizada; liga na rota em andamento;
     assert.deepEqual(await b.page.evaluate(() => window.__gps.desligou), ['w1'], 'a recarga que descobriu o fim desligou o rastreio');
     assert.equal(await b.page.evaluate(() => window.__gps.ligou), 1, 'e não religou');
   } finally { await b.fechar(); }
+});
+
+teste('N11 GPS: abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GPS da TARDE em andamento', async () => {
+  const t = await abrir({ gpsNativo: true, turno: 'TARDE', fixarTurno: false, finalizadaPorTurno: { 'MANHÃ': true, 'TARDE': false },
+    antes: () => {
+      const dia = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+      localStorage.setItem('montagem_inicio_confirmado_v1_' + dia + '_TARDE_Ana', '1');
+      localStorage.setItem('rota_fim_confirmado_v1_' + dia + '_MANHÃ_Ana', '1'); // a MANHÃ acabou mais cedo
+    } });
+  try {
+    const { page } = t;
+    await page.waitForTimeout(1500);
+    assert.equal(await page.evaluate(() => window.__gps.ligou), 1, 'a TARDE em andamento ligou o GPS');
+    await page.evaluate(() => localStorage.setItem('app_turno_v1_' + new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()), 'MANHÃ'));
+    await page.reload(); // "Trocar turno": a tela da MANHÃ, já finalizada (o rastreio nativo da TARDE continua no Android)
+    await page.waitForTimeout(1500);
+    assert.deepEqual(await page.evaluate(() => window.__gps.desligou), [], 'o GPS da TARDE continua (antes: desligado ao abrir a MANHÃ finalizada)');
+  } finally { await t.fechar(); }
 });
 
 let falhas = 0;

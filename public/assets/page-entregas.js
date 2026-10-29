@@ -1231,7 +1231,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     if (!window.Rastreio) return;
     window.Rastreio.iniciar(state.driver, api.diaSP ? api.diaSP() : undefined, api.getTurno());
   }
-  function pararRastreio() { if (window.Rastreio) window.Rastreio.parar(); }
+  // (revisão da leva 2) o parar leva a rota DESTA tela: desliga só o rastreio dela, nunca o de outro turno/entregador.
+  function pararRastreio() { if (window.Rastreio) window.Rastreio.parar(state.driver, api.diaSP ? api.diaSP() : undefined, api.getTurno()); }
 
   // ===== PAGAMENTO NA PORTA (05/09/2026) — o entregador confirma FORMA e VALOR ao marcar Entregue =====
   // O modal em si mora em pagamento-porta.js (PgPorta). Aqui: quando abre, com o que, e como a
