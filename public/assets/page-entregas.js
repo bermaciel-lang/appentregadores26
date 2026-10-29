@@ -654,6 +654,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const linhas = [];
     mapa.forEach(function (p, row) {
       if (!p.recusado || comCartao.has(Number(row))) return;
+      // 29/10/2026: só a recusa da rota aberta (dia + turno do toque); core.js antigo em cache = como antes
+      if (typeof api.recusaDaRotaAtual === 'function' && !api.recusaDaRotaAtual(p)) return;
       const quem = [p.cliente, p.pedido].filter(Boolean).join(' · ') || ('parada ' + row);
       linhas.push('<div class="dc-recusa">⚠️ <span><b>' + api.esc(quem) + ':</b> ' + api.esc(p.erro || 'O sistema não aceitou esta marcação.')
         + '</span><button type="button" class="dc-recusa-ok" data-act="okrecusa" data-row="' + Number(row) + '">Entendi</button></div>');
