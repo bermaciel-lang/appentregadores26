@@ -49,6 +49,11 @@
   }
 
   // Monta, mostra e resolve um modal. `cfg.tipo` = 'alert' | 'confirm' | 'prompt'.
+  // A conversa do chat (chat-entregador.js) está aberta na tela?
+  function chatAberto() {
+    try { var c = document.getElementById('chatEntOverlay'); return !!(c && c.style.display && c.style.display !== 'none'); } catch (e) { return false; }
+  }
+
   // Resolve com: alert -> true | confirm -> true/false | prompt -> string/null.
   function abrir(cfg) {
     return new Promise(function (resolve) {
@@ -58,6 +63,9 @@
 
       var overlay = document.createElement('div');
       overlay.className = 'app-modal-overlay';
+      // (revisão da leva 2) aberto com a CONVERSA do chat na frente (aviso de dentro do chat, ou um que chegou enquanto ela estava
+      // aberta): fica acima dela. Os outros ficam abaixo da conversa e do pop-up de mensagem (ver styles.css).
+      if (chatAberto()) overlay.classList.add('sobre-chat');
       overlay.setAttribute('role', 'dialog');
       overlay.setAttribute('aria-modal', 'true');
 

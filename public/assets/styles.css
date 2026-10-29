@@ -767,14 +767,17 @@ button, select, input, textarea {
    MODAL PRÓPRIO (ui.js) — substitui os prompt/alert/confirm nativos feios.
    Visual casado com o app: cartão branco arredondado, sombra, botão azul.
    ==================================================================== */
+/* Aviso aberto DE DENTRO do chat ("Sem conexão pra enviar agora.", arquivo grande, microfone): acima da conversa (5000) e do
+   pop-up (6000). Em 1000 ele nascia ATRÁS da conversa, invisível e sem como tocar no "Entendi" (régua N7b). */
+.app-modal-overlay.sobre-chat { z-index: 7000; }
 .app-modal-overlay {
   position: fixed;
   inset: 0;
-  /* Acima de tudo do app (lembrete fixo 30, mapa 2000, chat 5000, pop-up de mensagem do chat 6000). Abaixo só das telas
-     cheias que travam o app (permissões 9000, porteiro, aviso de privacidade). ⛔ 28/10/2026 (revisão da leva 2) — era 1000:
-     todo aviso aberto DE DENTRO do chat ("Sem conexão pra enviar agora.", arquivo grande, microfone) nascia ATRÁS da conversa,
-     invisível e sem como tocar no "Entendi" (achado pela régua N7b). */
-  z-index: 7000;
+  /* Camadas (28/10/2026, revisão da leva 2): os diálogos e as janelas longas (ex.: "Aguardando a montagem") ficam em 1000, ACIMA
+     do lembrete fixo (30) e ABAIXO da conversa do chat (5000) e do pop-up de mensagem (6000) — dá para ler e responder a Central
+     com a espera aberta. O diálogo que abre COM A CONVERSA ABERTA ganha `.sobre-chat` (ui.js) e fica acima dela. Tudo abaixo das
+     telas cheias que travam o app (permissões 9000, porteiro, aviso de privacidade). */
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;

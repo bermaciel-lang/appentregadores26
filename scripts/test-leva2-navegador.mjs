@@ -17,7 +17,9 @@
 //   N7b (revisão) o reenvio à mão do chat depois de "Sem conexão" leva o MESMO cid (antes: um novo — a 1ª podia ter gravado);
 //   N10 (revisão) o GPS não religa numa rota já finalizada (o fim lembrado no aparelho), liga na rota em andamento, e a recarga
 //      que descobre o fim o desliga (antes: reabrir depois do fim religava o GPS e a notificação "Rota em andamento");
-//   N11 (revisão) abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GPS da TARDE em andamento (o id é por rota).
+//   N11 (revisão) abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GPS da TARDE em andamento (o id é por rota);
+//   N12 (revisão) camadas: o pop-up de mensagem e a conversa do chat ficam acima da "Aguardando a montagem", e o aviso aberto de
+//       dentro do chat fica acima da conversa.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -408,6 +410,43 @@ teste('N11 GPS: abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GP
     await page.reload(); // "Trocar turno": a tela da MANHÃ, já finalizada (o rastreio nativo da TARDE continua no Android)
     await page.waitForTimeout(1500);
     assert.deepEqual(await page.evaluate(() => window.__gps.desligou), [], 'o GPS da TARDE continua (antes: desligado ao abrir a MANHÃ finalizada)');
+  } finally { await t.fechar(); }
+});
+
+// O elemento é o que está POR CIMA no centro dele (o dedo cairia nele)?
+const estaNoTopo = loc => loc.evaluate(el => {
+  const r = el.getBoundingClientRect(), topo = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  return !!topo && (topo === el || el.contains(topo));
+});
+
+teste('N12 camadas: pop-up e conversa do chat acima da "Aguardando a montagem"; aviso de dentro do chat acima da conversa', async () => {
+  const t = await abrir();
+  try {
+    const { page, api } = t;
+    await cartao(page, 'Cliente 1').waitFor();
+    // a janela longa de verdade (AppUI.esperar, a mesma da montagem pendente), aberta e esperando
+    await page.evaluate(() => { window.__espera = window.AppUI.esperar({ titulo: '⏳ Aguardando a montagem', mensagem: 'Falta conferir 2 caixas.' }); });
+    await page.locator('[data-espera-montagem]').waitFor();
+    // chega mensagem da Central: o chat consulta já (a tela "voltou")
+    api.mensagens = [{ id: 501, autor: 'central', autorNome: 'Central', corpo: 'Pode sair sem a caixa 3' }];
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    const popup = page.getByText('Toque para abrir e responder');
+    await popup.waitFor({ timeout: 5000 });
+    assert.ok(await estaNoTopo(popup), 'o pop-up da mensagem fica por cima da espera da montagem (antes: atrás, sem toque)');
+    await popup.click();
+    const campo = page.locator('#chatEntInput');
+    await campo.waitFor();
+    assert.ok(await estaNoTopo(campo), 'a conversa abre por cima da espera: dá para responder a Central esperando');
+    // de dentro da conversa, um aviso ("Sem conexão") fica por cima dela
+    await campo.fill('Ok, saindo');
+    api.falharEnvio = 3;
+    await page.locator('#chatEntEnviar').click();
+    const entendi = page.getByRole('button', { name: 'Entendi' });
+    await entendi.waitFor({ timeout: 8000 });
+    assert.ok(await estaNoTopo(entendi), 'o aviso de dentro do chat fica por cima da conversa');
+    await page.waitForTimeout(400);
+    await entendi.click();
+    assert.equal(await page.locator('[data-espera-montagem]').count(), 1, 'e a espera continua lá embaixo, aberta');
   } finally { await t.fechar(); }
 });
 
