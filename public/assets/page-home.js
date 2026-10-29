@@ -174,6 +174,7 @@
   // ⭐ 28/10/2026 — A HOME TAMBÉM ENVIA. Quem finalizou sem sinal fechava o app achando que "sobe sozinho"; ao reabrir caía aqui, e
   // a home NÃO enviava a fila: as marcações e o KM/foto só subiam quando ele entrasse de novo na rota. Agora a home dispara o envio
   // ao abrir (sem esperar nada) e mostra quantos envios ainda estão só neste aparelho, atualizando enquanto sobem.
+  // Devolve quantos envios ADIANTA tentar agora (os que esperam o PIN não contam).
   function pintarEnviosPendentes() {
     try {
       let box = document.getElementById('enviosPendentesBox');
@@ -186,9 +187,15 @@
         box.className = 'warning-box';
         listEl.parentNode.insertBefore(box, listEl.parentNode.firstChild);
       }
-      box.textContent = '⏳ Faltam ' + n + (n === 1 ? ' envio' : ' envios') + ' deste aparelho (entregas, pagamento ou KM/foto). Deixe o app aberto com internet até este aviso sumir.';
+      // ⛔ (revisão da leva 2) sem o token do entregador (o servidor pediu o PIN de novo e o token foi apagado), o que falta só sobe
+      // depois do PIN: o aviso diz isso (antes falava em internet) e a home não fica tentando à toa.
+      const semPin = Math.min(n, Number(c.semToken) || 0);
+      box.textContent = semPin
+        ? '🔑 ' + (semPin === 1 ? '1 envio deste aparelho espera' : semPin + ' envios deste aparelho esperam') + ' o seu PIN. Toque no seu nome e digite o PIN (os últimos 4 números do seu telefone): aí ' + (semPin === 1 ? 'ele sobe.' : 'eles sobem.')
+          + (n > semPin ? ' Os outros ' + (n - semPin) + ' sobem com o app aberto e internet.' : '')
+        : '⏳ Faltam ' + n + (n === 1 ? ' envio' : ' envios') + ' deste aparelho (entregas, pagamento ou KM/foto). Deixe o app aberto com internet até este aviso sumir.';
       box.classList.remove('hidden');
-      return n;
+      return n - semPin;
     } catch (e) { return 0; }
   }
   // ⛔ 28/10/2026 (revisão da leva 2) — a home tentava UMA vez: sem sinal naquela hora, nada mais subia até o entregador entrar na
@@ -203,6 +210,7 @@
       const n = pintarEnviosPendentes();
       if (n > 0) _repetirHome = window.setTimeout(tentarEnviarDaHome, REPETIR_HOME_MS);
     };
+    if (!pintarEnviosPendentes()) return; // nada a mandar, ou tudo esperando o PIN: tentar não adianta (sem o token, o servidor recusa)
     try { api.processarFila().then(depois, depois); } catch (e) { depois(); }
   }
   async function enviarPendentesDaHome() {

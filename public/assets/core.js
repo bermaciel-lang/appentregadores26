@@ -1620,18 +1620,24 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, 
   // ⭐ 28/10/2026 — QUANTOS ENVIOS AINDA ESTÃO SÓ NO APARELHO (a fila e o KM/foto da rota). O Finalizar e a home dizem o número em
   // vez de prometer que "sobe sozinho": com o app fechado nada sobe. `soDoAtivo` = só o entregador da tela; sem ele, tudo o que
   // ESTE aparelho consegue mandar (o de quem não tem token aqui espera o PIN dele — aviso próprio na home). Recusados não contam.
+  // (revisão da leva 2) `semToken` = quantos desses são de quem NÃO tem token neste aparelho (o servidor pediu o PIN de novo e o
+  // token foi apagado): esses só sobem depois do PIN — insistir não adianta e o aviso não pode falar em internet.
   function contarEnviosPendentes(opcoes) {
     const so = !!(opcoes && opcoes.soDoAtivo);
     const fila = bancoFila && bancoFila.snapshot();
-    let n = 0;
-    (fila || []).forEach(x => { if (x.precisaCorrigir) return; if (so ? !doAtivo(x) : !podeEnviarAgora(x)) return; n += 1; });
+    const tokens = new Map(), temToken = nome => { const k = nomeLimpo(nome) || getSavedDriverName(); if (!tokens.has(k)) tokens.set(k, !!tokenDe(k)); return tokens.get(k); };
+    let n = 0, semToken = 0;
+    (fila || []).forEach(x => {
+      if (x.precisaCorrigir) return; if (so ? !doAtivo(x) : !podeEnviarAgora(x)) return;
+      n += 1; if (!temToken(x && x.params && x.params.entregador)) semToken += 1;
+    });
     let rota = 0;
     todosRotaPend().forEach(({ entregador, payload }) => {
       if (!payload || payload.desistiu) return;
       if (so ? nomeLimpo(entregador) !== getSavedDriverName() : (nomeLimpo(entregador) !== getSavedDriverName() && !tokenDe(entregador))) return;
-      rota += 1;
+      rota += 1; if (!temToken(entregador)) semToken += 1;
     });
-    return { fila: n, rota, total: n + rota, conhecida: fila !== null && fila !== undefined };
+    return { fila: n, rota, total: n + rota, semToken, conhecida: fila !== null && fila !== undefined };
   }
 
   // ⭐ 28/10/2026 — a faxina das lápides (fila-duravel.js `limparLapides`): só ato confirmado há mais de 3 dias, e parando sozinha

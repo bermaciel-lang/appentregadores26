@@ -15,7 +15,8 @@
 //   V13 "Trocar a foto" com o início/fim AINDA pendente no aparelho troca só a foto dentro do pendente (KM e hora originais, sem
 //       `trocarFoto`); antes regravava o pendente com KM vazio e a hora da troca;
 //   V14 a foto trocada enquanto o pendente sobe não é apagada nem regravada por cima pelo envio em voo;
-//   V15 a recarga com o FIM ainda pendente no aparelho não apaga a marca de "fim confirmado" (sem pendente, apaga como antes).
+//   V15 a recarga com o FIM ainda pendente no aparelho não apaga a marca de "fim confirmado" (sem pendente, apaga como antes);
+//   V16 a home sem o token do entregador (precisa do PIN) diz isso e não fica tentando a cada 30 s.
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { app, reguas, ler } from './_harness-leva2.mjs';
@@ -115,10 +116,8 @@ teste('V5 o timeout do pagamento trava só aquela parada; as outras sobem', asyn
   assert.equal(String(pg.params.pg_fila), '1', 'guardado para reenvio');
 });
 
-teste('V7 a home tenta de novo quando a internet volta e agenda nova tentativa enquanto houver pendente', async () => {
-  let rede = false;
-  const h = await app({ responder: async p => { if (!rede && p.action === 'marcarEntregue') throw Error('sem sinal'); return p.action === 'entregadores' ? { ok: true, items: ['Fictício'] } : { ok: true }; } });
-  await h.api.enfileirar({ action: 'marcarEntregue', row: 1, ts_device: '2026-10-28T12:00:00.000Z' }, { row: 1 });
+// A home de verdade (page-home.js) numa VM, com um DOM mínimo; devolve os ouvintes, os prazos agendados e os elementos.
+async function rodarHome(h) {
   const ouvintes = {}, agendados = [];
   h.window.addEventListener = (tipo, fn) => { (ouvintes[tipo] = ouvintes[tipo] || []).push(fn); };
   h.window.setTimeout = (fn, ms) => { agendados.push(ms); if (ms < 5000) queueMicrotask(fn); return agendados.length; };
@@ -132,6 +131,14 @@ teste('V7 a home tenta de novo quando a internet volta e agenda nova tentativa e
   h.window.location.search = '?escolher=1'; h.ctx.location = h.window.location;
   vm.runInContext(ler('page-home.js'), h.ctx, { filename: 'page-home.js' });
   for (let i = 0; i < 6; i++) await h.assentar();
+  return { ouvintes, agendados, elementos };
+}
+
+teste('V7 a home tenta de novo quando a internet volta e agenda nova tentativa enquanto houver pendente', async () => {
+  let rede = false;
+  const h = await app({ responder: async p => { if (!rede && p.action === 'marcarEntregue') throw Error('sem sinal'); return p.action === 'entregadores' ? { ok: true, items: ['Fictício'] } : { ok: true }; } });
+  await h.api.enfileirar({ action: 'marcarEntregue', row: 1, ts_device: '2026-10-28T12:00:00.000Z' }, { row: 1 });
+  const { ouvintes, agendados } = await rodarHome(h);
   assert.equal(h.fila().length, 1, 'sem sinal: continua guardado');
   assert.ok(agendados.includes(30000), 'enquanto houver pendente, agenda outra tentativa em ~30 s');
   rede = true;
@@ -139,6 +146,24 @@ teste('V7 a home tenta de novo quando a internet volta e agenda nova tentativa e
   for (let i = 0; i < 6; i++) await h.assentar();
   assert.ok((ouvintes.online || []).length >= 1, 'a home ouve a internet voltar');
   assert.equal(h.fila().length, 0, 'a internet voltou: subiu da home (antes: só na próxima abertura)');
+});
+
+teste('V16 a home sem o token do entregador (precisa do PIN) diz isso e não fica tentando a cada 30 s', async () => {
+  const h = await app({ responder: async p => p.action === 'entregadores' ? { ok: true, items: ['Fictício'] }
+    : { ok: false, precisaLogin: true, error: 'Faça login com o PIN pra abrir a rota.' } }); // o servidor recusa o token
+  await h.api.enfileirar({ action: 'marcarEntregue', row: 1, ts_device: '2026-10-28T12:00:00.000Z' }, { row: 1 });
+  const { agendados, elementos, ouvintes } = await rodarHome(h);
+  assert.equal(h.fila().length, 1, 'continua guardado');
+  assert.equal(h.api.getDriverTokenInfo(), null, 'o token recusado foi apagado (agora só com o PIN)');
+  assert.equal(agendados.includes(30000), false, 'sem o PIN, não agenda nova tentativa (antes: a cada 30 s, para sempre)');
+  const aviso = elementos.enviosPendentesBox.textContent;
+  assert.match(aviso, /PIN/, 'o aviso fala do PIN: ' + aviso);
+  assert.doesNotMatch(aviso, /internet/, 'e não manda esperar internet');
+  const chamadas = h.calls.length;
+  for (const fn of ouvintes.online || []) fn(); // a internet "volta": sem o token, nem tenta
+  for (let i = 0; i < 4; i++) await h.assentar();
+  assert.equal(h.calls.filter(c => c.params.action === 'marcarEntregue').length, h.calls.slice(0, chamadas).filter(c => c.params.action === 'marcarEntregue').length,
+    'sem o token, a internet voltando não manda de novo');
 });
 
 teste('V9 Desfazer de "Não entregue" é um a um', async () => {
