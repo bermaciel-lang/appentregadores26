@@ -770,7 +770,11 @@ button, select, input, textarea {
 .app-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;                 /* acima de tudo (lembrete fixo é z-index 30) */
+  /* Acima de tudo do app (lembrete fixo 30, mapa 2000, chat 5000, pop-up de mensagem do chat 6000). Abaixo só das telas
+     cheias que travam o app (permissões 9000, porteiro, aviso de privacidade). ⛔ 28/10/2026 (revisão da leva 2) — era 1000:
+     todo aviso aberto DE DENTRO do chat ("Sem conexão pra enviar agora.", arquivo grande, microfone) nascia ATRÁS da conversa,
+     invisível e sem como tocar no "Entendi" (achado pela régua N7b). */
+  z-index: 7000;
   display: flex;
   align-items: center;
   justify-content: center;

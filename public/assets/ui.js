@@ -19,6 +19,20 @@
 (function () {
   // Quanto tempo depois de abrir o diálogo os toques passam a valer (28/10/2026, toque duplo). Ver `abrir`.
   var ESPERA_ANTES_DO_TOQUE_MS = 350;
+  // (revisão da leva 2) Só o toque que cai PERTO do ponto que abriu o diálogo é o 2º toque do toque duplo: ~48 px (o tamanho de um
+  // dedo). Um toque rápido em OUTRO lugar é de propósito e vale. O último toque na tela fica aqui (fase de captura: antes de
+  // qualquer outro ouvinte), e quem abriu o diálogo é o toque de até 1 s antes; sem ele, o diálogo abriu SOZINHO (aviso
+  // automático) e, na janela, nenhum toque nem o Enter decidem nada.
+  var RAIO_DO_DEDO_PX = 48;
+  var ultimoToque = null;
+  try {
+    var marcarToque = function (e) {
+      var p = e && e.touches && e.touches[0] ? e.touches[0] : e;
+      if (p && p.clientX != null) ultimoToque = { x: p.clientX, y: p.clientY, t: Date.now() };
+    };
+    document.addEventListener('pointerdown', marcarToque, true);
+    document.addEventListener('touchstart', marcarToque, { capture: true, passive: true });
+  } catch (e) { /* sem DOM (réguas de node): sem ponto de origem */ }
   // Conta quantos modais estão abertos pra travar/destravar a rolagem do fundo.
   var abertos = 0;
   function travarFundo(travar) {
@@ -94,8 +108,18 @@
       // nervoso ou o "toque não pegou") cai NELE: numa opção ("🤝 Entregue em mãos" está bem onde ficava o botão) ou no fundo
       // (= Cancelar). O quadro ainda está invisível (opacity 0 no CSS até `.aberto`) e já aceita o dedo. Ninguém lê e decide em
       // 350 ms: até lá, cliques nas opções, nos botões e no fundo são ignorados (o teclado continua valendo).
+      // (revisão da leva 2) Ignorado é só o toque PERTO do ponto que abriu o diálogo (o 2º do toque duplo); um toque rápido em outro
+      // lugar vale. Diálogo que abriu SOZINHO (sem toque de origem, ex.: o aviso de pedido cancelado) espera a janela inteira,
+      // inclusive o Enter.
       var abertoEm = Date.now();
-      function cedoDemais() { return Date.now() - abertoEm < ESPERA_ANTES_DO_TOQUE_MS; }
+      var origem = (ultimoToque && Date.now() - ultimoToque.t < 1000) ? ultimoToque : null;
+      function naJanela() { return Date.now() - abertoEm < ESPERA_ANTES_DO_TOQUE_MS; }
+      function cedoDemais(e) {
+        if (!naJanela()) return false;
+        if (!origem || !e || e.clientX == null) return true;
+        var dx = e.clientX - origem.x, dy = e.clientY - origem.y;
+        return dx * dx + dy * dy <= RAIO_DO_DEDO_PX * RAIO_DO_DEDO_PX;
+      }
 
       // Anima a entrada (fade + leve subida) no quadro seguinte. `aoAbrir` (28/10/2026) avisa quem pediu QUANDO o diálogo de fato
       // apareceu (com a tela escondida o quadro só é desenhado quando ela volta) — o aviso de cancelado só conta como visto aí.
@@ -127,7 +151,7 @@
 
       // Clique nos botões.
       card.addEventListener('click', function (e) {
-        if (cedoDemais()) { e.preventDefault(); e.stopPropagation(); return; } // o 2º toque do toque duplo não decide nada
+        if (cedoDemais(e)) { e.preventDefault(); e.stopPropagation(); return; } // o 2º toque do toque duplo não decide nada
         // Opção escolhida (modal de escolha) -> resolve com o "valor" daquela opção.
         var op = e.target.closest('button[data-idx]');
         if (op) { fechar((cfg.opcoes || [])[Number(op.getAttribute('data-idx'))].valor); return; }
@@ -139,13 +163,17 @@
       // Toque FORA do quadro = cancelar (no alert, apenas fecha). `fecharNoFundo: false` (28/10/2026) = o fundo não fecha: aviso
       // que o entregador PRECISA ler (pedido cancelado na rua) só sai pelo botão.
       overlay.addEventListener('click', function (e) {
-        if (e.target !== overlay || cedoDemais() || cfg.fecharNoFundo === false) return;
+        if (e.target !== overlay || cedoDemais(e) || cfg.fecharNoFundo === false) return;
         cancelar();
       });
       // Teclado: Esc cancela, Enter confirma.
       function onTecla(e) {
         if (e.key === 'Escape') { e.preventDefault(); cancelar(); }
-        else if (e.key === 'Enter' && !temEscolha) { e.preventDefault(); confirmar(); }
+        else if (e.key === 'Enter' && !temEscolha) {
+          e.preventDefault();
+          if (!origem && naJanela()) return; // aviso que abriu sozinho: o Enter que já vinha vindo não o fecha sem ser lido
+          confirmar();
+        }
       }
       document.addEventListener('keydown', onTecla);
 
