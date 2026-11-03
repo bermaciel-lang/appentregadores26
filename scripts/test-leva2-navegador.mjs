@@ -20,8 +20,8 @@
 //   N11 (revisão) abrir a MANHÃ já finalizada ("Trocar turno") não desliga o GPS da TARDE em andamento (o id é por rota);
 //   N12 (revisão) camadas: o pop-up de mensagem e a conversa do chat ficam acima da "Aguardando a montagem", e o aviso aberto de
 //       dentro do chat fica acima da conversa.
-//   N13 (03/11/2026, dono) cartão FECHADO: Iniciar, Maps, Waze e WhatsApp na MESMA linha e dentro do cartão, de 320 a 412 px,
-//       também com a letra grande do Android; o WhatsApp do cartão fechado chama a mesma ação do aberto (antes: só no aberto).
+//   N13 (03/11/2026, dono) cartão FECHADO: Iniciar, Maps, Waze e Zap (o WhatsApp) na MESMA linha e dentro do cartão, com o nome
+//       INTEIRO (sem "…"), de 320 a 412 px, também com a letra grande do Android; o Zap do cartão fechado chama a mesma ação do aberto.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -452,7 +452,7 @@ teste('N12 camadas: pop-up e conversa do chat acima da "Aguardando a montagem"; 
   } finally { await t.fechar(); }
 });
 
-teste('N13 cartão fechado: Iniciar, Maps, Waze e WhatsApp na mesma linha, dentro do cartão, de 320 a 412 px', async () => {
+teste('N13 cartão fechado: Iniciar, Maps, Waze e Zap na mesma linha, dentro do cartão e com o nome inteiro, de 320 a 412 px', async () => {
   const t = await abrir();
   try {
     const { page, api } = t;
@@ -466,10 +466,14 @@ teste('N13 cartão fechado: Iniciar, Maps, Waze e WhatsApp na mesma linha, dentr
         const cr = c.getBoundingClientRect(), cs = getComputedStyle(c);
         const dentro = cr.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight) + 0.5;
         const linha = c.querySelector('.dc-btns');
-        return [...linha.querySelectorAll('button')].map((b) => { const r = b.getBoundingClientRect(); return { txt: b.textContent.trim(), act: b.dataset.act, topo: Math.round(r.top), dentro: r.right <= dentro && r.left >= cr.left, larg: Math.round(r.width) }; });
+        return [...linha.querySelectorAll('button')].map((b) => { const r = b.getBoundingClientRect(); const s = b.querySelector('span');
+          return { txt: b.textContent.trim(), act: b.dataset.act, topo: Math.round(r.top), dentro: r.right <= dentro && r.left >= cr.left, larg: Math.round(r.width),
+            inteiro: !!s && s.scrollWidth <= s.clientWidth }; });
       });
       const onde = largura + ' px, letra ' + letra + ': ' + m.map((b) => b.txt + ' ' + b.larg + 'px').join(' | ');
       assert.deepEqual(m.map((b) => b.act), ['start', 'maps', 'waze', 'whats'], 'os 4 botões, nesta ordem (' + onde + ')');
+      assert.deepEqual(m.map((b) => b.txt), ['Iniciar', 'Maps', 'Waze', 'Zap'], 'o WhatsApp se chama "Zap" (' + onde + ')');
+      assert.ok(m.every((b) => b.inteiro), 'todo nome cabe inteiro, sem "…" (' + onde + ')');
       assert.equal(new Set(m.map((b) => b.topo)).size, 1, 'todos na MESMA linha (' + onde + ')');
       assert.ok(m.every((b) => b.dentro), 'nenhum botão sai do cartão (' + onde + ')');
       assert.ok(m.every((b) => b.larg >= 44), 'todos com largura de dedo (' + onde + ')');
@@ -481,7 +485,7 @@ teste('N13 cartão fechado: Iniciar, Maps, Waze e WhatsApp na mesma linha, dentr
     await card.locator('button[data-act="whats"]').click();
     await page.waitForTimeout(300);
     const wa = api.chamadas.slice(antes).filter((c) => c.acao === 'whatsapp');
-    assert.equal(wa.length, 1, 'o WhatsApp do cartão fechado pede o link ao painel (a mesma ação do cartão aberto)');
+    assert.equal(wa.length, 1, 'o Zap do cartão fechado pede o link do WhatsApp ao painel (a mesma ação do cartão aberto)');
     assert.equal(String(wa[0].row), '1', 'do cliente certo');
     assert.equal(await page.locator('article.dc.aberto').count(), 0, 'e o cartão continua fechado');
   } finally { await t.fechar(); }

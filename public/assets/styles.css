@@ -716,14 +716,11 @@ button, select, input, textarea {
 .dc-b.desf { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
 .dc-b.sm { min-height: 42px; font-size: 13.5px; }
 .dc-b[disabled] { opacity: .5; }
-/* Cartão fechado: Iniciar · Maps · Waze · WhatsApp na MESMA linha (dono, 03/11/2026). O nome vai embaixo do ícone e corta com "…"
+/* Cartão fechado: Iniciar · Maps · Waze · Zap (WhatsApp) na MESMA linha (dono, 03/11/2026). O nome vai embaixo do ícone e corta com "…"
    em vez de empurrar o último botão para fora do cartão (o .dc tem overflow: hidden) — celular estreito ou letra grande no Android. */
 .dc-linha4 { gap: 6px; }
 .dc-linha4 .dc-b { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 3px; padding: 0 2px; font-size: clamp(11px, 3.4vw, 13px); line-height: 1.15; }
 .dc-linha4 .dc-b span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* "Maps" e "Waze" são curtos: cedem largura ao "WhatsApp", que é o nome mais comprido da linha. */
-.dc-linha4 .dc-b[data-act="maps"], .dc-linha4 .dc-b[data-act="waze"] { flex-grow: .85; }
-.dc-linha4 .dc-b[data-act="whats"] { flex-grow: 1.3; }
 .dc-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 800; padding: 6px 12px; border-radius: 9px; background: #e0f2fe; color: #075985; }
 .dc-eggs { font-size: 14.5px; color: var(--text); margin-top: 10px; line-height: 1.6; display: flex; gap: 6px; align-items: flex-start; }
 .dc-eggs b { color: var(--muted); font-weight: 800; }

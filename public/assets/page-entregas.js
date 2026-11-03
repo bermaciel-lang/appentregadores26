@@ -481,7 +481,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<button type="button" class="dc-min" data-act="minimize" data-row="' + row + '">' + ic('chevup', 15) + 'Minimizar</button></div>'
         + '<div class="dc-name" style="font-size:19px">' + nome + '</div>'
         + addrHtml
-        + '<div class="dc-nav">' + navBtn('ligar', row, 'phone', 'Ligar', dis) + navBtn('maps', row, 'pin', 'Maps', dis) + navBtn('waze', row, 'nav', 'Waze', dis) + navBtn('whats', row, 'whats', 'WhatsApp', dis) + '</div>'
+        + '<div class="dc-nav">' + navBtn('ligar', row, 'phone', 'Ligar', dis) + navBtn('maps', row, 'pin', 'Maps', dis) + navBtn('waze', row, 'nav', 'Waze', dis) + navBtn('whats', row, 'whats', 'Zap', dis) + '</div>'
         + '<div class="dc-sec">' + pagamentoHtml(item, true) + pgHtml
         + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
         + cong + ovosHtml(item.ovos) + '</div>'
@@ -503,8 +503,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       + '<div class="dc-hint">' + ic('chevdown', 13) + 'toque para ver tudo do pedido</div></div>'
       + envioHtml
       // 03/11/2026 (dono): o WhatsApp entra nesta linha — antes só aparecia com o cartão aberto. 4 botões na mesma linha
-      // (Iniciar, Maps, Waze, WhatsApp), com o nome embaixo do ícone para caber em celular estreito (styles.css `.dc-linha4`).
-      + '<div class="dc-btns dc-linha4">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + miniBtn('whats', row, 'whats', 'WhatsApp', dis) + '</div>'
+      // (Iniciar, Maps, Waze, Zap), com o nome embaixo do ícone para caber em celular estreito (styles.css `.dc-linha4`).
+      // O botão do WhatsApp se chama "Zap" (dono, 03/11/2026: "para caber"), aqui e no cartão aberto.
+      + '<div class="dc-btns dc-linha4">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + miniBtn('whats', row, 'whats', 'Zap', dis) + '</div>'
       + '<div class="dc-btns">' + btnEntregue + btnNao + '</div>'
       + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
       + '</article>';
