@@ -352,7 +352,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
   }
 
   const navBtn = (act, row, icon, label, dis) => '<button type="button" class="dc-navb" data-act="' + act + '" data-row="' + row + '" ' + dis + '>' + ic(icon, 20) + '<span>' + label + '</span></button>';
-  const miniBtn = (act, row, icon, label, dis) => '<button type="button" class="dc-b" data-act="' + act + '" data-row="' + row + '" ' + dis + '>' + ic(icon, 16) + label + '</button>';
+  const miniBtn = (act, row, icon, label, dis) => '<button type="button" class="dc-b" data-act="' + act + '" data-row="' + row + '" ' + dis + '>' + ic(icon, 16) + '<span>' + label + '</span></button>';
 
   // ===== A TELA É PINTADA A PARTIR DA FILA (23/09/2026) =====
   // `state.items` é o que o SERVIDOR mandou. A fila durável é o que o APARELHO já registrou e ainda
@@ -495,14 +495,16 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // RECOLHIDA (a fazer / em andamento): o essencial + botões pequenos. Toca no corpo pra expandir.
     const chev = '<span style="margin-left:auto;color:#94a3b8;display:inline-flex">' + ic('chevdown', 20) + '</span>';
     const linhaAndamento = emAndamento ? '<span class="dc-andlbl">' + ic('play', 13) + 'Em andamento</span>' : '';
-    const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + ' style="flex:1.4">' + ic('play', 16) + 'Iniciar</button>';
+    const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + '>' + ic('play', 16) + '<span>Iniciar</span></button>';
     return '<article class="dc ' + (emAndamento ? 'indo' : '') + '">'
       + '<div class="dc-head dc-tap" data-act="expand" data-row="' + row + '"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml + linhaAndamento + chev + '</div>'
       + '<div class="dc-tap" data-act="expand" data-row="' + row + '"><div class="dc-name">' + nome + '</div>' + addrHtml + pagamentoHtml(item, false)
       + (obsE ? '<div class="dc-obs corta">' + obsE + '</div>' : '')
       + '<div class="dc-hint">' + ic('chevdown', 13) + 'toque para ver tudo do pedido</div></div>'
       + envioHtml
-      + '<div class="dc-btns">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + '</div>'
+      // 03/11/2026 (dono): o WhatsApp entra nesta linha — antes só aparecia com o cartão aberto. 4 botões na mesma linha
+      // (Iniciar, Maps, Waze, WhatsApp), com o nome embaixo do ícone para caber em celular estreito (styles.css `.dc-linha4`).
+      + '<div class="dc-btns dc-linha4">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + miniBtn('whats', row, 'whats', 'WhatsApp', dis) + '</div>'
       + '<div class="dc-btns">' + btnEntregue + btnNao + '</div>'
       + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
       + '</article>';
