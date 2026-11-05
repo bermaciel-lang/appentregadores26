@@ -471,8 +471,8 @@ teste('N13 cartão fechado: Iniciar, Maps, Waze e Zap na mesma linha, dentro do 
             inteiro: !!s && s.scrollWidth <= s.clientWidth }; });
       });
       const onde = largura + ' px, letra ' + letra + ': ' + m.map((b) => b.txt + ' ' + b.larg + 'px').join(' | ');
-      assert.deepEqual(m.map((b) => b.act), ['start', 'maps', 'waze', 'whats'], 'os 4 botões, nesta ordem (' + onde + ')');
-      assert.deepEqual(m.map((b) => b.txt), ['Iniciar', 'Maps', 'Waze', 'Zap'], 'o WhatsApp se chama "Zap" (' + onde + ')');
+      assert.deepEqual(m.map((b) => b.act), ['start', 'ligar', 'maps', 'waze', 'whats'], 'os 5 botões, nesta ordem (' + onde + ')');
+      assert.deepEqual(m.map((b) => b.txt), ['Iniciar', 'Ligar', 'Maps', 'Waze', 'Zap'], 'o WhatsApp se chama "Zap" (' + onde + ')');
       assert.ok(m.every((b) => b.inteiro), 'todo nome cabe inteiro, sem "…" (' + onde + ')');
       assert.equal(new Set(m.map((b) => b.topo)).size, 1, 'todos na MESMA linha (' + onde + ')');
       assert.ok(m.every((b) => b.dentro), 'nenhum botão sai do cartão (' + onde + ')');
@@ -488,6 +488,41 @@ teste('N13 cartão fechado: Iniciar, Maps, Waze e Zap na mesma linha, dentro do 
     assert.equal(wa.length, 1, 'o Zap do cartão fechado pede o link do WhatsApp ao painel (a mesma ação do cartão aberto)');
     assert.equal(String(wa[0].row), '1', 'do cliente certo');
     assert.equal(await page.locator('article.dc.aberto').count(), 0, 'e o cartão continua fechado');
+  } finally { await t.fechar(); }
+});
+
+// N14 (05/11/2026, dono): o Ligar também no cartão FECHADO e o Iniciar também no cartão ABERTO (só na parada pendente).
+teste('N14 Ligar no cartão fechado (também em andamento) e Iniciar no cartão aberto só da parada pendente', async () => {
+  const itens = [
+    { row: 1, numero: 1, pedido: 'LOJA-1', cliente: 'Cliente 1', endereco: 'Rua Teste, 1', status: '', naEntrega: false, telefone: '31999990001', produtos: [] },
+    { row: 3, numero: 3, pedido: 'LOJA-3', cliente: 'Cliente 3', endereco: 'Rua Teste, 3', status: 'Entregue', naEntrega: false, telefone: '31999990003', produtos: [] },
+  ];
+  const t = await abrir({ itens });
+  try {
+    const { page, api } = t;
+    await cartao(page, 'Cliente 1').getByRole('button', { name: 'Iniciar' }).waitFor();
+    const acts = (c) => cartao(page, c).locator('.dc-linha4 button').evaluateAll((bs) => bs.map((b) => b.dataset.act));
+    // pendente aberto: tem Iniciar; tocar nele inicia a entrega (a mesma ação do cartão fechado)
+    await cartao(page, 'Cliente 1').locator('.dc-name').click();
+    const aberto1 = page.locator('article.dc.aberto', { hasText: 'Cliente 1' });
+    await aberto1.waitFor();
+    assert.equal(await aberto1.locator('button[data-act="start"]').count(), 1, 'cartão aberto da pendente tem o Iniciar');
+    assert.equal(await aberto1.locator('button[data-act="ligar"]').count(), 1, 'e continua com o Ligar');
+    const antes = api.chamadas.length;
+    await aberto1.locator('button[data-act="start"]').click();
+    api.itens[0].status = 'Indo para entrega'; // o painel dublado passa a devolver a parada iniciada (como o de verdade)
+    await page.waitForTimeout(600);
+    assert.ok(api.chamadas.slice(antes).some((c) => c.acao === 'iniciarEntrega' && String(c.row) === '1'), 'o Iniciar do cartão aberto inicia a entrega 1');
+    const agora1 = page.locator('article.dc', { hasText: 'Cliente 1' });
+    assert.equal(await agora1.locator('button[data-act="start"]').count(), 0, 'depois de iniciada, o Iniciar some do cartão aberto');
+    // em andamento fechado: Ligar · Maps · Waze · Zap (sem Iniciar)
+    await agora1.locator('button[data-act="minimize"]').click();
+    await page.waitForTimeout(200);
+    assert.deepEqual(await acts('Cliente 1'), ['ligar', 'maps', 'waze', 'whats'], 'em andamento fechado: Ligar · Maps · Waze · Zap, sem Iniciar');
+    // entregue aberto: sem Iniciar
+    await cartao(page, 'Cliente 3').click();
+    await page.locator('article.dc.aberto', { hasText: 'Cliente 3' }).waitFor();
+    assert.equal(await page.locator('article.dc.aberto', { hasText: 'Cliente 3' }).locator('button[data-act="start"]').count(), 0, 'entregue aberto: sem Iniciar');
   } finally { await t.fechar(); }
 });
 

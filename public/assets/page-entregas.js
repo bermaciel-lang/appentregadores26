@@ -470,6 +470,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const btnNao = '<button type="button" class="dc-b no sm" data-act="naoentregue" data-row="' + row + '" ' + dis + '>' + ic('x', 15) + 'Não entregue</button>';
     // Desfazer (apertou errado): só aparece se já foi INICIADA ou marcada — volta pra pendente.
     const btnDesfazer = key !== 'cancel' && (emAndamento || resolvida) ? '<button type="button" class="dc-b desf sm" data-act="desfazer" data-row="' + row + '" ' + dis + '>↩ Desfazer</button>' : '';
+    const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + '>' + ic('play', 16) + '<span>Iniciar</span></button>';
 
     // EXPANDIDA: tudo do pedido (pagamento → obs → congelado + ovos → produtos que rolam).
     if (expandido) {
@@ -482,6 +483,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         + '<div class="dc-name" style="font-size:19px">' + nome + '</div>'
         + addrHtml
         + '<div class="dc-nav">' + navBtn('ligar', row, 'phone', 'Ligar', dis) + navBtn('maps', row, 'pin', 'Maps', dis) + navBtn('waze', row, 'nav', 'Waze', dis) + navBtn('whats', row, 'whats', 'Zap', dis) + '</div>'
+        // 05/11/2026 (dono): o Iniciar também no cartão ABERTO, logo abaixo de Ligar/Maps/Waze/Zap — só na parada PENDENTE
+        // (em andamento já foi iniciada; Entregue/Não entregue/Saiu da rota não se iniciam de novo).
+        + (btnIniciar && !resolvida ? '<div class="dc-btns dc-ini-aberto">' + btnIniciar + '</div>' : '')
         + '<div class="dc-sec">' + pagamentoHtml(item, true) + pgHtml
         + (obsE ? '<div class="dc-obs"><b>Obs:</b> ' + obsE + '</div>' : '')
         + cong + ovosHtml(item.ovos) + '</div>'
@@ -495,7 +499,6 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // RECOLHIDA (a fazer / em andamento): o essencial + botões pequenos. Toca no corpo pra expandir.
     const chev = '<span style="margin-left:auto;color:#94a3b8;display:inline-flex">' + ic('chevdown', 20) + '</span>';
     const linhaAndamento = emAndamento ? '<span class="dc-andlbl">' + ic('play', 13) + 'Em andamento</span>' : '';
-    const btnIniciar = emAndamento ? '' : '<button type="button" class="dc-b ini" data-act="start" data-row="' + row + '" ' + dis + '>' + ic('play', 16) + '<span>Iniciar</span></button>';
     return '<article class="dc ' + (emAndamento ? 'indo' : '') + '">'
       + '<div class="dc-head dc-tap" data-act="expand" data-row="' + row + '"><span class="dc-num">' + (item.numero || '') + '</span>' + restrHtml + linhaAndamento + chev + '</div>'
       + '<div class="dc-tap" data-act="expand" data-row="' + row + '"><div class="dc-name">' + nome + '</div>' + addrHtml + pagamentoHtml(item, false)
@@ -505,7 +508,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // 03/11/2026 (dono): o WhatsApp entra nesta linha — antes só aparecia com o cartão aberto. 4 botões na mesma linha
       // (Iniciar, Maps, Waze, Zap), com o nome embaixo do ícone para caber em celular estreito (styles.css `.dc-linha4`).
       // O botão do WhatsApp se chama "Zap" (dono, 03/11/2026: "para caber"), aqui e no cartão aberto.
-      + '<div class="dc-btns dc-linha4">' + btnIniciar + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + miniBtn('whats', row, 'whats', 'Zap', dis) + '</div>'
+      // 05/11/2026 (dono): o Ligar também no cartão FECHADO — Iniciar · Ligar · Maps · Waze · Zap (em andamento: sem o Iniciar).
+      + '<div class="dc-btns dc-linha4">' + btnIniciar + miniBtn('ligar', row, 'phone', 'Ligar', dis) + miniBtn('maps', row, 'pin', 'Maps', dis) + miniBtn('waze', row, 'nav', 'Waze', dis) + miniBtn('whats', row, 'whats', 'Zap', dis) + '</div>'
       + '<div class="dc-btns">' + btnEntregue + btnNao + '</div>'
       + (btnDesfazer ? '<div class="dc-btns" style="margin-top:7px">' + btnDesfazer + '</div>' : '')
       + '</article>';
