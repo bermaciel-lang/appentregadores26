@@ -39,7 +39,8 @@ teste('L1 DDD + celular (11 dígitos), com ou sem máscara, disca com +55', asyn
 
 teste('L2 já com 55 ou com "+" não duplica o 55', async () => {
   for (const [bruto, esperado] of [['5531999990001', 'tel:+5531999990001'], ['+55 (31) 99999-0001', 'tel:+5531999990001'],
-    ['553133334444', 'tel:+553133334444'], ['+351 912 345 678', 'tel:+351912345678']]) {
+    ['553133334444', 'tel:+553133334444'], ['+351 912 345 678', 'tel:+351912345678'],
+    ['(+351) 912 345 678', 'tel:+351912345678'], ['Tel: +55 31 99999-0001', 'tel:+5531999990001']]) {
     const { abertos } = await ligar(bruto);
     assert.deepEqual(abertos, [esperado], 'telefone "' + bruto + '"');
   }
@@ -49,8 +50,10 @@ teste('L2 já com 55 ou com "+" não duplica o 55', async () => {
 });
 
 teste('L3 fixo com DDD (10 dígitos) disca com +55', async () => {
-  const { abertos } = await ligar('(31) 3333-4444');
-  assert.deepEqual(abertos, ['tel:+553133334444']);
+  for (const [bruto, esperado] of [['(31) 3333-4444', 'tel:+553133334444'], ['5532221234', 'tel:+555532221234']]) { // o 2º: fixo do DDD 55
+    const { abertos } = await ligar(bruto);
+    assert.deepEqual(abertos, [esperado], 'telefone "' + bruto + '"');
+  }
 });
 
 teste('L4 sem DDD ou começando com 0 vai como veio', async () => {

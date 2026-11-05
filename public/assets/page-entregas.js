@@ -921,7 +921,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     const texto = String(bruto || '').trim();
     const dig = texto.replace(/\D/g, '');
     if (!dig) return '';
-    if (texto.charAt(0) === '+') return '+' + dig;
+    if (/^\D*\+/.test(texto)) return '+' + dig; // "+351 …", "(+351) …", "Tel: +55 …"
     if (/^55\d{10,11}$/.test(dig)) return '+' + dig;
     if (/^[1-9]\d{9,10}$/.test(dig)) return '+55' + dig;
     return dig;
