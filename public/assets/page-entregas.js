@@ -912,6 +912,21 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     window.location.assign(url);
   }
 
+  // Número para o discador (botão Ligar). 05/11/2026: o painel manda o telefone como está no pedido — quase sempre DDD + número
+  // (11 dígitos, sem o 55). Discado assim, sem o 0 + código da operadora, só completa quando o chip do entregador é do MESMO DDD
+  // do cliente. Com +55 na frente (formato internacional, o mesmo da agenda e do WhatsApp) completa de qualquer chip para qualquer
+  // DDD; fixo com DDD (10 dígitos) também. Já com 55 ou "+" não duplica. Sem DDD ou começando com 0 vai como veio.
+  // Régua: scripts/test-ligar-cliente.mjs.
+  function telParaLigar(bruto) {
+    const texto = String(bruto || '').trim();
+    const dig = texto.replace(/\D/g, '');
+    if (!dig) return '';
+    if (texto.charAt(0) === '+') return '+' + dig;
+    if (/^55\d{10,11}$/.test(dig)) return '+' + dig;
+    if (/^[1-9]\d{9,10}$/.test(dig)) return '+55' + dig;
+    return dig;
+  }
+
   // Menu de correção do KM/foto — abre ao tocar na LINHA de "Rota iniciada"/"Rota finalizada" (o ✏️).
   async function menuEditarRota(fase) { // 'inicio' | 'fim'
     const opt = await AppUI.escolher('O que você quer corrigir?', [
@@ -1667,7 +1682,7 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
 
     // Ligar pro cliente (abre o discador do celular). Sem telefone → avisa.
     if (act === 'ligar') {
-      const tel = String(item.telefone || '').replace(/[^\d+]/g, '');
+      const tel = telParaLigar(item.telefone);
       if (!tel) { await AppUI.alerta('Este pedido não tem telefone cadastrado.', { tom: 'warn' }); return; }
       await openSameTab('tel:' + tel);
       return;
