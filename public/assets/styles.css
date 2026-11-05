@@ -718,8 +718,12 @@ button, select, input, textarea {
 .dc-b[disabled] { opacity: .5; }
 /* Cartão fechado: Iniciar · Maps · Waze · Zap (WhatsApp) na MESMA linha (dono, 03/11/2026). O nome vai embaixo do ícone e corta com "…"
    em vez de empurrar o último botão para fora do cartão (o .dc tem overflow: hidden) — celular estreito ou letra grande no Android. */
-.dc-linha4 { gap: 6px; }
-.dc-linha4 .dc-b { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 3px; padding: 0 2px; font-size: clamp(11px, 3.4vw, 13px); line-height: 1.15; }
+/* 05/11/2026: com o Ligar são 5 botões (Iniciar · Ligar · Maps · Waze · Zap) — espaço e letra um pouco menores para o nome caber
+   inteiro em 320 px com a letra grande do Android (régua N13). */
+.dc-linha4 { gap: 4px; }
+.dc-linha4 .dc-b { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 3px; padding: 0 1px; font-size: clamp(10px, 3.2vw, 13px); line-height: 1.15; }
+.dc-linha4 .dc-b.ini { flex-grow: 1.2; } /* "Iniciar" é o nome mais comprido da linha */
+.dc-ini-aberto .dc-b { min-height: 44px; }
 .dc-linha4 .dc-b span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dc-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 800; padding: 6px 12px; border-radius: 9px; background: #e0f2fe; color: #075985; }
 .dc-eggs { font-size: 14.5px; color: var(--text); margin-top: 10px; line-height: 1.6; display: flex; gap: 6px; align-items: flex-start; }
