@@ -707,6 +707,7 @@ async function carregarEntregasPorEntregador(entregador, opcoes) {
     if (!res || !res.ok) throw new Error((res && res.error) || 'Erro ao carregar entregas');
     guardarInicioConfirmado(entregador, !!res.rotaIniciada);
     lembrarDiaDoServidor(res.data);
+    gpsToqueLigado = res.gpsToque === true; // 🛰️ GPS do toque (15/11/2026): só o painel liga (cofre ENTREGADOR_GPS_TOQUE)
 
     const ultimoCache = readCache(cacheName);
     const anteriores = ultimoCache && Array.isArray(ultimoCache.value) ? ultimoCache.value : [];
@@ -830,7 +831,7 @@ async function carregarCancelamentosDaRota(entregador) {
    * chamado por ninguém. O conserto NÃO mexe no toque nem na fila: depois que a marcação já está guardada e a tela já ficou
    * verde, isto pede a posição e a manda numa chamada À PARTE (`gpsDoToque`). O painel só grava a coordenada na parada que já
    * tem ESTA marcação (mesmo status, mesma mão, mesma hora do toque); se a fila ainda não subiu, responde `aguardando` e isto
-   * tenta de novo (15 s, 1 min, 3 min) e desiste calado.
+   * tenta de novo (15 s, 1 min, 3 min, 10 min, 30 min) e desiste calado. Só funciona com o interruptor do painel ligado.
    * Segurança (o app não pode dar erro):
    *  · NUNCA pede permissão: só lê o GPS se o celular JÁ autorizou a localização precisa (nenhum pop-up novo);
    *  · nunca lança, nunca mostra nada, nunca entra na fila e não usa o apiGet (não apaga token, não mexe em login);
@@ -864,9 +865,14 @@ async function carregarCancelamentosDaRota(entregador) {
     } catch (e) { return null; }
   }
 
-  var GPS_TOQUE_ESPERAS_MS = [15000, 60000, 180000];
+  // Interruptor (revisão adversarial, 15/11): DESLIGADO até a lista de entregas dizer `gpsToque: true` (cofre do painel; pode ser
+  // só para um entregador, como piloto). Desligado = nem lê o GPS. A resposta `desligado` do painel também apaga na hora.
+  var gpsToqueLigado = false;
+  // A posição é a do instante do toque; se a marcação demora a subir (sem sinal), tenta até ~45 min depois.
+  var GPS_TOQUE_ESPERAS_MS = [15000, 60000, 180000, 600000, 1800000];
   function registrarGpsDoToque(rows, acao, tsDevice) {
     try {
+      if (gpsToqueLigado !== true) return;
       if (acao !== 'done' && acao !== 'fail') return;
       var lista = (Array.isArray(rows) ? rows : [rows]).map(Number).filter(function (n) { return Number.isSafeInteger(n) && n > 0; }).slice(0, 10);
       if (!lista.length || !tsDevice) return;
@@ -883,7 +889,8 @@ async function carregarCancelamentosDaRota(entregador) {
           for (var i = 0; i <= GPS_TOQUE_ESPERAS_MS.length; i++) {
             var res = null;
             try { res = await fetchJson(url, 15000); } catch (e) { res = null; }
-            if (res && res.ok === true && !res.aguardando) return; // gravou (ou está desligado no painel)
+            if (res && res.desligado === true) { gpsToqueLigado = false; return; } // o painel desligou: para de ler o GPS já
+            if (res && res.ok === true && !res.aguardando) return; // gravou
             if (res && res.ok === false && !res.tentarDepois) return; // recusa de verdade: não insiste
             if (i < GPS_TOQUE_ESPERAS_MS.length) await sleep(GPS_TOQUE_ESPERAS_MS[i]);
           }
