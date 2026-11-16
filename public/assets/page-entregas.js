@@ -1770,6 +1770,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
             renderList();
             // NÃO espera: o entregador resolveu a pendência e já segue para a próxima entrega.
             acompanharEnvio(ids);
+            // 🛰️ GPS do toque (15/11/2026), sem await; o próprio try garante que nada daqui interrompe o fluxo
+            try { if (api && typeof api.registrarGpsDoToque === 'function') api.registrarGpsDoToque(rowsA, 'done', tsA); } catch (eGps) { /* o GPS é extra: nunca atrapalha a entrega */ }
           } catch (error) {
             await avisarArmazenamento();
             return;
@@ -1794,6 +1796,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         api.saveEntregasCache(state.driver, state.items);
         renderList();
         agendarEnvio();
+        // 🛰️ GPS do toque (15/11/2026), sem await; o próprio try garante que nada daqui interrompe o fluxo
+        if (esc === 'nao') { try { if (api && typeof api.registrarGpsDoToque === 'function') api.registrarGpsDoToque(finalA.map((x) => Number(x.row)), 'fail', tsA); } catch (eGps) { /* o GPS é extra: nunca atrapalha a entrega */ } }
       }
     }
 
@@ -1932,6 +1936,8 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
       // montagem ontem. A lista se recarrega sozinha quando a fila esvazia (ouvinte lá embaixo).
       if (idsRecebimento) acompanharEnvio(idsRecebimento);
       else agendarEnvio();
+      // 🛰️ GPS do toque (15/11/2026): DEPOIS do commit e da tela verde, SEM await e à prova de erro (core.js registrarGpsDoToque).
+      if (act === 'done' || act === 'fail') { try { if (api && typeof api.registrarGpsDoToque === 'function') api.registrarGpsDoToque(rowsAlvo, act, tsDevice); } catch (eGps) { /* o GPS é extra: nunca atrapalha a entrega */ } }
     } catch (error) {
       console.error(error);
       await AppUI.alerta('Não foi possível concluir essa ação. Tente de novo.', { tom: 'danger' });
