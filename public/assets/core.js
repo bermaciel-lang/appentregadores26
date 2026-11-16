@@ -824,6 +824,74 @@ async function carregarCancelamentosDaRota(entregador) {
     return apiGet({ action: 'marcarNaoEntregue', row, obs: obs || '', ts_device: new Date().toISOString() }, { retries: 3 });
   }
 
+  /* 🛰️ 15/11/2026 — GPS DO TOQUE, FORA DO CAMINHO DO DEDO (supervisor digital, DECISOES 15/11 item 11.7).
+   * Medido no banco em 15/11: nenhuma parada tem `entregue_lat`. A tela de entregas monta a marcação sozinha
+   * (page-entregas.js `paramsDe`) e a manda para a fila SEM coordenada; o `apiMarcarEntregue` acima, que pegava o GPS, não é
+   * chamado por ninguém. O conserto NÃO mexe no toque nem na fila: depois que a marcação já está guardada e a tela já ficou
+   * verde, isto pede a posição e a manda numa chamada À PARTE (`gpsDoToque`). O painel só grava a coordenada na parada que já
+   * tem ESTA marcação (mesmo status, mesma mão, mesma hora do toque); se a fila ainda não subiu, responde `aguardando` e isto
+   * tenta de novo (15 s, 1 min, 3 min) e desiste calado.
+   * Segurança (o app não pode dar erro):
+   *  · NUNCA pede permissão: só lê o GPS se o celular JÁ autorizou a localização precisa (nenhum pop-up novo);
+   *  · nunca lança, nunca mostra nada, nunca entra na fila e não usa o apiGet (não apaga token, não mexe em login);
+   *  · é chamado SEM await, depois do commit e da tela verde: o entregador já pode tocar a próxima entrega. */
+  async function posicaoSemPerguntar() {
+    try {
+      var Cap = window.Capacitor;
+      if (Cap && typeof Cap.isNativePlatform === 'function' && Cap.isNativePlatform()) {
+        var G = Cap.Plugins && Cap.Plugins.Geolocation;
+        if (!G || typeof G.checkPermissions !== 'function' || typeof G.getCurrentPosition !== 'function') return null;
+        var st = await G.checkPermissions();
+        if (!st || st.location !== 'granted') return null; // só a precisa já autorizada; checkPermissions não pergunta nada
+        var pn = await G.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 });
+        return pn && pn.coords ? { lat: pn.coords.latitude, lng: pn.coords.longitude, precisao: pn.coords.accuracy } : null;
+      }
+      if (!navigator.geolocation || !navigator.permissions || typeof navigator.permissions.query !== 'function') return null;
+      var perm = await navigator.permissions.query({ name: 'geolocation' });
+      if (!perm || perm.state !== 'granted') return null; // no navegador também: só se já estava liberado
+      return await new Promise(function (resolve) {
+        var feito = false;
+        var fim = function (v) { if (feito) return; feito = true; clearTimeout(t); resolve(v); };
+        var t = setTimeout(function () { fim(null); }, 9000);
+        try {
+          navigator.geolocation.getCurrentPosition(
+            function (pos) { fim({ lat: pos.coords.latitude, lng: pos.coords.longitude, precisao: pos.coords.accuracy }); },
+            function () { fim(null); },
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }
+          );
+        } catch (e) { fim(null); }
+      });
+    } catch (e) { return null; }
+  }
+
+  var GPS_TOQUE_ESPERAS_MS = [15000, 60000, 180000];
+  function registrarGpsDoToque(rows, acao, tsDevice) {
+    try {
+      if (acao !== 'done' && acao !== 'fail') return;
+      var lista = (Array.isArray(rows) ? rows : [rows]).map(Number).filter(function (n) { return Number.isSafeInteger(n) && n > 0; }).slice(0, 10);
+      if (!lista.length || !tsDevice) return;
+      // turno e dia de AGORA (o instante do toque), como a fila carimba a marcação (comTurno): a parada é achada pelos mesmos
+      var base = { action: 'gpsDoToque', acao: acao, rows: lista.join(','), ts_device: String(tsDevice), turno: getTurno() };
+      var dia = diaConfiavel(); if (dia) base.data = dia;
+      (async function () {
+        try {
+          var pos = await posicaoSemPerguntar();
+          if (!pos || !Number.isFinite(pos.lat) || !Number.isFinite(pos.lng)) return;
+          var params = Object.assign({}, base, { lat: pos.lat, lng: pos.lng });
+          if (Number.isFinite(pos.precisao) && pos.precisao > 0) params.precisao = Math.round(pos.precisao);
+          var url = buildApiUrl(params);
+          for (var i = 0; i <= GPS_TOQUE_ESPERAS_MS.length; i++) {
+            var res = null;
+            try { res = await fetchJson(url, 15000); } catch (e) { res = null; }
+            if (res && res.ok === true && !res.aguardando) return; // gravou (ou está desligado no painel)
+            if (res && res.ok === false && !res.tentarDepois) return; // recusa de verdade: não insiste
+            if (i < GPS_TOQUE_ESPERAS_MS.length) await sleep(GPS_TOQUE_ESPERAS_MS[i]);
+          }
+        } catch (e) { /* calado de propósito: o GPS é extra, a entrega já está gravada na fila */ }
+      })();
+    } catch (e) { /* idem */ }
+  }
+
 async function apiMarcarCancelado(row, obs) {
     return apiGet({ action: 'marcarCancelado', row, obs: obs || '' }, { retries: 3 });
   }
@@ -1750,6 +1818,7 @@ async function _apiFinalizarRota(entregador, kmFinal, fotoBase64, fotoMimeType, 
     apiIniciarEntrega,
     apiMarcarEntregue,
     apiMarcarNaoEntregue,
+    registrarGpsDoToque,
     abrirWhatsapp,
     agruparEntregas,
     apiIniciarRota,
