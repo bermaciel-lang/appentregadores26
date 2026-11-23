@@ -1996,7 +1996,10 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
         if (item) item.status = 'Cancelado';
         api.saveEntregasCache(state.driver, state.items); renderList();
         var titulo = 'PEDIDO CANCELADO NA RUA';
-        var corpo = (a.pedido || '') + ' · ' + (a.cliente || '') + '. Não entregue. Leve o pedido de volta ao depósito; ele entra em PEDIDOS QUE VOLTARAM e esta entrega continua no seu pagamento.';
+        // ⭐ 23/11/2026 (dono, caso LOJA-5170): o texto é o dele, palavra por palavra. Antes mandava levar o pedido ao depósito e dizia
+        // "esta entrega continua no seu pagamento" — falso: o pagamento do cancelado depois da saída só vale se o entregador tinha
+        // tocado INICIAR nesta parada (painel lib/rota-aovivo.ts › canceladoComIniciarPaga). Por isso não se fala de pagamento aqui.
+        var corpo = (a.pedido || '') + ' · ' + (a.cliente || '') + '. Pedido CANCELADO, NÃO entregue ao cliente! Entre em contato com a empresa para decidir o que fazer.';
         try {
           var LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
           if (LN && LN.schedule) await LN.schedule({ notifications: [{ id: 700000 + (Number(a.id) % 200000), title: titulo, body: corpo, schedule: { at: new Date(Date.now() + 300) } }] });
