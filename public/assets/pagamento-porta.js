@@ -267,6 +267,9 @@
     // 06/10/2026 — a pergunta única: `pg_forma` é a OPÇÃO (maquininha/dinheiro/cheque/pix/nao-pagou) e o valor vai
     // VAZIO de propósito: o servidor completa com o valor do pedido (resolverRespostaSimples, no painel).
     if (r.simples) { p.pg_simples = 1; p.pg_valor = ''; p.pg_digitado = 0; delete p.pg_cartao_agrupado; delete p.pg_operadora; delete p.pg_grupo; delete p.pg_grupo_rows; }
+    // ⭐ 27/11/2026 — "Dividido": quanto foi em DINHEIRO; o resto é a opção de `pg_forma` (o painel escreve as duas partes na observação
+    // com a marca [PAGAMENTO DIVIDIDO] e acende o "!" para a equipe registrar as parcelas no pedido). Painel antigo ignora o campo.
+    if (r.simples && r.divDinheiro != null && isFinite(Number(r.divDinheiro))) p.pg_div_dinheiro = valorParaServidor(r.divDinheiro);
     return p;
   }
 
@@ -277,6 +280,7 @@
     // ⛔ (revisão independente de 06/10, M1) a RECUSA vem antes: um "Maquininha ✓" verde sobre um pagamento que o servidor
     // recusou mentiria sobre dinheiro
     if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
+    if (r.simples && ROTULO_SIMPLES[r.forma] && r.divDinheiro != null) return 'Pagamento: 💵 ' + fmtBRL(r.divDinheiro) + ' + ' + ROTULO_SIMPLES[r.forma] + ' ✓';
     if (r.simples && ROTULO_SIMPLES[r.forma]) return 'Pagamento: ' + ROTULO_SIMPLES[r.forma] + ' ✓';
     if (r.rejeitada || r.aprovacao === 'rejeitado') return '⚠️ Corrigir pagamento: ' + (r.erro || 'valor rejeitado pela equipe');
     if (r.naoSei) return '💳 Pagamento: não soube dizer';
@@ -299,8 +303,47 @@
     dinheiro: { rotulo: '💵 Dinheiro' },
     pix: { rotulo: '📱 PIX' },
     cheque: { rotulo: '🧾 Cheque' },
+    // ⭐ 27/11/2026 — pedido da equipe (cliente pagou R$ 50 em dinheiro e o resto no crédito; o app só aceitava UMA forma)
+    dividido: { rotulo: '➗ Dividido (parte em dinheiro)' },
     'nao-pagou': { rotulo: '⛔ Não pagou', tom: 'danger' }
   };
+  // O que pode ser o RESTO de um pagamento dividido (a parte em dinheiro é a primeira pergunta).
+  var OPCOES_DO_RESTO = ['maquininha', 'pix', 'cheque'];
+  var ROTULO_RESTO = { maquininha: 'MAQUININHA', pix: 'PIX', cheque: 'CHEQUE' };
+  // "Dividido" só com UM pedido na pergunta e o valor dele CONFERIDO agora (a conta do resto depende dele).
+  function podeDividir(grupo) {
+    return Array.isArray(grupo) && grupo.length === 1 && valorConfirmado(grupo[0]) && Number(grupo[0].valor) > 0;
+  }
+  // ⭐ 27/11/2026 — AS TELAS DO "DIVIDIDO": quanto em dinheiro → como pagou o resto → confere. Devolve { forma, dinheiro } ou
+  // null (Voltar: a pergunta principal reaparece). O valor do pedido vem da tela (conferido); o painel refaz a conta com o dele.
+  async function perguntarDividido(item, ui, cfg) {
+    var total = Math.round(Number(item.valor) * 100) / 100;
+    var restoOps = opcoesSimples(cfg).filter(function (o) { return OPCOES_DO_RESTO.indexOf(o.valor) >= 0; });
+    if (!restoOps.length) restoOps = [{ valor: 'maquininha', rotulo: BOTAO_SIMPLES.maquininha.rotulo, tom: BOTAO_SIMPLES.maquininha.tom }];
+    var atual = '';
+    for (var i = 0; i < MAX_VOLTAS; i++) {
+      var raw = await ui.perguntar('Quanto o cliente pagou em DINHEIRO?\n(o pedido é ' + fmtBRL(total) + '; o resto você escolhe na próxima tela)',
+        { titulo: '💵 Pagamento dividido', valor: atual, placeholder: 'Ex.: 50,00', inputmode: 'decimal', textoOk: 'Continuar', textoCancelar: 'Voltar' });
+      if (cancelou(raw)) return null;
+      var d = parseValor(raw);
+      if (d == null || !(d > 0) || Math.round(d * 100) >= Math.round(total * 100)) {
+        atual = String(raw);
+        await ui.alerta('O valor em dinheiro tem que ser MAIOR que zero e MENOR que o pedido (' + fmtBRL(total) + ').\n\nSe o cliente pagou TUDO em dinheiro, volte e escolha 💵 Dinheiro.',
+          { titulo: 'Valor não confere', tom: 'warn' });
+        continue;
+      }
+      var resto = Math.round((total - d) * 100) / 100;
+      var f = await ui.escolher('Dinheiro: ' + fmtBRL(d) + '\nFalta: ' + fmtBRL(resto) + '\n\nComo o cliente pagou o resto?', restoOps,
+        { titulo: '💳 E o resto?', textoCancelar: 'Voltar' });
+      if (cancelou(f) || !restoOps.some(function (o) { return o.valor === f; })) { atual = String(raw); continue; }
+      var conf = await ui.escolher(fmtBRL(d) + ' em DINHEIRO\n+ ' + fmtBRL(resto) + ' em ' + ROTULO_RESTO[f] + '\n= ' + fmtBRL(total) + ' (o pedido)\n\nConfirma?',
+        [{ valor: 'sim', rotulo: '✓ Confirmar', tom: 'success' }], { titulo: 'Confere o pagamento', textoCancelar: 'Voltar' });
+      if (conf !== 'sim') { atual = String(raw); continue; }
+      return { forma: f, dinheiro: Math.round(d * 100) / 100 };
+    }
+    try { await ui.alerta('Não deu para registrar o pagamento dividido. Escolha a forma principal e avise o escritório pelo chat.', { titulo: 'Pagamento dividido', tom: 'warn' }); } catch (e) {}
+    return null;
+  }
   function opcoesSimples(cfg) {
     var lista = (cfg && Array.isArray(cfg.opcoes) && cfg.opcoes.length) ? cfg.opcoes : OPCOES_PADRAO;
     var conhecidas = lista.filter(function (o) { return !!BOTAO_SIMPLES[o]; });
@@ -332,17 +375,26 @@
     // ⭐ 28/10/2026 — o valor que a tela tem pode ser o do cache (sem sinal, consulta falhou): o modal AVISA, em vez de afirmar.
     if (temValor && grupo.some(function (x) { return x.valorConferido === false; }))
       linhaValor += '\n⚠️ Valor não conferido agora (sem sinal ou consulta falhou) — confira no pedido antes de cobrar.';
-    var esc;
-    try {
-      // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
-      esc = await ui.escolher([linhaDeQualPedido(ctx.tocado, grupo), linhaValor.trim()].filter(Boolean).join('\n\n'), opcoesSimples(ctx.cfg),
-        { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
-    } catch (e) { esc = null; }
-    if (cancelou(esc) || !BOTAO_SIMPLES[esc]) return { porRow: {}, manteve: false, cancelado: true };
+    var esc, div = null;
+    // ⭐ 27/11/2026: "Dividido" só aparece com UM pedido e o valor conferido (senão a conta do resto não tem base).
+    var ops = opcoesSimples(ctx.cfg).filter(function (o) { return o.valor !== 'dividido' || podeDividir(grupo); });
+    for (var volta = 0; volta < MAX_VOLTAS; volta++) {
+      try {
+        // A pergunta do dono é o TÍTULO (o que salta aos olhos); o valor vai embaixo, só de referência.
+        esc = await ui.escolher([linhaDeQualPedido(ctx.tocado, grupo), linhaValor.trim()].filter(Boolean).join('\n\n'), ops,
+          { titulo: '💳 O cliente te pagou de alguma forma?', textoCancelar: 'Cancelar' });
+      } catch (e) { esc = null; }
+      if (esc !== 'dividido') break;
+      try { div = await perguntarDividido(grupo[0], ui, ctx.cfg); } catch (e) { div = null; }
+      if (div) { esc = div.forma; break; }
+      esc = null; // Voltar: a pergunta principal de novo
+    }
+    if (cancelou(esc) || !BOTAO_SIMPLES[esc] || esc === 'dividido') return { porRow: {}, manteve: false, cancelado: true };
     var out = { porRow: {}, manteve: false, cancelado: false };
     grupo.forEach(function (x) {
       var visto = temValor && isFinite(Number(x.valor)) ? Number(x.valor) : null;
       out.porRow[Number(x.row)] = { forma: esc, simples: true, valor: null, digitado: false, valorVisto: visto };
+      if (div) out.porRow[Number(x.row)].divDinheiro = div.dinheiro; // só existe com UM pedido (podeDividir)
     });
     return out;
   }
