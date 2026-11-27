@@ -385,6 +385,20 @@ test('duas abas adicionam sem sobrescrever e ACK não elimina o lote concorrente
   assert.deepEqual(b.queue().map(x=>x.id),idB);
   assert.equal(b.queue()[0].params.pg_valor,'95.00');
 });
+// 27/11/2026 (revisão adversarial, achado 7): a resposta "Dividido" ainda na fila mostra as DUAS partes no cartão — a fila vence a memória,
+// e sem o campo o cartão dizia só "Maquininha" (o entregador achava que tinha perdido e respondia de novo). O envio leva pg_div_dinheiro.
+test('dividido na fila: o cartão diz as duas partes e o envio leva pg_div_dinheiro',async()=>{
+  const h=await harness({handler:async()=>denied});
+  const dividido={forma:'maquininha',simples:true,valor:null,digitado:false,valorVisto:142.76,divDinheiro:50};
+  await h.enqueue(1,T1,{response:dividido});
+  assert.equal(h.queue()[0].params.pg_div_dinheiro,'50.00');
+  const p=h.previous(1,{});
+  assert.equal(p.divDinheiro,50);assert.equal(p.simples,true);
+  assert.match(h.Pg.fraseResposta(p,forms),/Pagamento: 💵 R\$\s?50,00 \+ 💳 Maquininha ✓/);
+  const comum=await harness({handler:async()=>denied});
+  await comum.enqueue(1,T1,{response:{forma:'maquininha',simples:true,valor:null,digitado:false,valorVisto:142.76}});
+  assert.equal('divDinheiro' in comum.previous(1,{}),false,'resposta comum: sem o campo, como antes');
+});
 let failures=0;
 for(const [name,run] of tests){try{await run();console.log('PASS '+name);}catch(e){failures++;console.error('FAIL '+name+'\n'+e.stack);}}
 console.log(`${tests.length-failures}/${tests.length} cenários da fila com código real; somente transporte e storage fictícios.`);

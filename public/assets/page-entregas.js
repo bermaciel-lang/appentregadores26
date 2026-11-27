@@ -1283,7 +1283,9 @@ async function pedirKm(mensagem, valorAtual, obrigatorio) {
     // O relógio do aparelho não decide qual pendência existe. A fila durável vence
     // a memória visual até ACK explícito ou correção vinculada aos seus IDs.
     const filaAtual = !!q;
-    if (filaAtual) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1, valeNome: q.pg_vale_nome || null, cartaoAgrupado: q.pg_cartao_agrupado === 1, rejeitada: q.pg_recusado === true, erro: q.pg_recusa || null, simples: Number(q.pg_simples) === 1 };
+    if (filaAtual) return { forma: q.pg_forma || '', operadora: q.pg_operadora || null, valor: q.pg_valor === '' || q.pg_valor == null ? null : Number(q.pg_valor), digitado: Number(q.pg_digitado) === 1, naoSei: Number(q.pg_naosei) === 1, valeNome: q.pg_vale_nome || null, cartaoAgrupado: q.pg_cartao_agrupado === 1, rejeitada: q.pg_recusado === true, erro: q.pg_recusa || null, simples: Number(q.pg_simples) === 1,
+      // 27/11/2026: a resposta "Dividido" ainda na fila mostra as duas partes no cartão (sem isto o cartão dizia só "Maquininha" e o entregador respondia de novo)
+      ...(q.pg_div_dinheiro != null && q.pg_div_dinheiro !== '' && isFinite(Number(q.pg_div_dinheiro)) ? { divDinheiro: Number(q.pg_div_dinheiro) } : {}) };
     if (mem) return mem;
     const c = item && item.pgConfirmado;
     if (c && typeof c === 'object' && c.forma) return { forma: c.forma, operadora: c.operadora || null, valor: c.valor == null ? null : Number(c.valor), digitado: !!c.digitado, naoSei: c.desfecho === 'nao-sei', valeNome: c.valeNome || null, aprovacao: c.aprovacaoValor || null };
